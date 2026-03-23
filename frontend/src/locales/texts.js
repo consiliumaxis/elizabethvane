@@ -1,6 +1,6 @@
 export const texts = {
   en: {
-    projectName: "Elizabeth ",
+    projectName: "Elizabeth Vane",
     loadingPhrases: [
       "Initializing system...",
       "Establishing secure connection...",
