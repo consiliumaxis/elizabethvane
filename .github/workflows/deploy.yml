@@ -1,0 +1,59 @@
+name: Deploy Elizabethvane
+
+on:
+  push:
+    branches: [test, main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-test:
+    if: github.ref == 'refs/heads/test'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare SSH key
+        id: prep_key
+        run: |
+          test -n "${{ secrets.SERVER_SSH_KEY_B64 }}" || { echo "SERVER_SSH_KEY_B64 is empty"; exit 1; }
+          KEY="$(echo "${{ secrets.SERVER_SSH_KEY_B64 }}" | base64 -d)"
+          {
+            echo "private_key<<EOF"
+            echo "$KEY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: SSH deploy TEST
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 38.180.75.21
+          port: 22
+          username: root
+          key: ${{ steps.prep_key.outputs.private_key }}
+          script: /usr/local/bin/deploy_elizabeth_test.sh
+
+  deploy-prod:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare SSH key
+        id: prep_key
+        run: |
+          test -n "${{ secrets.SERVER_SSH_KEY_B64 }}" || { echo "SERVER_SSH_KEY_B64 is empty"; exit 1; }
+          KEY="$(echo "${{ secrets.SERVER_SSH_KEY_B64 }}" | base64 -d)"
+          {
+            echo "private_key<<EOF"
+            echo "$KEY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: SSH deploy PROD
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 38.180.75.21
+          port: 22
+          username: root
+          key: ${{ steps.prep_key.outputs.private_key }}
+          script: /usr/local/bin/deploy_elizabeth_prod.sh
