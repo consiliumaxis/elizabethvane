@@ -1,4 +1,4 @@
-﻿import os
+import os
 import asyncio
 import aiomysql
 import httpx
@@ -50,7 +50,6 @@ db_pool = None
 bot = Bot(token=os.getenv("BOT_TOKEN"))
 dp = Dispatcher()
 
-# --- Р“Р›РћР‘РђР›Р¬РќР«Р• РџР•Р Р•РњР•РќРќР«Р• Р”Р›РЇ Р¤РћРќРћР’РћР“Рћ РћР‘Р РђР‘РћРўР§РРљРђ РЎРР“РќРђР›РћР’ ---
 analysis_queue = asyncio.Queue()
 processing_ids = set() 
 price_cache = {} 
@@ -66,7 +65,6 @@ async def get_support_links():
         "support_url": support_url
     }
 
-# --- РҐР•Р›РџР•Р Р« Р”Р›РЇ Р¤РћРќРћР’РћР“Рћ РћР‘Р РђР‘РћРўР§РРљРђ ---
 def parse_timeframe_mins(tf: str) -> int:
     if not tf: return 5
     tf = tf.lower()
@@ -106,7 +104,6 @@ async def get_price_for_symbol(client: httpx.AsyncClient, symbol: str, token: st
     except Exception as e:
         print(f"[Worker] Failed to fetch price for {clean_sym} via proxy: {e}")
         
-    # Fallback РґР»СЏ СЃС‹СЂСЊСЏ (РёСЃРїРѕР»СЊР·СѓРµРј РЅР°РїСЂСЏРјСѓСЋ TwelveData РµСЃР»Рё С‡РµСЂРµР· РїСЂРѕРєСЃРё РЅРµ РїСЂРѕС€Р»Рѕ)
     if clean_sym in COMMODITY_SYMBOLS:
         td_key = os.getenv("TD_API_KEY")
         if td_key:
@@ -125,7 +122,6 @@ async def get_price_for_symbol(client: httpx.AsyncClient, symbol: str, token: st
 
     return None
 
-# --- Р—РђР”РђР§Р Р¤РћРќРћР’РћР“Рћ РћР‘Р РђР‘РћРўР§РРљРђ ---
 async def analysis_producer():
     print("[Worker] Producer started...")
     while True:
@@ -218,7 +214,6 @@ async def analysis_consumer():
                 await asyncio.sleep(5)
 
 
-# --- REST API Р­РќР”РџРћРРќРўР« ---
 
 @app.post("/api/user/profile")
 async def get_profile(request: Request):
@@ -284,7 +279,7 @@ async def manage_custom_strategy(request: Request):
         async with conn.cursor() as cur:
             if action == "create":
                 name = data.get("name")
-                icon = data.get("icon", "вљЎ")
+                icon = data.get("icon", "\u26A1")
                 indicators = data.get("indicators", [])
                 
                 await cur.execute("INSERT INTO presets (name, is_system, icon) VALUES (%s, 0, %s)", (name, icon))
@@ -301,7 +296,7 @@ async def manage_custom_strategy(request: Request):
             elif action == "update":
                 preset_id = data.get("preset_id")
                 name = data.get("name")
-                icon = data.get("icon", "вљЎ")
+                icon = data.get("icon", "\u26A1")
                 indicators = data.get("indicators", [])
                 
                 await cur.execute("UPDATE presets SET name = %s, icon = %s WHERE id = %s AND is_system = 0", (name, icon, preset_id))
@@ -481,7 +476,6 @@ async def get_news():
         "EU": "EUR", "DE": "EUR", "FR": "EUR", "IT": "EUR", "ES": "EUR"
     }
 
-    # РњР°РїРїРёРЅРі РјРµС‚Р°Р»Р»РѕРІ Рё СЃС‹СЂСЊСЏ Рє РІР°Р»СЋС‚Р°Рј
     symbol_to_currency_map = {
         "XAU": "USD", "XAG": "USD", "XPT": "USD", "XPD": "USD",
         "WTI": "USD", "BRENT": "USD", "XBR": "USD", "NG": "USD"
@@ -492,10 +486,8 @@ async def get_news():
 
     for event in events:
         try:
-            # РџР°СЂСЃРёРј РІСЂРµРјСЏ UTC
             event_time = datetime.strptime(event["time"], "%Y-%m-%d %H:%M:%S")
             
-            # Р‘РµСЂРµРј РЅРѕРІРѕСЃС‚Рё С‚РѕР»СЊРєРѕ РЅР° СЃРµРіРѕРґРЅСЏ (РѕС‚ -2 С‡Р°СЃРѕРІ РґРѕ РєРѕРЅС†Р° РґРЅСЏ)
             if event_time.date() == now.date() and event_time > (now - timedelta(hours=2)):
                 country = event.get("country", "").strip().upper()
                 currency = country_to_currency.get(country, "ALL")
@@ -611,7 +603,7 @@ async def cmd_start(message: types.Message):
     user_name = message.from_user.first_name or message.from_user.username or "Trader"
     
     welcome_text = (
-        f"Welcome, {user_name}! рџ‘‹\n\n"
+        f"Welcome, {user_name}!\n\n"
         f"<b>Elizabeth Vane</b> | <code>Private Trading Analytics</code>\n\n"
         f"A professional analytical space for those who value precision. "
         f"We've combined advanced technical analysis methods with the convenience of a Web App.\n\n"
@@ -621,7 +613,7 @@ async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="рџ‘‰ Open Elizabeth Vane вњЁ", 
+                text="Open Elizabeth Vane",
                 web_app=WebAppInfo(url=os.getenv("WEB_APP_URL"))
             )
         ]
@@ -659,7 +651,7 @@ async def get_or_create_active_chat(request: AIChatRequest):
                 await cur.execute("UPDATE ai_chats SET status = 'archived' WHERE user_id = %s AND status = 'active'", (request.user_id,))
                 await cur.execute("INSERT INTO ai_chats (user_id) VALUES (%s)", (request.user_id,))
                 chat_id = cur.lastrowid
-                return {"status": "success", "chat_id": chat_id, "title": "РќРѕРІС‹Р№ РґРёР°Р»РѕРі", "messages": []}
+                return {"status": "success", "chat_id": chat_id, "title": "New Chat", "messages": []}
 
             await cur.execute("SELECT id, role, content, created_at as timestamp FROM ai_messages WHERE chat_id = %s ORDER BY id ASC", (chat['id'],))
             messages = await cur.fetchall()
@@ -669,7 +661,7 @@ async def get_or_create_active_chat(request: AIChatRequest):
 @app.post("/api/ai/chat/send")
 async def send_chat_message(request: AIChatRequest):
     if not request.text or not request.chat_id:
-        return {"error": "РќРµРѕР±С…РѕРґРёРј text Рё chat_id"}
+        return {"error": "text and chat_id are required"}
     result = await ai_service.process_user_message(db_pool, request.user_id, request.chat_id, request.text)
     return result
 
@@ -690,7 +682,7 @@ async def get_chat_history(request: AIChatRequest):
 @app.post("/api/ai/chat/load")
 async def load_historical_chat(request: AIChatRequest):
     if not request.chat_id:
-        return {"error": "РќРµРѕР±С…РѕРґРёРј chat_id"}
+        return {"error": "chat_id is required"}
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("UPDATE ai_chats SET status = 'archived' WHERE user_id = %s AND status = 'active'", (request.user_id,))
@@ -704,7 +696,7 @@ async def create_new_chat(request: AIChatRequest):
             await cur.execute("UPDATE ai_chats SET status = 'archived' WHERE user_id = %s AND status = 'active'", (request.user_id,))
             await cur.execute("INSERT INTO ai_chats (user_id) VALUES (%s)", (request.user_id,))
             chat_id = cur.lastrowid
-    return {"status": "success", "chat_id": chat_id, "title": "РќРѕРІС‹Р№ РґРёР°Р»РѕРі", "messages": []}
+    return {"status": "success", "chat_id": chat_id, "title": "New Chat", "messages": []}
     
 async def start_bot():
     await dp.start_polling(bot)
@@ -732,4 +724,3 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             pass
     asyncio.run(main_wrapper())
-
