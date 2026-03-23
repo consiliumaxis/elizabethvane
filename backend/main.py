@@ -603,7 +603,7 @@ async def cmd_start(message: types.Message):
     user_name = message.from_user.first_name or message.from_user.username or "Trader"
     
     welcome_text = (
-        f"Welcome, {user_name}!\n\n"
+        f"Welcome, {user_name}! 👋\n\n"
         f"<b>Elizabeth Vane</b> | <code>Private Trading Analytics</code>\n\n"
         f"A professional analytical space for those who value precision. "
         f"We've combined advanced technical analysis methods with the convenience of a Web App.\n\n"
@@ -613,7 +613,7 @@ async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="Open Elizabeth Vane",
+                text="👉Open Elizabeth Vane✨",
                 web_app=WebAppInfo(url=os.getenv("WEB_APP_URL"))
             )
         ]
