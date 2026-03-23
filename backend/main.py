@@ -1,4 +1,4 @@
-import os
+﻿import os
 import asyncio
 import aiomysql
 import httpx
@@ -14,6 +14,7 @@ import uvicorn
 import ai_service
 from pydantic import BaseModel
 from typing import Optional
+from analysis_engine import compute_analysis_decision
 
 load_dotenv()
 
@@ -49,7 +50,7 @@ db_pool = None
 bot = Bot(token=os.getenv("BOT_TOKEN"))
 dp = Dispatcher()
 
-# --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ФОНОВОГО ОБРАБОТЧИКА СИГНАЛОВ ---
+# --- Р“Р›РћР‘РђР›Р¬РќР«Р• РџР•Р Р•РњР•РќРќР«Р• Р”Р›РЇ Р¤РћРќРћР’РћР“Рћ РћР‘Р РђР‘РћРўР§РРљРђ РЎРР“РќРђР›РћР’ ---
 analysis_queue = asyncio.Queue()
 processing_ids = set() 
 price_cache = {} 
@@ -65,7 +66,7 @@ async def get_support_links():
         "support_url": support_url
     }
 
-# --- ХЕЛПЕРЫ ДЛЯ ФОНОВОГО ОБРАБОТЧИКА ---
+# --- РҐР•Р›РџР•Р Р« Р”Р›РЇ Р¤РћРќРћР’РћР“Рћ РћР‘Р РђР‘РћРўР§РРљРђ ---
 def parse_timeframe_mins(tf: str) -> int:
     if not tf: return 5
     tf = tf.lower()
@@ -105,7 +106,7 @@ async def get_price_for_symbol(client: httpx.AsyncClient, symbol: str, token: st
     except Exception as e:
         print(f"[Worker] Failed to fetch price for {clean_sym} via proxy: {e}")
         
-    # Fallback для сырья (используем напрямую TwelveData если через прокси не прошло)
+    # Fallback РґР»СЏ СЃС‹СЂСЊСЏ (РёСЃРїРѕР»СЊР·СѓРµРј РЅР°РїСЂСЏРјСѓСЋ TwelveData РµСЃР»Рё С‡РµСЂРµР· РїСЂРѕРєСЃРё РЅРµ РїСЂРѕС€Р»Рѕ)
     if clean_sym in COMMODITY_SYMBOLS:
         td_key = os.getenv("TD_API_KEY")
         if td_key:
@@ -124,7 +125,7 @@ async def get_price_for_symbol(client: httpx.AsyncClient, symbol: str, token: st
 
     return None
 
-# --- ЗАДАЧИ ФОНОВОГО ОБРАБОТЧИКА ---
+# --- Р—РђР”РђР§Р Р¤РћРќРћР’РћР“Рћ РћР‘Р РђР‘РћРўР§РРљРђ ---
 async def analysis_producer():
     print("[Worker] Producer started...")
     while True:
@@ -217,7 +218,7 @@ async def analysis_consumer():
                 await asyncio.sleep(5)
 
 
-# --- REST API ЭНДПОИНТЫ ---
+# --- REST API Р­РќР”РџРћРРќРўР« ---
 
 @app.post("/api/user/profile")
 async def get_profile(request: Request):
@@ -283,7 +284,7 @@ async def manage_custom_strategy(request: Request):
         async with conn.cursor() as cur:
             if action == "create":
                 name = data.get("name")
-                icon = data.get("icon", "⚡")
+                icon = data.get("icon", "вљЎ")
                 indicators = data.get("indicators", [])
                 
                 await cur.execute("INSERT INTO presets (name, is_system, icon) VALUES (%s, 0, %s)", (name, icon))
@@ -300,7 +301,7 @@ async def manage_custom_strategy(request: Request):
             elif action == "update":
                 preset_id = data.get("preset_id")
                 name = data.get("name")
-                icon = data.get("icon", "⚡")
+                icon = data.get("icon", "вљЎ")
                 indicators = data.get("indicators", [])
                 
                 await cur.execute("UPDATE presets SET name = %s, icon = %s WHERE id = %s AND is_system = 0", (name, icon, preset_id))
@@ -480,7 +481,7 @@ async def get_news():
         "EU": "EUR", "DE": "EUR", "FR": "EUR", "IT": "EUR", "ES": "EUR"
     }
 
-    # Маппинг металлов и сырья к валютам
+    # РњР°РїРїРёРЅРі РјРµС‚Р°Р»Р»РѕРІ Рё СЃС‹СЂСЊСЏ Рє РІР°Р»СЋС‚Р°Рј
     symbol_to_currency_map = {
         "XAU": "USD", "XAG": "USD", "XPT": "USD", "XPD": "USD",
         "WTI": "USD", "BRENT": "USD", "XBR": "USD", "NG": "USD"
@@ -491,10 +492,10 @@ async def get_news():
 
     for event in events:
         try:
-            # Парсим время UTC
+            # РџР°СЂСЃРёРј РІСЂРµРјСЏ UTC
             event_time = datetime.strptime(event["time"], "%Y-%m-%d %H:%M:%S")
             
-            # Берем новости только на сегодня (от -2 часов до конца дня)
+            # Р‘РµСЂРµРј РЅРѕРІРѕСЃС‚Рё С‚РѕР»СЊРєРѕ РЅР° СЃРµРіРѕРґРЅСЏ (РѕС‚ -2 С‡Р°СЃРѕРІ РґРѕ РєРѕРЅС†Р° РґРЅСЏ)
             if event_time.date() == now.date() and event_time > (now - timedelta(hours=2)):
                 country = event.get("country", "").strip().upper()
                 currency = country_to_currency.get(country, "ALL")
@@ -514,24 +515,27 @@ async def create_forex_analysis(request: Request):
     interval_raw = data.get("exp")
     strategy_id = data.get("strategy_id")
     allowed_indicators = data.get("allowed_indicators", [])
-    exchange = data.get("exchange")  # <--- ПОЛУЧАЕМ ИЗ ФРОНТЕНДА
+    exchange = data.get("exchange")
 
     interval_map = {
-        "5m": "5min", 
-        "15m": "15min", 
-        "30m": "30min", 
-        "1h": "1h", 
-        "4h": "4h", 
-        "1d": "1day"
+        "5m": "5min",
+        "15m": "15min",
+        "30m": "30min",
+        "1h": "1h",
+        "4h": "4h",
+        "1d": "1day",
     }
     interval = interval_map.get(interval_raw, "5min")
 
-    DEMO_SYMBOL_MAP = {
-        "SPX": "SPX", "NDX": "NDX", "DJI": "DJI", 
-        "DAX": "GDAXI", "UK100": "FTSE", "NI225": "N225"
+    demo_symbol_map = {
+        "SPX": "SPX",
+        "NDX": "NDX",
+        "DJI": "DJI",
+        "DAX": "GDAXI",
+        "UK100": "FTSE",
+        "NI225": "N225",
     }
-    
-    formatted_pair = DEMO_SYMBOL_MAP.get(pair)
+    formatted_pair = demo_symbol_map.get(pair)
     if not formatted_pair:
         compact = (pair or "").upper().replace("/", "").replace(" ", "")
         if len(compact) == 6 and compact.isalpha():
@@ -540,94 +544,52 @@ async def create_forex_analysis(request: Request):
             formatted_pair = (pair or "").strip()
 
     token = os.getenv("DEVSBITE_TOKEN")
-    url = "https://api.devsbite.com/analysis/advanced"
-    headers = {"accept": "application/json", "X-Client-Token": token, "Content-Type": "application/json"}
-    
+    url = (os.getenv("ANALYSIS_GATEWAY_URL") or "https://api.devsbite.com/analysis/advanced").strip()
+    headers = {"accept": "application/json", "Content-Type": "application/json"}
+    if token:
+        headers["X-Client-Token"] = token
+
     payload = {
-        "symbol": formatted_pair, 
+        "symbol": formatted_pair,
         "interval": interval,
         "allowed_indicators": allowed_indicators,
-        "exchange": exchange  # <--- ОТПРАВЛЯЕМ ДАЛЬШЕ НА ОСНОВНОЙ БЕКЕНД
+        "exchange": exchange,
     }
 
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(url, headers=headers, json=payload, timeout=20.0) 
+            resp = await client.post(url, headers=headers, json=payload, timeout=20.0)
             resp.raise_for_status()
-            analysis_data = resp.json()
-            
-            # --- СТРАХОВОЧНАЯ ФИЛЬТРАЦИЯ (Если devsbite API не обновилось) ---
-            if allowed_indicators and "indicators" in analysis_data:
-                filtered_inds = {}
-                new_votes = {"BUY": 0, "SELL": 0, "NEUTRAL": 0}
-                allowed_upper = [a.upper() for a in allowed_indicators]
-                
-                # Обновленная карта с поддержкой списков и новых ключей
-                API_TO_DB_MAP = {
-                    "RSI": ["RSI"], "MACD": ["MACD"], "STOCH": ["STOCH"], "BB": ["BB"],
-                    "EMA9_21": ["EMA9", "EMA21"], "EMA50": ["EMA50"], "VWAP": ["VWAP"],
-                    "EMA200": ["EMA200"], "ADX": ["ADX"], "CCI": ["CCI"],
-                    "WILLIAMSR": ["WILLR", "WILLIAMSR"], 
-                    "MOMENTUM": ["MOM", "MOMENTUM"], 
-                    "PSAR": ["PSAR"], "DMI": ["DMI"], "SUPERTREND": ["SUPERTREND"],
-                    "ICHIMOKU": ["ICHIMOKU"], "STOCHRSI": ["STOCHRSI"], "OBV": ["OBV"],
-                    "AD": ["AD"], "ADOSC": ["ADOSC"], "MFI": ["MFI"], "RVOL": ["RVOL"],
-                    "PIVOTPOINTS": ["PIVOT_POINTS_HL", "PIVOTPOINTS"],
-                    "FIBONACCI": ["FIBONACCI"],
-                    "ATR": ["ATR"]
-                }
-                
-                for k, ind_data in analysis_data["indicators"].items():
-                    k_upper = k.upper()
-                    is_allowed = False
-                    
-                    db_keys = API_TO_DB_MAP.get(k_upper, [k_upper])
-                    
-                    if any(dk in allowed_upper for dk in db_keys):
-                        is_allowed = True
-                        
-                    if not allowed_upper:
-                        is_allowed = True
-                        
-                    if is_allowed:
-                        filtered_inds[k] = ind_data
-                        sig = ind_data.get("signal")
-                        if sig in new_votes:
-                            new_votes[sig] += 1
-                            
-                analysis_data["indicators"] = filtered_inds
-                analysis_data["votes"] = new_votes
-                
-                if new_votes["BUY"] > new_votes["SELL"]:
-                    analysis_data["recommendation"] = "BUY"
-                elif new_votes["SELL"] > new_votes["BUY"]:
-                    analysis_data["recommendation"] = "SELL"
-                else:
-                    if "EMA200" in filtered_inds and filtered_inds["EMA200"].get("signal") in ("BUY", "SELL"):
-                        analysis_data["recommendation"] = filtered_inds["EMA200"]["signal"]
-                    else:
-                        analysis_data["recommendation"] = "NEUTRAL"
-            # ----------------------------------------------------------------
+            upstream_data = resp.json()
 
+            analysis_data = compute_analysis_decision(
+                upstream_data,
+                symbol=formatted_pair,
+                interval=interval,
+                allowed_indicators=allowed_indicators,
+            )
             news_data = await get_news()
-            
         except httpx.HTTPStatusError as e:
             error_text = e.response.text
-            print(f"DEVSBITE ERROR [{e.response.status_code}]: {error_text} (Payload: {payload})")
+            print(f"ANALYSIS GATEWAY ERROR [{e.response.status_code}]: {error_text} (Payload: {payload})")
             return {"error": f"API Error: {error_text}"}
+        except ValueError as e:
+            return {"error": f"Analysis parse error: {str(e)}"}
         except Exception as e:
             return {"error": str(e)}
 
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 INSERT INTO user_analyses (user_id, pair, timeframe, strategy_id, raw_data, news_data, status)
                 VALUES (%s, %s, %s, %s, %s, %s, 'active')
-            """, (user_id, pair, interval_raw, strategy_id, json.dumps(analysis_data), json.dumps(news_data)))
+                """,
+                (user_id, pair, interval_raw, strategy_id, json.dumps(analysis_data), json.dumps(news_data)),
+            )
             analysis_id = cur.lastrowid
 
     return {"status": "success", "analysis_id": analysis_id, "data": analysis_data, "news_data": news_data}
-
 @app.post("/api/analysis/status")
 async def update_analysis_status(request: Request):
     data = await request.json()
@@ -649,7 +611,7 @@ async def cmd_start(message: types.Message):
     user_name = message.from_user.first_name or message.from_user.username or "Trader"
     
     welcome_text = (
-        f"Welcome, {user_name}! 👋\n\n"
+        f"Welcome, {user_name}! рџ‘‹\n\n"
         f"<b>Elizabeth Vane</b> | <code>Private Trading Analytics</code>\n\n"
         f"A professional analytical space for those who value precision. "
         f"We've combined advanced technical analysis methods with the convenience of a Web App.\n\n"
@@ -659,7 +621,7 @@ async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="👉 Open Elizabeth Vane ✨", 
+                text="рџ‘‰ Open Elizabeth Vane вњЁ", 
                 web_app=WebAppInfo(url=os.getenv("WEB_APP_URL"))
             )
         ]
@@ -697,7 +659,7 @@ async def get_or_create_active_chat(request: AIChatRequest):
                 await cur.execute("UPDATE ai_chats SET status = 'archived' WHERE user_id = %s AND status = 'active'", (request.user_id,))
                 await cur.execute("INSERT INTO ai_chats (user_id) VALUES (%s)", (request.user_id,))
                 chat_id = cur.lastrowid
-                return {"status": "success", "chat_id": chat_id, "title": "Новый диалог", "messages": []}
+                return {"status": "success", "chat_id": chat_id, "title": "РќРѕРІС‹Р№ РґРёР°Р»РѕРі", "messages": []}
 
             await cur.execute("SELECT id, role, content, created_at as timestamp FROM ai_messages WHERE chat_id = %s ORDER BY id ASC", (chat['id'],))
             messages = await cur.fetchall()
@@ -707,7 +669,7 @@ async def get_or_create_active_chat(request: AIChatRequest):
 @app.post("/api/ai/chat/send")
 async def send_chat_message(request: AIChatRequest):
     if not request.text or not request.chat_id:
-        return {"error": "Необходим text и chat_id"}
+        return {"error": "РќРµРѕР±С…РѕРґРёРј text Рё chat_id"}
     result = await ai_service.process_user_message(db_pool, request.user_id, request.chat_id, request.text)
     return result
 
@@ -728,7 +690,7 @@ async def get_chat_history(request: AIChatRequest):
 @app.post("/api/ai/chat/load")
 async def load_historical_chat(request: AIChatRequest):
     if not request.chat_id:
-        return {"error": "Необходим chat_id"}
+        return {"error": "РќРµРѕР±С…РѕРґРёРј chat_id"}
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("UPDATE ai_chats SET status = 'archived' WHERE user_id = %s AND status = 'active'", (request.user_id,))
@@ -742,7 +704,7 @@ async def create_new_chat(request: AIChatRequest):
             await cur.execute("UPDATE ai_chats SET status = 'archived' WHERE user_id = %s AND status = 'active'", (request.user_id,))
             await cur.execute("INSERT INTO ai_chats (user_id) VALUES (%s)", (request.user_id,))
             chat_id = cur.lastrowid
-    return {"status": "success", "chat_id": chat_id, "title": "Новый диалог", "messages": []}
+    return {"status": "success", "chat_id": chat_id, "title": "РќРѕРІС‹Р№ РґРёР°Р»РѕРі", "messages": []}
     
 async def start_bot():
     await dp.start_polling(bot)
@@ -770,3 +732,4 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             pass
     asyncio.run(main_wrapper())
+
