@@ -1,0 +1,67 @@
+.empty-market-card {
+  background: #09101F;
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  padding: 30px 20px;
+  border-radius: 12px;
+  text-align: center;
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.analytics-hero { text-align: center; margin-bottom: 25px; padding: 0 10px; }
+
+.analytics-hero h1 { 
+    font-size: 26px; 
+    margin-bottom: 12px; 
+    color: #ffffff;
+    font-weight: 700;
+}
+
+.analytics-hero .subtitle { 
+    font-weight: 600; 
+    margin-bottom: 15px; 
+    color: #D4AF37 !important; 
+}
+
+.analytics-hero .description { 
+    font-size: 0.95rem; 
+    color: #a0a0a0;
+    line-height: 1.5; 
+}
+
+.binary-cta-btn {
+  width: 100%;
+  background: linear-gradient(135deg, #D4AF37 0%, #AA8015 100%);
+  color: #040811;
+  border: none;
+  padding: 16px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+  box-shadow: 0 4px 15px rgba(212, 175, 55, 0.3);
+}
+
+.binary-cta-btn:active {
+  transform: scale(0.98);
+  box-shadow: 0 2px 10px rgba(212, 175, 55, 0.2);
+}
+
+.lottie-animation-wrapper { 
+    margin-bottom: 10px; 
+    display: flex; 
+    justify-content: center; 
+}
+
+.disclaimer-box { 
+    font-size: 10px; 
+    color: #888; 
+    text-align: center; 
+    margin-top: 30px; 
+    padding: 10px; 
+    border-top: 1px solid #333; 
+}

@@ -1,0 +1,67 @@
+
+.log-gauge-container {
+  background: #09101F;
+  padding: 25px 15px 15px 15px;
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  border-radius: 12px;
+  margin-bottom: 25px;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+}
+
+.log-gauge-bg {
+  width: 100%;
+  height: 8px;
+  background: linear-gradient(90deg, #e74c3c 0%, #2ecc71 100%);
+  border-radius: 6px;
+  position: relative;
+  box-shadow: inset 0 2px 5px rgba(0,0,0,0.5);
+}
+
+.log-gauge-pointer {
+  position: absolute;
+  top: -4px;
+  bottom: auto;
+  width: 3px;
+  height: 16px;
+  background: #fff;
+  border-radius: 2px;
+  transform: translateX(-50%);
+  box-shadow: 0 0 5px rgba(255,255,255,0.8);
+  transition: left 1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.log-gauge-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-weight: bold;
+}
+
+.log-gl-sell { font-size: 0.8rem; color: #e74c3c; }
+.log-gl-total { font-size: 0.8rem; color: #888; }
+.log-gl-buy { font-size: 0.8rem; color: #2ecc71; }
+
+.log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.log-card {
+  background: #09101F;
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  padding: 15px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.log-card:hover {
+  background: rgba(212, 175, 55, 0.05);
+  border-color: rgba(212, 175, 55, 0.4);
+}

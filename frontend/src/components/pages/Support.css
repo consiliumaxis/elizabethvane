@@ -1,0 +1,160 @@
+﻿.support-page {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 0 6px 10px;
+  box-sizing: border-box;
+}
+
+.support-page,
+.support-page * {
+  box-sizing: border-box;
+}
+
+.support-title {
+  margin: 0 0 10px;
+  font-size: 1.2rem;
+  color: #f3d381;
+  letter-spacing: 0.25px;
+  font-weight: 700;
+}
+
+.support-hero {
+  width: 100%;
+  margin: -8px 0 -12px;
+  height: 188px;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.support-hero-lottie {
+  width: min(100%, 348px);
+  height: 220px;
+  margin: 0 auto;
+  display: block;
+}
+
+.support-quick {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.support-quick .support-panel-title {
+  margin-bottom: 6px;
+}
+
+.support-quick .support-text {
+  margin-bottom: 4px;
+}
+
+.support-panel {
+  width: 100%;
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  border-radius: 14px;
+  padding: 14px 12px;
+  background:
+    linear-gradient(180deg, rgba(8, 14, 26, 0.94), rgba(7, 12, 23, 0.92));
+  backdrop-filter: blur(4px);
+  overflow: hidden;
+}
+
+.support-panel + .support-panel {
+  margin-top: 10px;
+}
+
+.support-panel-title {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  color: #efcd79;
+  font-weight: 700;
+}
+
+.support-text {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.9);
+  line-height: 1.5;
+  font-size: 0.92rem;
+}
+
+.support-actions {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.support-actions-double {
+  grid-template-columns: 1fr;
+}
+
+.support-btn {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 10px 12px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.12px;
+}
+
+.support-btn-faq {
+  border-color: rgba(112, 174, 255, 0.78);
+  background: linear-gradient(140deg, rgba(30, 71, 123, 0.96), rgba(21, 49, 91, 0.94));
+  color: #dceeff;
+}
+
+.support-btn-channel {
+  border-color: rgba(93, 213, 182, 0.78);
+  background: linear-gradient(140deg, rgba(18, 103, 88, 0.97), rgba(14, 76, 65, 0.95));
+  color: #d6fff4;
+}
+
+.support-btn-support {
+  border-color: #d4af37;
+  background: linear-gradient(140deg, #d4af37 0%, #a17921 100%);
+  color: #040910;
+}
+
+.support-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.support-hint {
+  margin: 10px 2px 0;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: rgba(212, 175, 55, 0.88);
+}
+
+@media (max-width: 420px) {
+  .support-page {
+    max-width: 100%;
+    padding: 0 4px 10px;
+  }
+
+  .support-hero {
+    margin: -6px 0 -14px;
+    height: 172px;
+  }
+
+  .support-panel {
+    padding: 12px 10px;
+    border-radius: 12px;
+  }
+
+  .support-title {
+    font-size: 1.12rem;
+  }
+
+  .support-hero-lottie {
+    height: 204px;
+  }
+
+  .support-text {
+    font-size: 0.88rem;
+  }
+}
