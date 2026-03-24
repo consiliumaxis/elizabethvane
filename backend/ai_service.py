@@ -42,7 +42,6 @@ async def call_openai(messages, model="gpt-4o-mini"):
             return "Sorry, I cannot process your request right now. Please try again later."
 
 async def generate_title_task(db_pool, chat_id, user_id, first_messages):
-    # Строгий промпт для генерации короткого и красивого названия
     prompt = """Analyze the user's message and generate a very short title for this chat (1 to 3 words maximum). 
     Rules:
     - NEVER use quotes.
@@ -64,7 +63,6 @@ async def generate_title_task(db_pool, chat_id, user_id, first_messages):
 async def process_user_message(db_pool, user_id: int, chat_id: int, text: str):
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            # Добавили извлечение title
             await cur.execute("""
                 SELECT c.id, c.title, c.message_count, c.context_summary 
                 FROM ai_chats c
@@ -79,9 +77,7 @@ async def process_user_message(db_pool, user_id: int, chat_id: int, text: str):
             new_msg_count = chat['message_count'] + 1
             await cur.execute("UPDATE ai_chats SET message_count = %s, updated_at = NOW() WHERE id = %s", (new_msg_count, chat_id))
             
-            # Генерируем название, если это первое сообщение, ИЛИ если название всё ещё дефолтное
-            if new_msg_count == 1 or chat['title'] in ['Новый диалог', 'New Chat']:
-                # Передаем только текст пользователя для создания названия, чтобы ИИ не запутался
+            if new_msg_count == 1 or chat['title'] in ['New Chat']:
                 asyncio.create_task(generate_title_task(db_pool, chat_id, user_id, [{"role": "user", "content": text}]))
 
     settings = await get_ai_settings(db_pool)
