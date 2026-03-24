@@ -236,11 +236,13 @@ def _parse_ohlc(payload: Dict[str, Any]) -> List[Dict[str, float]]:
             for x in seq:
                 if not isinstance(x, dict):
                     continue
+                o = _clean_float(_ci_get(x, "open"))
                 h = _clean_float(_ci_get(x, "high"))
                 l = _clean_float(_ci_get(x, "low"))
                 c = _clean_float(_ci_get(x, "close"))
                 if h is not None and l is not None and c is not None:
-                    out.append({"high": h, "low": l, "close": c})
+                    o_val = o if o is not None else l
+                    out.append({"open": o_val, "high": h, "low": l, "close": c})
             if out:
                 return out
     return []
@@ -562,6 +564,46 @@ def _compute_confidence(
     return max(0, min(100, int(round(raw_conf)))), " | ".join(reasons) if reasons else "normal"
 
 
+def _apply_short_term_filters(ohlc_data: List[Dict[str, float]], signal: str, atr_val: float) -> Tuple[str, Dict[str, Any], str]:
+    if len(ohlc_data) < 4 or signal not in ("BUY", "SELL"):
+        return signal, {}, ""
+
+    curr = ohlc_data[0]
+    c3 = ohlc_data[3]["close"]
+    c0 = curr["close"]
+    o0 = curr["open"]
+    candle_size = curr["high"] - curr["low"]
+    
+    if c3 == 0:
+        return signal, {}, ""
+        
+    roc = ((c0 - c3) / c3) * 100
+
+    if signal == "BUY":
+        if roc <= 0 or c0 <= o0:
+            return "NEUTRAL", {}, f"momentum_blocked: roc={roc:.4f}, candle_bearish"
+    elif signal == "SELL":
+        if roc >= 0 or c0 >= o0:
+            return "NEUTRAL", {}, f"momentum_blocked: roc={roc:.4f}, candle_bullish"
+
+    if atr_val and candle_size > (atr_val * 2.0):
+        return "NEUTRAL", {}, f"exhaustion_blocked: size={candle_size:.4f}, atr={atr_val:.4f}"
+
+    entry_zone = {}
+    if signal == "BUY":
+        entry_zone = {
+            "recommended_entry": round(c0 - (candle_size * 0.382), 5),
+            "max_entry": round(c0, 5)
+        }
+    elif signal == "SELL":
+        entry_zone = {
+            "recommended_entry": round(c0 + (candle_size * 0.382), 5),
+            "min_entry": round(c0, 5)
+        }
+
+    return signal, entry_zone, ""
+
+
 def compute_analysis_decision(
     raw_payload: Dict[str, Any],
     *,
@@ -654,6 +696,16 @@ def compute_analysis_decision(
     elif votes["BUY"] == votes["SELL"] and votes["BUY"] > 0 and data_map["ema200"].get("ema") is not None:
         final_sig = "BUY" if price_val > float(data_map["ema200"]["ema"]) else "SELL"
 
+    short_term_reason = ""
+    if interval_norm in ("5min", "15min") and final_sig in ("BUY", "SELL") and ohlc_data:
+        final_sig, smart_entry_data, short_term_reason = _apply_short_term_filters(
+            ohlc_data, 
+            final_sig, 
+            atr_raw
+        )
+        if smart_entry_data:
+            details["Smart_Entry"] = smart_entry_data
+
     if final_sig in ("BUY", "SELL"):
         levels_dir = final_sig
     elif w_buy > w_sell:
@@ -681,6 +733,9 @@ def compute_analysis_decision(
     if confidence < MIN_CONFIDENCE_ADV and final_sig != "NEUTRAL":
         final_sig = "NEUTRAL"
         conf_reason += " | below_min_confidence"
+        
+    if short_term_reason:
+        conf_reason = f"{conf_reason} | {short_term_reason}" if conf_reason else short_term_reason
 
     return {
         "ok": True,
