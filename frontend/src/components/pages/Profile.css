@@ -232,13 +232,13 @@
 
 .strategy-card.active {
   border-color: var(--accent);
-  background: #e8dbc2;
-  box-shadow: 0 2px 8px rgba(61, 47, 28, 0.06);
+  background: rgba(212, 175, 55, 0.14);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.26);
 }
 
 .strategy-details {
   padding: 12px;
-  background: rgba(255, 250, 240, 0.8);
+  background: rgba(11, 19, 36, 0.88);
   border-radius: var(--radius);
   border-left: 3px solid var(--accent);
   font-size: 0.85rem;
@@ -295,7 +295,7 @@
 }
 
 .add-strategy-btn:hover {
-  background: #f0e6d0;
+  background: rgba(212, 175, 55, 0.12);
   border-color: rgba(139, 107, 44, 0.38);
 }
 
@@ -319,8 +319,8 @@
 
 .custom-strategy-item.active {
   border-color: var(--accent);
-  background: #e8dbc2;
-  box-shadow: 0 2px 8px rgba(61, 47, 28, 0.06);
+  background: rgba(212, 175, 55, 0.13);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
 }
 
 .custom-strat-info {
@@ -402,7 +402,7 @@
 }
 
 .modal-input {
-  background: var(--bg-main);
+  background: rgba(8, 15, 29, 0.9);
   border: 1px solid rgba(107, 79, 29, 0.2);
   color: var(--text-main);
   padding: 12px 15px;
@@ -447,7 +447,7 @@
 }
 
 .indicator-toggle-btn.selected {
-  background: #e8dbc2;
+  background: rgba(212, 175, 55, 0.15);
   border-color: var(--accent);
   color: var(--accent);
   font-weight: 600;
@@ -514,7 +514,7 @@
 }
 
 .demo-toggle-btn:hover {
-  background: #f0e6d0;
+  background: rgba(212, 175, 55, 0.12);
   border-color: rgba(139, 107, 44, 0.38);
   color: var(--accent);
 }
@@ -525,7 +525,7 @@
 }
 
 .demo-toggle-btn.exit-mode:hover {
-  background: #f5e0dd;
+  background: rgba(211, 90, 88, 0.16);
 }
 
 
@@ -553,8 +553,8 @@
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid rgba(139, 107, 44, 0.35);
-  background: rgba(244, 233, 208, 0.72);
-  color: var(--accent-strong);
+  background: rgba(212, 175, 55, 0.16);
+  color: var(--accent);
   font-size: 0.68rem;
   font-weight: 600;
   line-height: 1.1;
@@ -566,7 +566,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(212, 175, 55, 0.05);
+  background: rgba(212, 175, 55, 0.1);
   border: 1px solid rgba(212, 175, 55, 0.1);
   width: 42px;
   height: 42px;
@@ -656,12 +656,12 @@
 }
 
 .icon-choice-item:hover {
-  background: #f0e6d0;
+  background: rgba(212, 175, 55, 0.12);
   transform: scale(1.1);
 }
 
 .icon-choice-item.selected {
-  background: #e8dbc2;
+  background: rgba(212, 175, 55, 0.2);
   border-color: var(--accent);
   transform: scale(1.1);
 }
