@@ -72,6 +72,40 @@ ADV_PERIODS = {
         "st_m": 3.0,
         "fib_lookback": 35,
     },
+    "4h": {
+        "rsi": 14,
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "macd_signal": 9,
+        "stoch_k": 14,
+        "stoch_d": 3,
+        "stoch_slow": 3,
+        "bb": 20,
+        "bb_sd": 2.0,
+        "cci": 20,
+        "adx": 14,
+        "atr": 14,
+        "st_p": 10,
+        "st_m": 3.0,
+        "fib_lookback": 70,
+    },
+    "1day": {
+        "rsi": 14,
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "macd_signal": 9,
+        "stoch_k": 14,
+        "stoch_d": 3,
+        "stoch_slow": 3,
+        "bb": 20,
+        "bb_sd": 2.0,
+        "cci": 20,
+        "adx": 14,
+        "atr": 14,
+        "st_p": 10,
+        "st_m": 3.0,
+        "fib_lookback": 120,
+    },
 }
 ADV_PERIODS_DEFAULT = ADV_PERIODS["5min"]
 
@@ -80,10 +114,12 @@ RSI_THRESHOLDS = {
     "15min": {"ob": 70, "os": 30},
     "30min": {"ob": 70, "os": 30},
     "1h": {"ob": 70, "os": 30},
+    "4h": {"ob": 70, "os": 30},
+    "1day": {"ob": 70, "os": 30},
 }
 RSI_THRESHOLDS_DEFAULT = {"ob": 70, "os": 30}
 
-CCI_THRESHOLDS = {"5min": 150, "15min": 100, "30min": 100, "1h": 100}
+CCI_THRESHOLDS = {"5min": 150, "15min": 100, "30min": 100, "1h": 100, "4h": 100, "1day": 100}
 
 ADX_TREND_THRESHOLD = 25.0
 
@@ -107,6 +143,42 @@ INDICATOR_WEIGHTS = {
 }
 
 MIN_CONFIDENCE_ADV = 25
+
+MIN_CONFIDENCE_BY_INTERVAL = {
+    "5min": 33,
+    "15min": 30,
+    "30min": 28,
+    "1h": 26,
+    "4h": 24,
+    "1day": 24,
+}
+
+MIN_DIRECTIONAL_VOTES_BY_INTERVAL = {
+    "5min": 4,
+    "15min": 3,
+    "30min": 3,
+    "1h": 3,
+    "4h": 3,
+    "1day": 2,
+}
+
+MIN_WEIGHT_EDGE_BY_INTERVAL = {
+    "5min": 0.8,
+    "15min": 0.7,
+    "30min": 0.6,
+    "1h": 0.5,
+    "4h": 0.45,
+    "1day": 0.4,
+}
+
+ATR_LEVEL_MULTIPLIERS = {
+    "5min": {"cons_sl": 0.45, "mod_sl": 0.7, "tp2": 0.75, "tp3": 1.1},
+    "15min": {"cons_sl": 0.6, "mod_sl": 0.95, "tp2": 1.0, "tp3": 1.5},
+    "30min": {"cons_sl": 0.9, "mod_sl": 1.3, "tp2": 1.6, "tp3": 2.2},
+    "1h": {"cons_sl": 1.0, "mod_sl": 1.5, "tp2": 1.8, "tp3": 2.6},
+    "4h": {"cons_sl": 1.2, "mod_sl": 1.8, "tp2": 2.2, "tp3": 3.2},
+    "1day": {"cons_sl": 1.4, "mod_sl": 2.1, "tp2": 2.8, "tp3": 4.0},
+}
 
 
 def utc_iso() -> str:
@@ -236,13 +308,11 @@ def _parse_ohlc(payload: Dict[str, Any]) -> List[Dict[str, float]]:
             for x in seq:
                 if not isinstance(x, dict):
                     continue
-                o = _clean_float(_ci_get(x, "open"))
                 h = _clean_float(_ci_get(x, "high"))
                 l = _clean_float(_ci_get(x, "low"))
                 c = _clean_float(_ci_get(x, "close"))
                 if h is not None and l is not None and c is not None:
-                    o_val = o if o is not None else l
-                    out.append({"open": o_val, "high": h, "low": l, "close": c})
+                    out.append({"high": h, "low": l, "close": c})
             if out:
                 return out
     return []
@@ -420,17 +490,16 @@ def _evaluate_rules(
         add("Supertrend", "BUY" if price > st_val else "SELL", st_val)
 
     ichi = _to_dict(ichimoku)
-    if interval not in ("5min",):
-        sa = _to_num_or_field(ichi, "senkou_span_a")
-        sb = _to_num_or_field(ichi, "senkou_span_b")
-        if sa is not None and sb is not None:
-            cloud_top, cloud_bot = max(sa, sb), min(sa, sb)
-            if price > cloud_top:
-                add("Ichimoku", "BUY", {"span_a": sa, "span_b": sb, "zone": "above"})
-            elif price < cloud_bot:
-                add("Ichimoku", "SELL", {"span_a": sa, "span_b": sb, "zone": "below"})
-            else:
-                add("Ichimoku", "NEUTRAL", {"span_a": sa, "span_b": sb, "zone": "inside"})
+    sa = _to_num_or_field(ichi, "senkou_span_a")
+    sb = _to_num_or_field(ichi, "senkou_span_b")
+    if sa is not None and sb is not None:
+        cloud_top, cloud_bot = max(sa, sb), min(sa, sb)
+        if price > cloud_top:
+            add("Ichimoku", "BUY", {"span_a": sa, "span_b": sb, "zone": "above"})
+        elif price < cloud_bot:
+            add("Ichimoku", "SELL", {"span_a": sa, "span_b": sb, "zone": "below"})
+        else:
+            add("Ichimoku", "NEUTRAL", {"span_a": sa, "span_b": sb, "zone": "inside"})
 
     pp_raw = _to_dict(pivot_points)
     if pp_raw and is_allowed("PivotPoints"):
@@ -496,23 +565,42 @@ def _calculate_key_levels(
     current_price: float,
     atr: float,
     signal: str,
+    interval: str,
 ) -> Dict[str, Any]:
     recent = ohlc_data[:10]
     if not recent:
         return {}
     res = max(x["high"] for x in recent)
     sup = min(x["low"] for x in recent)
+    m = ATR_LEVEL_MULTIPLIERS.get(interval, ATR_LEVEL_MULTIPLIERS["15min"])
+    atr = max(float(atr), 1e-6)
+    support_buffer = 0.25 * atr
+    resistance_buffer = 0.25 * atr
 
     if signal == "BUY":
-        cons_sl = current_price - 1.0 * atr
-        mod_sl = current_price - 1.5 * atr
-        tp2 = current_price + 2.0 * atr
-        tp3 = current_price + 3.0 * atr
+        cons_sl = current_price - m["cons_sl"] * atr
+        mod_sl = current_price - m["mod_sl"] * atr
+        if sup < current_price:
+            cons_sl = max(cons_sl, sup - support_buffer)
+            mod_sl = max(mod_sl, sup - 2 * support_buffer)
+
+        tp2 = current_price + m["tp2"] * atr
+        tp3 = current_price + m["tp3"] * atr
+        if res > current_price:
+            tp2 = min(tp2, res + resistance_buffer)
+            tp3 = min(tp3, res + 2 * resistance_buffer)
     elif signal == "SELL":
-        cons_sl = current_price + 1.0 * atr
-        mod_sl = current_price + 1.5 * atr
-        tp2 = current_price - 2.0 * atr
-        tp3 = current_price - 3.0 * atr
+        cons_sl = current_price + m["cons_sl"] * atr
+        mod_sl = current_price + m["mod_sl"] * atr
+        if res > current_price:
+            cons_sl = min(cons_sl, res + resistance_buffer)
+            mod_sl = min(mod_sl, res + 2 * resistance_buffer)
+
+        tp2 = current_price - m["tp2"] * atr
+        tp3 = current_price - m["tp3"] * atr
+        if sup < current_price:
+            tp2 = max(tp2, sup - support_buffer)
+            tp3 = max(tp3, sup - 2 * support_buffer)
     else:
         cons_sl = mod_sl = tp2 = tp3 = None
 
@@ -528,6 +616,22 @@ def _calculate_key_levels(
     }
 
 
+def _calc_recent_tr(ohlc_data: List[Dict[str, float]], max_bars: int = 50) -> List[float]:
+    if len(ohlc_data) < 2:
+        return []
+    limit = min(len(ohlc_data) - 1, max_bars)
+    trs: List[float] = []
+    for i in range(limit):
+        cur = ohlc_data[i]
+        prev_close = ohlc_data[i + 1]["close"]
+        h = cur["high"]
+        l = cur["low"]
+        tr = max(h - l, abs(h - prev_close), abs(l - prev_close))
+        if tr > 0:
+            trs.append(tr)
+    return trs
+
+
 def _compute_confidence(
     w_buy: float,
     w_sell: float,
@@ -536,6 +640,7 @@ def _compute_confidence(
     session_mult: float,
     atr_val: Optional[float],
     atr_avg: Optional[float],
+    votes: Optional[Dict[str, int]] = None,
 ) -> Tuple[int, str]:
     total_w = w_buy + w_sell + w_neutral
     if total_w <= 0:
@@ -551,6 +656,20 @@ def _compute_confidence(
         raw_conf *= r
         reasons.append(f"adx_flat={adx_val:.1f}")
 
+    if w_buy > 0 and w_sell > 0:
+        conflict_ratio = min(w_buy, w_sell) / max(w_buy, w_sell)
+        raw_conf *= (1.0 - 0.45 * conflict_ratio)
+        if conflict_ratio > 0.25:
+            reasons.append(f"signal_conflict={conflict_ratio:.2f}")
+
+    if votes:
+        directional_votes = votes.get("BUY", 0) + votes.get("SELL", 0)
+        if directional_votes > 0:
+            vote_balance = abs(votes.get("BUY", 0) - votes.get("SELL", 0)) / directional_votes
+            raw_conf *= (0.65 + 0.35 * vote_balance)
+            if vote_balance < 0.34:
+                reasons.append(f"vote_split={vote_balance:.2f}")
+
     if atr_val is not None and atr_avg is not None and atr_avg > 0:
         r = atr_val / atr_avg
         if r < 0.5:
@@ -562,46 +681,6 @@ def _compute_confidence(
         reasons.append(f"session={session_mult:.2f}")
 
     return max(0, min(100, int(round(raw_conf)))), " | ".join(reasons) if reasons else "normal"
-
-
-def _apply_short_term_filters(ohlc_data: List[Dict[str, float]], signal: str, atr_val: float) -> Tuple[str, Dict[str, Any], str]:
-    if len(ohlc_data) < 4 or signal not in ("BUY", "SELL"):
-        return signal, {}, ""
-
-    curr = ohlc_data[0]
-    c3 = ohlc_data[3]["close"]
-    c0 = curr["close"]
-    o0 = curr["open"]
-    candle_size = curr["high"] - curr["low"]
-    
-    if c3 == 0:
-        return signal, {}, ""
-        
-    roc = ((c0 - c3) / c3) * 100
-
-    if signal == "BUY":
-        if roc <= 0 or c0 <= o0:
-            return "NEUTRAL", {}, f"momentum_blocked: roc={roc:.4f}, candle_bearish"
-    elif signal == "SELL":
-        if roc >= 0 or c0 >= o0:
-            return "NEUTRAL", {}, f"momentum_blocked: roc={roc:.4f}, candle_bullish"
-
-    if atr_val and candle_size > (atr_val * 2.0):
-        return "NEUTRAL", {}, f"exhaustion_blocked: size={candle_size:.4f}, atr={atr_val:.4f}"
-
-    entry_zone = {}
-    if signal == "BUY":
-        entry_zone = {
-            "recommended_entry": round(c0 - (candle_size * 0.382), 5),
-            "max_entry": round(c0, 5)
-        }
-    elif signal == "SELL":
-        entry_zone = {
-            "recommended_entry": round(c0 + (candle_size * 0.382), 5),
-            "min_entry": round(c0, 5)
-        }
-
-    return signal, entry_zone, ""
 
 
 def compute_analysis_decision(
@@ -667,7 +746,7 @@ def compute_analysis_decision(
 
     atr_avg = None
     if len(ohlc_data) >= 14:
-        trs = [ohlc_data[i]["high"] - ohlc_data[i]["low"] for i in range(1, min(len(ohlc_data), 50))]
+        trs = _calc_recent_tr(ohlc_data, max_bars=50)
         if trs:
             atr_avg = sum(trs) / len(trs)
 
@@ -679,6 +758,8 @@ def compute_analysis_decision(
         is_fib_allowed = not allowed_upper or "FIBONACCI" in allowed_upper
         if is_fib_allowed and fib_levels:
             fib_w = _get_weight("Fibonacci", data_map["adx"].get("adx"))
+            if interval_norm in ("5min", "15min"):
+                fib_w *= 0.75
             details["Fibonacci"] = {"value": fib_levels, "signal": fib_signal, "weight": round(fib_w, 2)}
             votes[fib_signal] += 1
             if fib_signal == "BUY":
@@ -688,23 +769,57 @@ def compute_analysis_decision(
             else:
                 w_neutral += fib_w
 
+    min_edge = MIN_WEIGHT_EDGE_BY_INTERVAL.get(interval_norm, 0.5)
+    min_dir_votes = MIN_DIRECTIONAL_VOTES_BY_INTERVAL.get(interval_norm, 3)
+    directional_votes = votes["BUY"] + votes["SELL"]
+
     final_sig = "NEUTRAL"
-    if w_buy > w_sell and (w_buy - w_sell) > 0.3:
+    if w_buy > w_sell and (w_buy - w_sell) > min_edge:
         final_sig = "BUY"
-    elif w_sell > w_buy and (w_sell - w_buy) > 0.3:
+    elif w_sell > w_buy and (w_sell - w_buy) > min_edge:
         final_sig = "SELL"
     elif votes["BUY"] == votes["SELL"] and votes["BUY"] > 0 and data_map["ema200"].get("ema") is not None:
         final_sig = "BUY" if price_val > float(data_map["ema200"]["ema"]) else "SELL"
 
-    short_term_reason = ""
-    if interval_norm in ("5min", "15min") and final_sig in ("BUY", "SELL") and ohlc_data:
-        final_sig, smart_entry_data, short_term_reason = _apply_short_term_filters(
-            ohlc_data, 
-            final_sig, 
-            atr_raw
-        )
-        if smart_entry_data:
-            details["Smart_Entry"] = smart_entry_data
+    votes_block_reason = ""
+    if directional_votes < min_dir_votes and final_sig != "NEUTRAL":
+        final_sig = "NEUTRAL"
+        votes_block_reason = f"low_directional_votes={directional_votes}/{min_dir_votes}"
+
+    microtrend_reason = ""
+    adx_now = data_map["adx"].get("adx")
+    apply_microtrend_filter = (
+        interval_norm in ("5min", "15min")
+        and final_sig in ("BUY", "SELL")
+        and (adx_now is None or adx_now < ADX_TREND_THRESHOLD)
+    )
+    if apply_microtrend_filter:
+        trend_checks = 0
+        trend_passed = 0
+
+        e9 = data_map["ema9"].get("ema")
+        e21 = data_map["ema21"].get("ema")
+        if e9 is not None and e21 is not None:
+            trend_checks += 1
+            if (final_sig == "BUY" and e9 > e21) or (final_sig == "SELL" and e9 < e21):
+                trend_passed += 1
+
+        e50 = data_map["ema50"].get("ema")
+        if e50 is not None:
+            trend_checks += 1
+            if (final_sig == "BUY" and price_val > e50) or (final_sig == "SELL" and price_val < e50):
+                trend_passed += 1
+
+        st_val = data_map["supertrend"].get("supertrend")
+        if st_val is not None:
+            trend_checks += 1
+            if (final_sig == "BUY" and price_val > st_val) or (final_sig == "SELL" and price_val < st_val):
+                trend_passed += 1
+
+        required = 2 if trend_checks >= 3 else (1 if trend_checks > 0 else 0)
+        if required and trend_passed < required:
+            final_sig = "NEUTRAL"
+            microtrend_reason = f"microtrend_filter={trend_passed}/{required}"
 
     if final_sig in ("BUY", "SELL"):
         levels_dir = final_sig
@@ -719,7 +834,7 @@ def compute_analysis_decision(
     else:
         levels_dir = "NEUTRAL"
 
-    key_levels = _calculate_key_levels(ohlc_data, price_val, atr_raw, levels_dir) if ohlc_data else {}
+    key_levels = _calculate_key_levels(ohlc_data, price_val, atr_raw, levels_dir, interval_norm) if ohlc_data else {}
 
     confidence, conf_reason = _compute_confidence(
         w_buy,
@@ -729,13 +844,16 @@ def compute_analysis_decision(
         sess_mult,
         atr_raw,
         atr_avg,
+        votes,
     )
-    if confidence < MIN_CONFIDENCE_ADV and final_sig != "NEUTRAL":
+    min_conf = MIN_CONFIDENCE_BY_INTERVAL.get(interval_norm, MIN_CONFIDENCE_ADV)
+    if confidence < min_conf and final_sig != "NEUTRAL":
         final_sig = "NEUTRAL"
-        conf_reason += " | below_min_confidence"
-        
-    if short_term_reason:
-        conf_reason = f"{conf_reason} | {short_term_reason}" if conf_reason else short_term_reason
+        conf_reason += f" | below_min_confidence={min_conf}"
+    if votes_block_reason:
+        conf_reason = f"{conf_reason} | {votes_block_reason}" if conf_reason else votes_block_reason
+    if microtrend_reason:
+        conf_reason = f"{conf_reason} | {microtrend_reason}" if conf_reason else microtrend_reason
 
     return {
         "ok": True,

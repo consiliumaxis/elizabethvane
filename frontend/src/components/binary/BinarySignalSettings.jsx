@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import Loader from '../Loader/Loader';
+import { apiFetchJson } from '../../lib/api';
 import './BinarySignalSettings.css';
 import iconEdit from '../../assets/icons/edit.svg?url';
 
@@ -22,19 +23,17 @@ export default function BinarySignalSettings({
 
   const expOptions = ['1m', '3m', '5m', '10m', '15m', '30m'];
 
-  
   const appliedStrategyId = user?.strategy_id;
   const selectedStrategy = strategies?.find(s => Number(s.id) === Number(appliedStrategyId)) || strategies?.find(s => s.is_system) || {};
 
-  
   useEffect(() => {
     if (setBackHandler) {
       setBackHandler(() => {
         if (editMode) {
-          
+
           setEditMode(null);
         } else {
-          
+
           onGoHome();
         }
       });
@@ -42,12 +41,11 @@ export default function BinarySignalSettings({
   }, [editMode, onGoHome, setBackHandler]);
 
   useEffect(() => {
-    fetch('/api/pairs/forex')
-      .then(res => res.json())
+    apiFetchJson('/api/pairs/forex')
       .then(data => {
         if (data && data.pairs && data.pairs.length > 0) {
           setPairs(data.pairs);
-          
+
           setBinaryParams(prev => ({
             pair: prev.pair || data.pairs[0].pair,
             exp: prev.exp || expOptions[0]
@@ -90,7 +88,6 @@ export default function BinarySignalSettings({
     setEditMode(null);
   };
 
-  
   const isSelectingPair = editMode === 'pair';
   const isSelectingExp = editMode === 'exp';
   const isShowingSummary = !editMode && binaryParams.pair && binaryParams.exp;
@@ -158,7 +155,7 @@ export default function BinarySignalSettings({
               <div className="summary-info">
                 <span className="summary-label">{globalT.analysisSettings?.strategyLabel || 'Strategy'}</span>
                 <span className="summary-value" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span style={{ fontSize: '1.1em' }}>{selectedStrategy?.icon || '⚡'}</span>
+                  <span style={{ fontSize: '1.1em' }}>{selectedStrategy?.icon || '\u26A1'}</span>
                   {selectedStrategy?.name || 'System Strategy'}
                 </span>
               </div>
@@ -185,3 +182,4 @@ export default function BinarySignalSettings({
     </div>
   );
 }
+

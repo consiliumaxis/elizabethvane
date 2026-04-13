@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
+import { apiFetchJson } from '../../lib/api';
 import './ChatAI.css';
 
 export default function ChatAI({ user, t }) {
@@ -12,32 +13,37 @@ export default function ChatAI({ user, t }) {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const messagesEndRef = useRef(null);
+  const messagesAreaRef = useRef(null);
   const textareaRef = useRef(null);
+  const hasInitialPositioned = useRef(false);
 
-  const getUserId = () => {
-    return user?.user_id || window.Telegram?.WebApp?.initDataUnsafe?.user?.id;
-  };
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (behavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
   };
 
   useEffect(() => {
-    scrollToBottom();
+    if (!messages.length && !isThinking) return;
+
+    if (!hasInitialPositioned.current) {
+      hasInitialPositioned.current = true;
+      if (messagesAreaRef.current) messagesAreaRef.current.scrollTop = 0;
+      return;
+    }
+
+    scrollToBottom('smooth');
   }, [messages, isThinking]);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, []);
+
+  useEffect(() => {
     const fetchActiveChat = async () => {
-      const uid = getUserId();
-      if (!uid) return;
-      
       try {
-        const res = await fetch('/api/ai/chat/active', {
+        const data = await apiFetchJson('/api/ai/chat/active', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: uid })
+          body: JSON.stringify({})
         });
-        const data = await res.json();
         
         if (data.status === 'success') {
           setChatId(data.chat_id);
@@ -75,8 +81,7 @@ export default function ChatAI({ user, t }) {
 
   const handleSend = async () => {
     const trimmed = inputValue.trim();
-    const uid = getUserId();
-    if (!trimmed || isThinking || !uid || !chatId) return;
+    if (!trimmed || isThinking || !chatId) return;
 
     const newUserMsg = {
       id: Date.now(),
@@ -95,12 +100,10 @@ export default function ChatAI({ user, t }) {
     setIsThinking(true);
 
     try {
-      const res = await fetch('/api/ai/chat/send', {
+      const data = await apiFetchJson('/api/ai/chat/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: uid, chat_id: chatId, text: trimmed })
+        body: JSON.stringify({ chat_id: chatId, text: trimmed })
       });
-      const data = await res.json();
       
       if (data.status === 'success') {
         setMessages((prev) => [...prev, {
@@ -112,6 +115,13 @@ export default function ChatAI({ user, t }) {
       }
     } catch (e) {
       console.error(e);
+      const fallbackText = e?.message || 'AI service is temporarily unavailable. Please try again in a moment.';
+      setMessages((prev) => [...prev, {
+        id: Date.now() + 2,
+        role: 'ai',
+        text: fallbackText,
+        timestamp: new Date().toISOString(),
+      }]);
     } finally {
       setIsThinking(false);
     }
@@ -125,16 +135,11 @@ export default function ChatAI({ user, t }) {
   };
 
   const handleNewChat = async () => {
-    const uid = getUserId();
-    if (!uid) return;
-    
     try {
-      const res = await fetch('/api/ai/chat/new', {
+      const data = await apiFetchJson('/api/ai/chat/new', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: uid })
+        body: JSON.stringify({})
       });
-      const data = await res.json();
       
       if (data.status === 'success') {
         setChatId(data.chat_id);
@@ -153,19 +158,14 @@ export default function ChatAI({ user, t }) {
   };
 
   const handleHistoryOpen = async () => {
-    const uid = getUserId();
-    if (!uid) return;
-    
     setShowHistory(true);
     setIsLoadingHistory(true);
     
     try {
-      const res = await fetch('/api/ai/chat/history', {
+      const data = await apiFetchJson('/api/ai/chat/history', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: uid })
+        body: JSON.stringify({})
       });
-      const data = await res.json();
       if (data.status === 'success') {
         setHistoryList(data.chats);
       }
@@ -177,18 +177,13 @@ export default function ChatAI({ user, t }) {
   };
 
   const handleLoadChat = async (id) => {
-    const uid = getUserId();
-    if (!uid) return;
-    
     setShowHistory(false);
     
     try {
-      const res = await fetch('/api/ai/chat/load', {
+      const data = await apiFetchJson('/api/ai/chat/load', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: uid, chat_id: id })
+        body: JSON.stringify({ chat_id: id })
       });
-      const data = await res.json();
       
       if (data.status === 'success') {
         setChatId(data.chat_id);
@@ -241,17 +236,16 @@ export default function ChatAI({ user, t }) {
     
     return parts.map((part, index) => {
       if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={index} style={{ color: '#D4AF37', fontWeight: 700 }}>{part.slice(2, -2)}</strong>;
+        return <strong key={index} style={{ color: 'var(--accent)', fontWeight: 700 }}>{part.slice(2, -2)}</strong>;
       }
-      
       if (part.startsWith('`') && part.endsWith('`')) {
         return (
           <span key={index} style={{ 
-            background: 'rgba(212, 175, 55, 0.15)', 
-            color: '#D4AF37', 
+            background: 'rgba(139, 107, 44, 0.14)', 
+            color: 'var(--accent)', 
             padding: '2px 6px', 
             borderRadius: '4px',
-            fontFamily: '"Fira Code", monospace',
+            fontVariantNumeric: 'tabular-nums',
             fontSize: '0.9em'
           }}>
             {part.slice(1, -1)}
@@ -268,9 +262,9 @@ export default function ChatAI({ user, t }) {
         
         <div className="chat-header-bar">
           <div className="chat-title-info">
-            <div className="ai-avatar-mini">🤖</div>
+            <div className="ai-avatar-mini" aria-hidden="true">AI</div>
             <div>
-              <h2 className="chat-header-title">AI Ассистент</h2>
+              <h2 className="chat-header-title">AI Assistant</h2>
               <span className="chat-status">{isThinking ? t.chat.thinking : t.chat.online}</span>
             </div>
           </div>
@@ -290,7 +284,7 @@ export default function ChatAI({ user, t }) {
           </div>
         </div>
 
-        <div className="chat-messages-area">
+        <div className="chat-messages-area" ref={messagesAreaRef}>
           {messages.map((msg) => (
             <div key={msg.id} className={`message-row ${msg.role === 'user' ? 'is-user' : 'is-ai'}`}>
               <div className={`message-bubble fade-in-up`}>
@@ -365,3 +359,5 @@ export default function ChatAI({ user, t }) {
     </div>
   );
 }
+
+
