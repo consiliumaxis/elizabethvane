@@ -1,4 +1,10 @@
 .admin-shell {
+  --text-main: #2b2117;
+  --text-soft: #7a6750;
+  --accent: #8f6a2e;
+  --accent-strong: #5f451a;
+  --line: rgba(143, 106, 46, 0.24);
+
   width: 100%;
   max-width: 980px;
   margin: 0 auto;

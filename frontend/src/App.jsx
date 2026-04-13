@@ -23,7 +23,6 @@ import AdminApp from './admin/AdminApp';
 import Header from './components/Header/Header.jsx';
 import BackgroundCandles from './components/BackgroundCandles/BackgroundCandles.jsx';
 import { texts } from './locales/texts';
-import './theme.css';
 import './openViaBot.css';
 
 function App() {
