@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import Loader from '../Loader/Loader';
 import Lottie from 'lottie-react';
 import animationData from '../../assets/analize.json';
@@ -6,6 +6,7 @@ import './ForexAnalysisSettings.css';
 import iconEdit from '../../assets/icons/edit.svg?url';
 import TradingViewChart from './TradingViewChart';
 import NewsModal from './NewsModal';
+import { apiFetchJson } from '../../lib/api';
 
 import * as Flags from 'country-flag-icons/react/3x2';
 
@@ -70,8 +71,19 @@ export default function ForexAnalysisSettings({
   };
 
   const formatPrice = (price) => {
-    if (typeof price === 'number') return price.toFixed(5);
+    if (typeof price === 'number') return price.toFixed(3);
     return safeRender(price);
+  };
+
+  const formatLevelValue = (value) => {
+    if (typeof value === 'number') return value.toFixed(3);
+    if (typeof value === 'string') {
+      const normalized = value.replace(',', '.').trim();
+      const matched = normalized.match(/-?\d+(\.\d+)?/);
+      const parsed = matched ? Number(matched[0]) : Number(normalized);
+      if (Number.isFinite(parsed)) return parsed.toFixed(3);
+    }
+    return safeRender(value);
   };
 
   useEffect(() => {
@@ -116,10 +128,10 @@ export default function ForexAnalysisSettings({
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/pairs/forex').then(res => res.ok ? res.json() : { pairs: [] }),
-      fetch('/api/pairs/indices').then(res => res.ok ? res.json() : []),
-      fetch('/api/pairs/commodity').then(res => res.ok ? res.json() : []),
-      fetch('/api/pairs/otc/stocks').then(res => res.ok ? res.json() : { assets: [] })
+      apiFetchJson('/api/pairs/forex').catch(() => ({ pairs: [] })),
+      apiFetchJson('/api/pairs/indices').catch(() => []),
+      apiFetchJson('/api/pairs/commodity').catch(() => []),
+      apiFetchJson('/api/pairs/otc/stocks').catch(() => ({ assets: [] }))
     ])
     .then(([forexData, indicesData, commData, stocksData]) => {
       const formatted = {
@@ -144,8 +156,7 @@ export default function ForexAnalysisSettings({
     });
 
     if (!activeAnalysisPreload) {
-      fetch('/api/news')
-        .then(res => res.json())
+      apiFetchJson('/api/news')
         .then(data => setNews(data))
         .catch(err => console.error("News fetch error", err));
     }
@@ -259,7 +270,7 @@ export default function ForexAnalysisSettings({
   if (loadingAssets && !analysisData) return <Loader t={globalT} />;
 
   const handleConductAnalysis = async () => {
-    setAnalysisData(null); 
+    setAnalysisData(null);
     setIsProcessing(true);
     setEditMode(null);
     const uiDelay = Math.floor(Math.random() * 7000) + 3000; 
@@ -269,11 +280,9 @@ export default function ForexAnalysisSettings({
       ? selectedStrategy.indicator_keys.split(',').map(s => s.trim().toUpperCase()) 
       : [];
     try {
-      const response = await fetch('/api/analysis/forex', {
+      const result = await apiFetchJson('/api/analysis/forex', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: user.user_id,
           pair: forexParams.pair,
           exp: forexParams.exp,
           strategy_id: user.strategy_id,
@@ -281,7 +290,6 @@ export default function ForexAnalysisSettings({
           exchange: assetObj?.exchange || null
         })
       });
-      const result = await response.json();
       const elapsedTime = Date.now() - startTime;
       const remainingWait = uiDelay - elapsedTime;
       if (remainingWait > 0) await new Promise(resolve => setTimeout(resolve, remainingWait));
@@ -308,10 +316,9 @@ export default function ForexAnalysisSettings({
 
   const handleMarkStatus = async (status) => {
     if (!analysisData?.id) return;
-    await fetch('/api/analysis/status', {
+    await apiFetchJson('/api/analysis/status', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ analysis_id: analysisData.id, status, user_id: user.user_id })
+      body: JSON.stringify({ analysis_id: analysisData.id, status })
     });
     setAnalysisData(null);
     onGoHome();
@@ -359,23 +366,23 @@ export default function ForexAnalysisSettings({
 
     return (
       <div className="profile-wrapper analysis-result-container">
-        <div style={{ textAlign: 'center', marginBottom: '15px' }}>
-          <h2 className="settings-main-title" style={{ fontSize: '1.7rem', margin: '0 0 6px 0', letterSpacing: '1.5px', color: '#D4AF37', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
+        <div className="analysis-head">
+          <h2 className="settings-main-title analysis-asset-title">
             {assetObj.icon || assetObj.country ? <AssetIcon asset={assetObj} /> : null}
             {safeRender(assetObj.name !== assetObj.apiVal ? assetObj.name : analysisSymbol)}
           </h2>
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px', fontFamily: '"Fira Code", monospace' }}>
-            <span style={{ background: 'rgba(212, 175, 55, 0.15)', color: '#D4AF37', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>
+          <div className="analysis-meta-row">
+            <span style={{ background: 'rgba(139, 107, 44, 0.14)', color: 'var(--accent)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: '500' }}>
               {safeRender(analysisInterval)}
             </span>
-            <span style={{ color: '#fff', fontSize: '1.1rem', fontWeight: 'bold' }}>
+            <span style={{ color: 'var(--text-main)', fontSize: '1.1rem', fontWeight: '600' }}>
               {formatPrice(currentPrice)}
             </span>
           </div>
-          <div style={{ marginTop: '8px', fontSize: '0.75rem', color: '#888', textTransform: 'uppercase', letterSpacing: '1px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '5px' }}>
+          <div className="analysis-strategy-row">
             {t.strategyLabel}: 
-            <span style={{ color: '#D4AF37', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{ fontSize: '1.1em' }}>{safeRender(selectedStrategy.icon, '⚡')}</span> 
+            <span className="analysis-strategy-value">
+              <span style={{ fontSize: '1.1em' }}>{safeRender(selectedStrategy.icon, '\u26A1')}</span> 
               {safeRender(selectedStrategy.name || analysisData.strategy_name || 'Custom Strategy')}
             </span>
           </div>
@@ -386,13 +393,13 @@ export default function ForexAnalysisSettings({
             {filteredInds.map(([key, ind]) => (
               <div key={key} className="ind-item">
                 <span className="ind-name">{safeRender(key)}</span>
-                <span className="ind-val">{typeof ind.value === 'number' ? ind.value.toFixed(5) : safeRender(ind.value)}</span>
+                <span className="ind-val">{typeof ind.value === 'number' ? ind.value.toFixed(3) : safeRender(ind.value)}</span>
                 <span className={`ind-sig ${ind.signal === 'BUY' ? 'sig-buy' : ind.signal === 'SELL' ? 'sig-sell' : 'sig-neutral'}`}>{safeRender(ind.signal)}</span>
               </div>
             ))}
           </div>
 
-          <div className="recommendation-gauge-container" style={{ borderTop: '1px dashed rgba(212, 175, 55, 0.3)', marginTop: '12px', paddingTop: '12px' }}>
+          <div className="recommendation-gauge-container" style={{ borderTop: '1px dashed rgba(139, 107, 44, 0.3)', marginTop: '12px', paddingTop: '12px' }}>
             <div className="gauge-title">{t.overallForecast}</div>
             <div className="gauge-bar-bg">
               <div className="gauge-pointer" style={{ left: `${pointerPosition}%` }}></div>
@@ -405,14 +412,14 @@ export default function ForexAnalysisSettings({
           </div>
 
           {data.key_levels && (
-            <div className="levels-list" style={{ borderTop: '1px dashed rgba(212, 175, 55, 0.3)', marginTop: '10px', paddingTop: '10px' }}>
+            <div className="levels-list" style={{ borderTop: '1px dashed rgba(139, 107, 44, 0.3)', marginTop: '10px', paddingTop: '10px' }}>
               <div className="level-row" style={{ borderBottom: 'none', paddingBottom: '0' }}>
                 <span className="level-label">{t.conservativeSl}</span>
-                <span className="level-val">{safeRender(data.key_levels.conservative_sl)}</span>
+                <span className="level-val">{formatLevelValue(data.key_levels.conservative_sl)}</span>
               </div>
               <div className="level-row" style={{ borderBottom: 'none', paddingBottom: '0' }}>
                 <span className="level-label">{t.targetLabel}</span>
-                <span className="level-val">{safeRender(data.key_levels.rr_2_1_target)}</span>
+                <span className="level-val">{formatLevelValue(data.key_levels.rr_2_1_target)}</span>
               </div>
             </div>
           )}
@@ -422,11 +429,11 @@ export default function ForexAnalysisSettings({
               <div className="nf-safe-box" style={{ marginBottom: '10px' }}>{t.noNewsExpected}</div>
             ) : newsStatus.isWarning ? (
               <div className="nf-caution-box" style={{ marginBottom: '10px' }}>
-                <div className="nf-caution-title">⚠️ {t.cautionTrade}</div>
+                <div className="nf-caution-title">{'\u26A0\uFE0F'} {t.cautionTrade}</div>
                 <div className="nf-events-list" style={{ marginTop: '10px' }}>
                   {newsStatus.warningEvents.slice(0, 3).map((ev, i) => (
                     <div key={i} className="nf-event-item impact-high">
-                      🔴 {ev.time ? ev.time.split(' ')[1]?.substring(0, 5) : ''} {safeRender(ev.currency)} - {safeRender(ev.event)}
+                      {'\uD83D\uDD34'} {ev.time ? ev.time.split(' ')[1]?.substring(0, 5) : ''} {safeRender(ev.currency)} - {safeRender(ev.event)}
                     </div>
                   ))}
                 </div>
@@ -434,8 +441,8 @@ export default function ForexAnalysisSettings({
               </div>
             ) : (
               <div className="nf-safe-box" style={{ marginBottom: '10px' }}>
-                ✅ {t.calmMarket}
-                <button className="add-strategy-outline-btn" style={{ marginTop: '10px', borderColor: '#2ecc71', color: '#2ecc71' }} onClick={() => setIsNewsModalOpen(true)}>{t.showNewsBtn}</button>
+                {'\u2705'} {t.calmMarket}
+                <button className="add-strategy-outline-btn" style={{ marginTop: '10px', borderColor: 'var(--success)', color: 'var(--success)' }} onClick={() => setIsNewsModalOpen(true)}>{t.showNewsBtn}</button>
               </div>
             )}
           </div>
@@ -443,15 +450,15 @@ export default function ForexAnalysisSettings({
 
         <TradingViewChart symbol={analysisSymbol} interval={analysisInterval} t={globalT} />
 
-        <div className="timer-box" style={{ borderColor: timeStats.expired ? '#e74c3c' : '#D4AF37' }}>
+        <div className="timer-box" style={{ borderColor: timeStats.expired ? 'var(--danger)' : 'var(--accent)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 5px', alignItems: 'center' }}>
             <div style={{ textAlign: 'left' }}>
-              <div style={{ color: '#aaa', fontSize: '0.7rem' }}>{t.analysisTimeAgo}</div>
-              <div style={{ fontSize: '0.85rem', color: '#fff' }}>{formatPassedTime(timeStats.passed)}</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>{t.analysisTimeAgo}</div>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>{formatPassedTime(timeStats.passed)}</div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              {!timeStats.expired && <div style={{ color: '#aaa', fontSize: '0.7rem' }}>{t.timeRemaining}</div>}
-              <div style={{ fontSize: '1.1rem', color: timeStats.expired ? '#e74c3c' : '#2ecc71', fontWeight: 'bold' }}>
+              {!timeStats.expired && <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>{t.timeRemaining}</div>}
+              <div style={{ fontSize: '1.1rem', color: timeStats.expired ? 'var(--danger)' : 'var(--success)', fontWeight: '600' }}>
                 {timeStats.expired ? t.expired : formatCountdown(timeStats.remaining)}
               </div>
             </div>
@@ -460,7 +467,7 @@ export default function ForexAnalysisSettings({
 
         <div className="action-buttons-grid">
           <button className="btn-success-mark" onClick={() => handleMarkStatus('success')}>{t.successBtn}</button>
-          <button className="btn-skip-mark" onClick={() => handleMarkStatus('skipped')}>{t.skipBtn || 'Пропустить'}</button>
+          <button className="btn-skip-mark" onClick={() => handleMarkStatus('skipped')}>{t.skipBtn || 'Skip'}</button>
           <button className="btn-fail-mark" onClick={() => handleMarkStatus('fail')}>{t.failBtn}</button>
         </div>
 
@@ -523,7 +530,7 @@ export default function ForexAnalysisSettings({
       {isSelectingExp && (
         <div className="step-container fade-in">
           <h3 className="settings-main-title">{t.selectExpiration}</h3>
-          <div className="exp-section-title">✅</div>
+          <div className="exp-section-title">{'\u2705'}</div>
           <div className="exp-grid">
             {recommendedExp.map((exp) => (
               <button key={exp} className={`exp-item-btn ${forexParams.exp === exp ? 'active' : ''}`} onClick={() => { setForexParams({ ...forexParams, exp }); setEditMode(null); }}>
@@ -534,7 +541,7 @@ export default function ForexAnalysisSettings({
 
           {unavailableExp.length > 0 && (
             <>
-              <div className="exp-section-title">❌</div>
+              <div className="exp-section-title">{'\u274C'}</div>
               <div className="exp-grid">
                 {unavailableExp.map((exp) => (
                   <button key={exp} className={`exp-item-btn ${forexParams.exp === exp ? 'active' : ''}`} onClick={() => { setForexParams({ ...forexParams, exp }); setEditMode(null); }}>
@@ -553,7 +560,7 @@ export default function ForexAnalysisSettings({
           <div className="strategies-grid">
             {strategies.map((strat) => (
               <button key={strat.id} className={`strategy-item-btn ${Number(user.strategy_id) === Number(strat.id) ? 'active' : ''}`} onClick={() => { onUpdateStrategy(strat.id); setEditMode(null); }}>
-                <span style={{ fontSize: '1.2rem' }}>{safeRender(strat.icon || '⚡')}</span>
+                <span style={{ fontSize: '1.2rem' }}>{safeRender(strat.icon || '\u26A1')}</span>
                 <span>{safeRender(strat.name)}</span>
               </button>
             ))}
@@ -591,7 +598,7 @@ export default function ForexAnalysisSettings({
               <div className="summary-info">
                 <span className="summary-label">{t.strategyLabel}</span>
                 <span className="summary-value" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span style={{ fontSize: '1.1em' }}>{safeRender(selectedStrategy.icon, '⚡')}</span>
+                  <span style={{ fontSize: '1.1em' }}>{safeRender(selectedStrategy.icon, '\u26A1')}</span>
                   {safeRender(selectedStrategy.name || '...')}
                 </span>
               </div>
@@ -604,3 +611,5 @@ export default function ForexAnalysisSettings({
     </div>
   );
 }
+
+

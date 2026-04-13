@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { initTelegramApp } from './lib/tgSetup';
+import { apiFetchJson, apiAdminFetchJson, isAdminRoute, isTelegramWebAppAvailable } from './lib/api';
 
 import Loader from './components/Loader/Loader';
 import BinaryHome from './components/binary/BinaryHome';
@@ -16,24 +17,31 @@ import ChatAI from './components/pages/ChatAI';
 import FAQ from './components/pages/FAQ';
 import Support from './components/pages/Support';
 import LogAnalysis from './components/pages/LogAnalysis';
+import OpenViaBot from './components/pages/OpenViaBot';
+import AdminApp from './admin/AdminApp';
 
 import Header from './components/Header/Header.jsx';
 import BackgroundCandles from './components/BackgroundCandles/BackgroundCandles.jsx';
 import { texts } from './locales/texts';
+import './openViaBot.css';
 
 function App() {
   const [user, setUser] = useState(null);
+  const [isTgWebApp, setIsTgWebApp] = useState(true);
+  const [botUsername, setBotUsername] = useState('');
   const [currentPage, setCurrentPage] = useState('');
   const [toastMessage, setToastMessage] = useState(null);
   const [strategies, setStrategies] = useState([]);
   const [allIndicators, setAllIndicators] = useState([]);
+  const [adminInitDone, setAdminInitDone] = useState(false);
+  const [adminAuthError, setAdminAuthError] = useState('');
+  const [adminUser, setAdminUser] = useState(null);
 
   const [forexParams, setForexParams] = useState({ pair: null, exp: null });
   const [binaryParams, setBinaryParams] = useState({ pair: null, exp: null });
   const [profileScrollTarget, setProfileScrollTarget] = useState(null);
 
   const [activeAnalysisPreload, setActiveAnalysisPreload] = useState(null);
-  const [faqSourcePage, setFaqSourcePage] = useState(null);
 
   const [safeAreaTop, setSafeAreaTop] = useState(0);
   const [contentAreaTop, setContentAreaTop] = useState(55);
@@ -41,74 +49,87 @@ function App() {
   const activeBackHandler = useRef(null); 
 
   const t = texts.en;
+  const adminMode = useMemo(() => isAdminRoute(), []);
 
   useEffect(() => {
     const syncUser = async () => {
+      const available = isTelegramWebAppAvailable();
+      if (!available) {
+        setIsTgWebApp(false);
+        try {
+          const info = await apiFetchJson('/api/webapp/bot-info');
+          setBotUsername(info?.bot_username || '');
+        } catch (error) {
+          setBotUsername('');
+        }
+        return;
+      }
+
       try {
         const tg = await initTelegramApp();
         if (!tg) return;
 
-        const tgUser = tg.initDataUnsafe?.user;
-        if (!tgUser) return;
+        setIsTgWebApp(true);
 
-        await fetch('/api/user/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_id: tgUser.id,
-            username: tgUser.username || '',
-            first_name: tgUser.first_name || '',
-            avatar_url: tgUser.photo_url || ''
-          })
-        });
-
-        const resProfile = fetch('/api/user/profile', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: tgUser.id })
-        });
-
-        const resStrats = fetch(`/api/strategies?user_id=${tgUser.id}`);
-        const resInd = fetch('/api/indicators');
-
-        const [res, stratRes, indRes] = await Promise.all([resProfile, resStrats, resInd]);
-
-        if (indRes.ok) {
-          const indData = await indRes.json();
-          setAllIndicators(indData.indicators || []);
-        }
-
-        if (stratRes.ok) {
-          const stratData = await stratRes.json();
-          setStrategies(stratData.strategies || []);
-        }
-
-        if (res.ok) {
-          const userData = await res.json();
-          if (!userData.user_id) userData.user_id = tgUser.id;
-          setUser(userData);
-          
-          if (userData.mode === 'demo') {
-            setCurrentPage('demoHome');
-          } else {
-            setCurrentPage(userData.mode === 'binary' ? 'signals' : 'analysis');
+        if (adminMode) {
+          try {
+            const me = await apiAdminFetchJson('/api/admin/me');
+            setAdminUser(me?.user || null);
+            setAdminAuthError('');
+          } catch (error) {
+            setAdminUser(null);
+            setAdminAuthError(error.message || 'Admin auth failed');
+          } finally {
+            setAdminInitDone(true);
           }
+          return;
+        }
+
+        await apiFetchJson('/api/user/sync', {
+          method: 'POST',
+        });
+
+        const [userData, stratData, indData] = await Promise.all([
+          apiFetchJson('/api/user/profile', {
+            method: 'POST',
+          }),
+          apiFetchJson('/api/strategies'),
+          apiFetchJson('/api/indicators')
+        ]);
+
+        setAllIndicators(indData.indicators || []);
+        setStrategies(stratData.strategies || []);
+        setUser(userData);
+        
+        if (userData.mode === 'demo') {
+          setCurrentPage('demoHome');
+        } else {
+          setCurrentPage(userData.mode === 'binary' ? 'signals' : 'analysis');
         }
       } catch (error) {
-        const fallbackUser = { mode: 'binary', strategy_id: 1, lang: 'en' };
-        setUser(fallbackUser);
-        setCurrentPage('signals');
+        if (adminMode) {
+          setAdminAuthError(error.message || 'Admin init failed');
+          setAdminInitDone(true);
+        } else {
+          const fallbackUser = { mode: 'binary', strategy_id: 1, lang: 'en' };
+          setUser(fallbackUser);
+          setCurrentPage('signals');
+        }
       }
     };
 
     syncUser();
-  }, []);
+  }, [adminMode]);
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
     if (tg?.expand) tg.expand();
 
     const updateSafeArea = () => {
+      const docStyle = window.getComputedStyle(document.documentElement);
+      const cssSafeTop = parseFloat(docStyle.getPropertyValue('--tg-safe-area-inset-top')) || 0;
+      const cssContentTop = parseFloat(docStyle.getPropertyValue('--tg-content-safe-area-inset-top')) || 0;
+
       const platform = (tg?.platform || '').toLowerCase();
 
       const isDesktopPlatform =
@@ -116,21 +137,24 @@ function App() {
         platform === 'web' ||
         platform === 'macos';
 
-      let sTop = Number(tg?.safeAreaInset?.top || 0);
-      let cTop = Number(tg?.contentSafeAreaInset?.top || 0);
+      let sTop = Number(tg?.safeAreaInset?.top ?? cssSafeTop ?? 0);
+      let cTop = Number(tg?.contentSafeAreaInset?.top ?? cssContentTop ?? 0);
 
       if (isDesktopPlatform) {
         if (!sTop) sTop = 0;
         if (!cTop) cTop = 0;
       } else {
         if (!cTop || cTop <= sTop) {
-          cTop = Math.max(sTop + 52, 56);
+          cTop = Math.max(sTop + 56, 60);
         }
       }
 
       setSafeAreaTop(sTop);
       setContentAreaTop(cTop);
     };
+
+    if (typeof tg?.requestSafeArea === 'function') tg.requestSafeArea();
+    if (typeof tg?.requestContentSafeArea === 'function') tg.requestContentSafeArea();
 
     updateSafeArea();
     const timer = setTimeout(updateSafeArea, 300);
@@ -149,9 +173,14 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }, [currentPage]);
+
   const handleGoHome = () => {
     activeBackHandler.current = null; 
-    setFaqSourcePage(null);
     setForexParams({ pair: null, exp: null });
     setBinaryParams({ pair: null, exp: null });
     setProfileScrollTarget(null);
@@ -177,12 +206,6 @@ function App() {
     }
 
     const handleBackBtnClick = () => {
-      if (currentPage === 'faq' && faqSourcePage === 'support') {
-        setFaqSourcePage(null);
-        setCurrentPage('support');
-        return;
-      }
-
       if (activeBackHandler.current) {
         activeBackHandler.current();
       } else {
@@ -195,7 +218,7 @@ function App() {
     return () => {
       tg.offEvent('backButtonClicked', handleBackBtnClick);
     };
-  }, [currentPage, user, faqSourcePage]); 
+  }, [currentPage, user]); 
 
   useEffect(() => {
     if (toastMessage) {
@@ -217,21 +240,22 @@ function App() {
     );
   }, []);
 
-  const desktopHeaderHeight = 60;
-  const mobileTopSpacing = 16;
-
   const mainPaddingTop = isDesktop
-    ? desktopHeaderHeight + 28
-    : Math.max(contentAreaTop + mobileTopSpacing, safeAreaTop + 82);
+    ? 106
+    : Math.max(contentAreaTop + 56, safeAreaTop + 98);
 
-  
-  const bottomPadding = user?.mode === 'demo' ? 140 : 100;
+  const isChatPage = currentPage === 'chatAI';
+  const bottomPadding = isChatPage ? 86 : 106;
 
+  if (!isTgWebApp) return <OpenViaBot botUsername={botUsername} />;
+  if (adminMode) {
+    if (!adminInitDone) return <Loader t={t} />;
+    return <AdminApp adminUser={adminUser} authError={adminAuthError} />;
+  }
   if (!user) return <Loader t={t} />;
 
   const handlePageChange = (newPage) => {
     activeBackHandler.current = null; 
-    if (newPage !== 'faq') setFaqSourcePage(null);
     if (newPage !== 'profile') {
       setProfileScrollTarget(null);
     }
@@ -256,19 +280,20 @@ function App() {
 
     setToastMessage(`${t.profile.modeChangedSuccess} ${modeName}`);
 
-    if (user.user_id) {
+    if (user) {
       try {
-        await fetch('/api/user/mode', {
+        await apiFetchJson('/api/user/mode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: user.user_id, mode: newMode })
+          body: JSON.stringify({ mode: newMode })
         });
       } catch (error) {}
     }
-    
-    if (newMode === 'demo') setCurrentPage('demoHome');
-    else if (newMode === 'binary') setCurrentPage('signals');
-    else setCurrentPage('analysis');
+
+    if (currentPage !== 'profile') {
+      if (newMode === 'demo') setCurrentPage('demoHome');
+      else if (newMode === 'binary') setCurrentPage('signals');
+      else setCurrentPage('analysis');
+    }
   };
 
   const handleUpdateStrategy = async (strategyId) => {
@@ -278,32 +303,24 @@ function App() {
     setToastMessage(t.profile.strategyChangedSuccess);
 
     try {
-      await fetch('/api/user/strategy', {
+      await apiFetchJson('/api/user/strategy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: user.user_id, strategy_id: strategyId })
+        body: JSON.stringify({ strategy_id: strategyId })
       });
     } catch (error) {}
   };
 
   const refreshStrategies = async () => {
-    if (!user || !user.user_id) return;
+    if (!user) return;
 
     try {
-      const stratRes = await fetch(`/api/strategies?user_id=${user.user_id}`);
-      const stratData = await stratRes.json();
+      const stratData = await apiFetchJson('/api/strategies');
       setStrategies(stratData.strategies || []);
 
-      const userRes = await fetch('/api/user/profile', {
+      const updatedUser = await apiFetchJson('/api/user/profile', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: user.user_id })
       });
-
-      if (userRes.ok) {
-        const updatedUser = await userRes.json();
-        setUser((prev) => ({ ...prev, strategy_id: updatedUser.strategy_id }));
-      }
+      setUser((prev) => ({ ...prev, strategy_id: updatedUser.strategy_id }));
     } catch (e) {}
   };
 
@@ -415,17 +432,10 @@ function App() {
         return <FAQ />;
 
       case 'support':
-        return (
-          <Support
-            onOpenFaq={() => {
-              setFaqSourcePage('support');
-              setCurrentPage('faq');
-            }}
-          />
-        );
+        return <Support />;
 
       case 'logAnalysis':
-        return <LogAnalysis user={user} />;
+        return <LogAnalysis user={user} t={t} strategies={strategies} />;
 
       default:
         if (user.mode === 'demo') {
@@ -448,7 +458,7 @@ function App() {
   };
 
   return (
-    <div className="app-container">
+    <div className="app-container" style={{ '--app-main-top': `${mainPaddingTop}px` }}>
       <BackgroundCandles />
 
       <Header
@@ -476,3 +486,9 @@ function App() {
 }
 
 export default App;
+
+
+
+
+
+

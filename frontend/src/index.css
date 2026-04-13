@@ -8,6 +8,21 @@ html, body {
 }
 
 :root {
+  --tg-font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --bg-main: #040811;
+  --bg-surface: #09101f;
+  --bg-panel: rgba(9, 16, 31, 0.9);
+  --bg-muted: rgba(18, 28, 50, 0.72);
+  --text-main: #f2f5ff;
+  --text-secondary: #ccd3e2;
+  --text-soft: #98a5bc;
+  --accent: #d4af37;
+  --accent-strong: #b88e2b;
+  --line: rgba(212, 175, 55, 0.26);
+  --success: #38b36f;
+  --danger: #d35a58;
+  --radius: 12px;
+
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;

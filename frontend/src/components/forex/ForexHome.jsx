@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import Lottie from 'lottie-react';
 import animationData from '../../assets/animation.json';
+import { apiFetchJson } from '../../lib/api';
 import './Forex.css';
 
 export default function ForexHome({ t: globalT, onStartAnalysis, user, onOpenActiveAnalysis, strategies = [] }) {
@@ -10,9 +11,8 @@ export default function ForexHome({ t: globalT, onStartAnalysis, user, onOpenAct
   const [showList, setShowList] = useState(false);
 
   useEffect(() => {
-    if (user?.user_id) {
-      fetch(`/api/analysis/active?user_id=${user.user_id}`)
-        .then(res => res.json())
+    if (user) {
+      apiFetchJson('/api/analysis/active')
         .then(data => {
           if (data.analyses && data.analyses.length > 0) {
             setActiveAnalyses(data.analyses);
@@ -52,7 +52,7 @@ export default function ForexHome({ t: globalT, onStartAnalysis, user, onOpenAct
                   </div>
                   <div className="aac-details" style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '4px' }}>
                     <span>{t.expirationPrefix} {item.timeframe}</span>
-                    <span style={{ color: '#D4AF37' }}>{t.strategyPrefix} {stratName}</span>
+                    <span style={{ color: 'var(--accent)' }}>{t.strategyPrefix} {stratName}</span>
                   </div>
                 </div>
                 <div className="aac-right">
@@ -84,7 +84,7 @@ export default function ForexHome({ t: globalT, onStartAnalysis, user, onOpenAct
 
       <div className="actions-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
         {activeAnalyses.length > 0 && (
-          <button className="forex-cta-btn" style={{ background: 'linear-gradient(135deg, #2ecc71 0%, #27ae60 100%)', color: '#fff', boxShadow: '0 4px 15px rgba(46, 204, 113, 0.3)' }} onClick={handleOpenActive}>
+          <button className="forex-cta-btn" onClick={handleOpenActive}>
             {tSettings.currentAnalysisBtn} ({activeAnalyses.length})
           </button>
         )}
@@ -95,3 +95,4 @@ export default function ForexHome({ t: globalT, onStartAnalysis, user, onOpenAct
     </div>
   );
 }
+

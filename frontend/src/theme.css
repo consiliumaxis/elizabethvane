@@ -1,0 +1,404 @@
+﻿.profile-wrapper {
+  max-width: 460px;
+  color: var(--text-main);
+}
+
+.settings-main-title {
+  color: var(--accent) !important;
+  text-transform: none;
+  letter-spacing: normal !important;
+  font-weight: 600;
+}
+
+.empty-market-card,
+.profile-stats-card,
+.strategy-card,
+.custom-strategy-item,
+.summary-cards-container,
+.summary-row-box,
+.analytics-hero,
+.clean-analysis-card,
+.tv-inline-wrapper,
+.tv-collapsed-wrapper,
+.tv-fullscreen-wrapper .tv-content,
+.tv-header,
+.log-gauge-container,
+.log-card,
+.chat-header-bar,
+.chat-input-wrapper,
+.chat-history-modal,
+.news-modal-content,
+.strategy-modal-content,
+.demo-indicator-summary,
+.icon-dropdown-menu,
+.ind-item,
+.modal-events-list .nf-event-item,
+.chat-history-item {
+  background: rgba(255, 252, 246, 0.9) !important;
+  border-color: var(--line) !important;
+  color: var(--text-main) !important;
+  box-shadow: 0 2px 8px rgba(61, 47, 28, 0.06) !important;
+}
+
+.analytics-hero {
+  background: linear-gradient(180deg, rgba(255, 252, 245, 0.92), rgba(245, 234, 212, 0.72)) !important;
+}
+
+.summary-cards-container,
+.clean-analysis-card,
+.log-gauge-container,
+.log-card,
+.chat-history-modal,
+.news-modal-content,
+.strategy-modal-content,
+.chat-header-bar,
+.chat-input-wrapper {
+  backdrop-filter: blur(9px);
+  -webkit-backdrop-filter: blur(9px);
+}
+
+.summary-label,
+.stat-label,
+.pair-payout,
+.strat-indicators,
+.message-time,
+.chat-status,
+.gauge-title,
+.level-label,
+.loader-phrase,
+.log-gl-total,
+.aac-details,
+.chat-history-item-date,
+.chat-history-loading,
+.chat-history-empty,
+.micro-disclaimer-text {
+  color: var(--text-soft) !important;
+}
+
+.summary-value,
+.stat-value,
+.strat-name,
+.pair-name,
+.level-val,
+.ind-val,
+.message-text,
+.chat-header-title,
+.chat-history-item-title,
+.modal-title,
+.tv-title,
+.aac-pair,
+.loader-title,
+.nf-caution-desc,
+.nf-event-item,
+.strategy-name-text,
+.strategy-details,
+.strategy-details p,
+.subtitle,
+.description {
+  color: var(--text-main) !important;
+}
+
+.summary-value.highlight,
+.stats-value.gold,
+.indicator-toggle-btn.selected,
+.stat-value.gold,
+.demo-watermark,
+.demo-watermark-global,
+.settings-main-title svg,
+.ev-currency,
+.tv-toggle-btn,
+.chat-status {
+  color: var(--accent) !important;
+}
+
+.forex-cta-btn,
+.binary-cta-btn,
+.conduct-analysis-btn,
+.start-analysis-btn,
+.modal-save-btn,
+.chat-send-btn.active {
+  background: linear-gradient(140deg, var(--accent) 0%, var(--accent-strong) 100%) !important;
+  border: none !important;
+  color: #fffaf1 !important;
+  box-shadow: 0 2px 8px rgba(61, 47, 28, 0.12) !important;
+}
+
+.btn-success-mark {
+  background: var(--success) !important;
+}
+
+.btn-fail-mark {
+  background: var(--danger) !important;
+}
+
+.btn-skip-mark {
+  background: #7b6f5d !important;
+}
+
+.action-buttons-grid {
+  grid-template-columns: 1fr 0.82fr 1fr !important;
+  gap: 12px !important;
+  align-items: stretch !important;
+}
+
+.action-buttons-grid .btn-success-mark,
+.action-buttons-grid .btn-skip-mark,
+.action-buttons-grid .btn-fail-mark {
+  min-height: 58px !important;
+  padding: 10px 8px !important;
+  border-radius: 18px !important;
+  font-weight: 700 !important;
+  font-size: 0.8rem !important;
+  letter-spacing: 0 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  text-wrap: nowrap !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: none !important;
+  transition: transform 0.12s ease, filter 0.18s ease, border-color 0.18s ease !important;
+}
+
+.action-buttons-grid .btn-success-mark {
+  background: #23a455 !important;
+  border: 1px solid #1d8b47 !important;
+  color: #f8fff9 !important;
+}
+
+.action-buttons-grid .btn-skip-mark {
+  background: rgba(248, 240, 222, 0.9) !important;
+  border: 2px solid rgba(124, 97, 53, 0.75) !important;
+  color: #2e2314 !important;
+}
+
+.action-buttons-grid .btn-fail-mark {
+  background: #d2412f !important;
+  border: 1px solid #b33325 !important;
+  color: #fff7f6 !important;
+}
+
+.action-buttons-grid .btn-success-mark:hover,
+.action-buttons-grid .btn-skip-mark:hover,
+.action-buttons-grid .btn-fail-mark:hover {
+  filter: brightness(1.02) !important;
+}
+
+.analysis-result-container .conduct-analysis-btn {
+  min-height: 72px !important;
+  border-radius: 22px !important;
+  font-size: 0.98rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.01em !important;
+  background: linear-gradient(160deg, #9a752d 0%, #7d5d21 100%) !important;
+  border: 1px solid rgba(118, 88, 33, 0.75) !important;
+  color: #fffaf0 !important;
+  box-shadow: 0 6px 16px rgba(90, 66, 25, 0.2) !important;
+}
+
+.analysis-result-container .conduct-analysis-btn:hover {
+  filter: brightness(1.03) !important;
+}
+
+@media (max-width: 390px) {
+  .action-buttons-grid {
+    grid-template-columns: 1fr 0.86fr 1fr !important;
+  }
+
+  .action-buttons-grid .btn-success-mark,
+  .action-buttons-grid .btn-skip-mark,
+  .action-buttons-grid .btn-fail-mark {
+    font-size: 0.74rem !important;
+    padding: 8px 6px !important;
+  }
+}
+
+.go-back-outline-btn,
+.add-strategy-outline-btn,
+.chat-history-close,
+.icon-action-btn,
+.modal-delete-btn,
+.demo-toggle-btn,
+.t-lang-btn,
+.asset-item-btn,
+.pair-item-btn,
+.exp-item-btn,
+.strategy-item-btn,
+.indicator-toggle-btn,
+.chat-send-btn,
+.tg-native-menu-pill {
+  border-color: var(--line) !important;
+  color: var(--accent-strong) !important;
+  background: rgba(255, 250, 242, 0.9) !important;
+}
+
+.add-strategy-outline-btn,
+.chat-history-close {
+  border-style: solid !important;
+}
+
+.icon-action-btn:hover,
+.go-back-outline-btn:hover,
+.add-strategy-outline-btn:hover,
+.asset-item-btn:hover,
+.pair-item-btn:hover,
+.exp-item-btn:hover,
+.strategy-item-btn:hover,
+.indicator-toggle-btn:hover,
+.chat-history-item:hover,
+.summary-row-box:hover,
+.strategy-card:hover,
+.log-card:hover {
+  background: #f0e6d0 !important;
+  border-color: rgba(139, 107, 44, 0.38) !important;
+}
+
+.asset-item-btn.active,
+.pair-item-btn.active,
+.strategy-item-btn.active,
+.exp-item-btn.active,
+.strategy-card.active,
+.custom-strategy-item.active,
+.chat-history-item.active,
+.indicator-toggle-btn.selected,
+.icon-choice-item.selected {
+  background: linear-gradient(145deg, #f6e8c6 0%, #ecdbb1 100%) !important;
+  border-color: var(--selected-outline) !important;
+  box-shadow:
+    0 0 0 1px var(--selected-neon-core),
+    0 0 10px var(--selected-neon-mid),
+    0 0 18px var(--selected-neon-outer),
+    0 6px 14px rgba(61, 47, 28, 0.12) !important;
+  animation: ev-selected-neon 1.7s ease-in-out infinite;
+}
+
+@keyframes ev-selected-neon {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px var(--selected-neon-core),
+      0 0 10px var(--selected-neon-mid),
+      0 0 18px var(--selected-neon-outer),
+      0 6px 14px rgba(61, 47, 28, 0.12);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px var(--selected-neon-core),
+      0 0 14px rgba(255, 221, 134, 0.9),
+      0 0 26px rgba(212, 175, 55, 0.44),
+      0 8px 18px rgba(61, 47, 28, 0.14);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asset-item-btn.active,
+  .pair-item-btn.active,
+  .strategy-item-btn.active,
+  .exp-item-btn.active,
+  .strategy-card.active,
+  .custom-strategy-item.active,
+  .chat-history-item.active,
+  .indicator-toggle-btn.selected,
+  .icon-choice-item.selected {
+    animation: none !important;
+  }
+}
+
+.mode-toggle-container,
+.mode-toggle-btn,
+.mode-slider,
+.chat-container-fixed,
+.chat-wrapper,
+.chat-messages-area {
+  color: var(--text-main);
+}
+
+.mode-toggle-container {
+  background: rgba(255, 251, 245, 0.94) !important;
+  border-color: var(--line) !important;
+  box-shadow: inset 0 2px 8px rgba(61, 47, 28, 0.08) !important;
+}
+
+.mode-slider {
+  background: linear-gradient(140deg, var(--accent) 0%, var(--accent-strong) 100%) !important;
+}
+
+.mode-toggle-btn {
+  color: var(--text-soft) !important;
+}
+
+.mode-toggle-btn.active {
+  color: #fffaf1 !important;
+}
+
+.chat-input-wrapper {
+  border-width: 1px !important;
+}
+
+.is-user .message-bubble {
+  background: rgba(139, 107, 44, 0.14) !important;
+  border-color: rgba(139, 107, 44, 0.24) !important;
+}
+
+.is-ai .message-bubble {
+  background: rgba(255, 252, 245, 0.9) !important;
+  border-left-color: var(--accent) !important;
+}
+
+.message-time {
+  color: rgba(102, 83, 52, 0.7) !important;
+}
+
+.chat-textarea,
+.modal-input {
+  color: var(--text-main) !important;
+}
+
+.chat-textarea::placeholder,
+.modal-input::placeholder {
+  color: var(--text-soft) !important;
+}
+
+.nf-safe-box {
+  color: var(--success) !important;
+}
+
+.nf-caution-box,
+.impact-high,
+.nf-caution-title {
+  color: var(--danger) !important;
+}
+
+.log-gl-buy,
+.gl-buy,
+.sig-buy {
+  color: var(--success);
+}
+
+.log-gl-sell,
+.gl-sell,
+.sig-sell {
+  color: var(--danger);
+}
+
+.log-gl-total,
+.gl-neutral,
+.sig-neutral {
+  color: var(--text-soft);
+}
+
+.gauge-bar-bg,
+.log-gauge-bg {
+  box-shadow: inset 0 1px 4px rgba(61, 47, 28, 0.16) !important;
+}
+
+.tv-backdrop,
+.news-modal-overlay,
+.chat-history-overlay,
+.strategy-modal-overlay {
+  background: rgba(61, 47, 28, 0.24) !important;
+}
+
+.disclaimer-box {
+  border-top-color: rgba(139, 107, 44, 0.2) !important;
+  color: var(--text-soft) !important;
+}

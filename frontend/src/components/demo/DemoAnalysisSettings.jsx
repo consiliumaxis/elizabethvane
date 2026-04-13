@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import Lottie from 'lottie-react';
 import animationData from '../../assets/analize.json';
 import '../forex/ForexAnalysisSettings.css';
@@ -6,6 +6,7 @@ import './Demo.css';
 import iconEdit from '../../assets/icons/edit.svg?url';
 import TradingViewChart from '../forex/TradingViewChart';
 import NewsModal from '../forex/NewsModal';
+import { apiFetchJson } from '../../lib/api';
 
 import * as Flags from 'country-flag-icons/react/3x2';
 
@@ -66,8 +67,8 @@ export default function DemoAnalysisSettings({
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/pairs/commodity').then(res => res.ok ? res.json() : []),
-      fetch('/api/pairs/indices').then(res => res.ok ? res.json() : [])
+      apiFetchJson('/api/pairs/commodity').catch(() => []),
+      apiFetchJson('/api/pairs/indices').catch(() => [])
     ])
     .then(([commData, indicesData]) => {
       const formatted = {
@@ -91,8 +92,7 @@ export default function DemoAnalysisSettings({
       setLoadingAssets(false);
     });
 
-    fetch('/api/news')
-      .then(res => res.json())
+    apiFetchJson('/api/news')
       .then(data => setNews(data))
       .catch(console.error);
   }, []);
@@ -117,7 +117,7 @@ export default function DemoAnalysisSettings({
   };
 
   const handleConductAnalysis = async () => {
-    setAnalysisData(null); 
+    setAnalysisData(null);
     setIsProcessing(true);
     setEditMode(null);
     const uiDelay = Math.floor(Math.random() * 5000) + 3000; 
@@ -129,11 +129,9 @@ export default function DemoAnalysisSettings({
       : [];
 
     try {
-      const response = await fetch('/api/analysis/forex', {
+      const result = await apiFetchJson('/api/analysis/forex', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: user.user_id,
           pair: forexParams.pair,
           exp: forexParams.exp,
           strategy_id: selectedStrategy.id || 1,
@@ -141,7 +139,6 @@ export default function DemoAnalysisSettings({
           exchange: assetObj?.exchange || null
         })
       });
-      const result = await response.json();
       
       await new Promise(resolve => setTimeout(resolve, uiDelay));
 
@@ -211,7 +208,7 @@ export default function DemoAnalysisSettings({
   const formatIndValue = (val) => {
     if (val === null || val === undefined) return '...';
     let num = (typeof val === 'object') ? (val.macd ?? val.k ?? val.e9 ?? val.lb ?? Object.values(val).find(v => typeof v === 'number')) : val;
-    if (typeof num === 'number') return Math.abs(num) < 0.1 ? num.toFixed(4) : num.toFixed(2);
+    if (typeof num === 'number') return num.toFixed(3);
     return String(val);
   };
 
@@ -246,7 +243,7 @@ export default function DemoAnalysisSettings({
       else customVotes.NEUTRAL += 1;
     });
 
-    const getDemoSignalChar = (sig) => sig === 'BUY' ? '▲' : sig === 'SELL' ? '▼' : '●';
+    const getDemoSignalChar = (sig) => sig === 'BUY' ? '\u25B2' : sig === 'SELL' ? '\u25BC' : '\u25CF';
     const getDemoSignalColor = (sig) => sig === 'BUY' ? '#00FF00' : sig === 'SELL' ? '#FF4444' : '#FFD700';
     const currentPrice = data.price || data.key_levels?.current_price || '---';
     const assetObj = getAssetObject(analysisData.pair);
@@ -254,16 +251,16 @@ export default function DemoAnalysisSettings({
 
     return (
       <div className="profile-wrapper analysis-result-container">
-        <div style={{ textAlign: 'center', marginBottom: '15px' }}>
-          <h2 className="settings-main-title" style={{ fontSize: '1.7rem', margin: '0 0 6px 0', color: '#D4AF37', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
+        <div className="analysis-head">
+          <h2 className="settings-main-title analysis-asset-title">
             <AssetIcon asset={assetObj} /> {assetObj.name}
           </h2>
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px', fontFamily: '"Fira Code", monospace' }}>
-            <span style={{ background: 'rgba(212, 175, 55, 0.15)', color: '#D4AF37', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>
+          <div className="analysis-meta-row">
+            <span style={{ background: 'rgba(139, 107, 44, 0.14)', color: 'var(--accent)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: '500' }}>
               {analysisData.timeframe}
             </span>
-            <span style={{ color: '#fff', fontSize: '1.1rem', fontWeight: 'bold' }}>
-              {typeof currentPrice === 'number' ? currentPrice.toFixed(2) : currentPrice}
+            <span style={{ color: 'var(--text-main)', fontSize: '1.1rem', fontWeight: '600' }}>
+              {typeof currentPrice === 'number' ? currentPrice.toFixed(3) : currentPrice}
             </span>
           </div>
         </div>
@@ -274,7 +271,7 @@ export default function DemoAnalysisSettings({
               <div key={key} className="ind-item">
                 <span className="ind-name">{key}</span>
                 <span className="ind-val">{formatIndValue(ind.value)}</span>
-                <span style={{ color: getDemoSignalColor(ind.signal), fontSize: '1.2rem', marginTop: '3px', fontWeight: 'bold' }}>
+                <span style={{ color: getDemoSignalColor(ind.signal), fontSize: '1.2rem', marginTop: '3px', fontWeight: '600' }}>
                   {getDemoSignalChar(ind.signal)}
                 </span>
               </div>
@@ -282,9 +279,9 @@ export default function DemoAnalysisSettings({
           </div>
           <div className="demo-indicator-summary">
             <div className="demo-summary-title">{globalT.demoSettings?.indicatorSummary || 'Indicator Summary'}</div>
-            <span style={{ color: '#00FF00' }}>▲ {customVotes.BUY}</span>{' / '}
-            <span style={{ color: '#FFD700' }}>● {customVotes.NEUTRAL}</span>{' / '}
-            <span style={{ color: '#FF4444' }}>▼ {customVotes.SELL}</span>
+            <span style={{ color: '#00FF00' }}>{'\u25B2'} {customVotes.BUY}</span>{' / '}
+            <span style={{ color: '#FFD700' }}>{'\u25CF'} {customVotes.NEUTRAL}</span>{' / '}
+            <span style={{ color: '#FF4444' }}>{'\u25BC'} {customVotes.SELL}</span>
           </div>
 
           <div className="news-filter-block">
@@ -294,11 +291,11 @@ export default function DemoAnalysisSettings({
               </div>
             ) : newsStatus.isWarning ? (
               <div className="nf-caution-box" style={{ marginBottom: '10px' }}>
-                <div className="nf-caution-title">⚠️ {t.cautionTrade}</div>
+                <div className="nf-caution-title">{'\u26A0\uFE0F'} {t.cautionTrade}</div>
                 <div className="nf-events-list" style={{ marginTop: '10px' }}>
                   {newsStatus.warningEvents.slice(0, 3).map((ev, i) => (
                     <div key={i} className="nf-event-item impact-high">
-                      🔴 {ev.time ? ev.time.split(' ')[1]?.substring(0, 5) : ''} {ev.currency} - {ev.event}
+                      {'\uD83D\uDD34'} {ev.time ? ev.time.split(' ')[1]?.substring(0, 5) : ''} {ev.currency} - {ev.event}
                     </div>
                   ))}
                 </div>
@@ -308,8 +305,8 @@ export default function DemoAnalysisSettings({
               </div>
             ) : (
               <div className="nf-safe-box" style={{ marginBottom: '10px' }}>
-                ✅ {t.calmMarket}
-                <button className="add-strategy-outline-btn" style={{ marginTop: '10px', borderColor: '#2ecc71', color: '#2ecc71' }} onClick={() => setIsNewsModalOpen(true)}>
+                {'\u2705'} {t.calmMarket}
+                <button className="add-strategy-outline-btn" style={{ marginTop: '10px', borderColor: 'var(--success)', color: 'var(--success)' }} onClick={() => setIsNewsModalOpen(true)}>
                   {t.showNewsBtn}
                 </button>
               </div>
@@ -381,7 +378,7 @@ export default function DemoAnalysisSettings({
         <div className="step-container fade-in">
           <h3 className="settings-main-title">{t.selectExpiration}</h3>
           
-          <div className="exp-section-title">✅</div>
+          <div className="exp-section-title">{'\u2705'}</div>
           <div className="exp-grid">
             {recommendedExp.map((exp) => (
               <button 
@@ -396,7 +393,7 @@ export default function DemoAnalysisSettings({
 
           {unavailableExp.length > 0 && (
             <>
-              <div className="exp-section-title disabled-title">❌</div>
+              <div className="exp-section-title disabled-title">{'\u274C'}</div>
               <div className="exp-grid disabled-grid">
                 {unavailableExp.map((exp) => (
                   <button 
@@ -424,7 +421,7 @@ export default function DemoAnalysisSettings({
                 onClick={() => { if (onUpdateStrategy) onUpdateStrategy(strat.id); setEditMode(null); }} 
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
               >
-                <span style={{ fontSize: '1.2rem' }}>{strat.icon || '⚡'}</span>
+                <span style={{ fontSize: '1.2rem' }}>{strat.icon || '\u26A1'}</span>
                 <span>{strat.name}</span>
               </button>
             ))}
@@ -458,7 +455,7 @@ export default function DemoAnalysisSettings({
               <div className="summary-info">
                 <span className="summary-label">{t.strategyLabel}</span>
                 <span className="summary-value" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span style={{ fontSize: '1.1em' }}>{selectedStrategy.icon || '⚡'}</span>
+                  <span style={{ fontSize: '1.1em' }}>{selectedStrategy.icon || '\u26A1'}</span>
                   {selectedStrategy.name || 'System Strategy'}
                 </span>
               </div>
@@ -471,3 +468,5 @@ export default function DemoAnalysisSettings({
     </div>
   );
 }
+
+

@@ -3,6 +3,7 @@ import Lottie from 'lottie-react';
 import './Support.css';
 import { texts } from '../../locales/texts';
 import supportLottie from '../../assets/support-lottie.json';
+import { apiFetchJson } from '../../lib/api';
 
 export default function Support({ onOpenFaq }) {
   const t = texts.en.supportPage;
@@ -15,10 +16,7 @@ export default function Support({ onOpenFaq }) {
   useEffect(() => {
     const loadLinks = async () => {
       try {
-        const response = await fetch('/api/support/links');
-        if (!response.ok) return;
-
-        const data = await response.json();
+        const data = await apiFetchJson('/api/support/links');
         setLinks({
           channel_url: data?.channel_url || '',
           support_url: data?.support_url || ''
