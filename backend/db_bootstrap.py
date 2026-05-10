@@ -223,6 +223,20 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 """
             )
 
+            await cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS admin_analysis_settings (
+                    id INT NOT NULL PRIMARY KEY,
+                    engine VARCHAR(16) NOT NULL DEFAULT 'backend',
+                    gpt_api_key TEXT NULL,
+                    gpt_model VARCHAR(64) NOT NULL DEFAULT 'gpt-4o-mini',
+                    gpt_prompt LONGTEXT NOT NULL,
+                    updated_by BIGINT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
         await _ensure_column(conn, db_name, "users", "strategy_id", "ALTER TABLE users ADD COLUMN strategy_id BIGINT NULL")
         await _ensure_column(conn, db_name, "users", "lang", "ALTER TABLE users ADD COLUMN lang VARCHAR(16) NOT NULL DEFAULT 'ru'")
         await _ensure_column(conn, db_name, "users", "mode", "ALTER TABLE users ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'forex'")
@@ -458,6 +472,48 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             "updated_at",
             "ALTER TABLE strategy_analysis_settings ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
         )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_analysis_settings",
+            "engine",
+            "ALTER TABLE admin_analysis_settings ADD COLUMN engine VARCHAR(16) NOT NULL DEFAULT 'backend'",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_analysis_settings",
+            "gpt_api_key",
+            "ALTER TABLE admin_analysis_settings ADD COLUMN gpt_api_key TEXT NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_analysis_settings",
+            "gpt_model",
+            "ALTER TABLE admin_analysis_settings ADD COLUMN gpt_model VARCHAR(64) NOT NULL DEFAULT 'gpt-4o-mini'",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_analysis_settings",
+            "gpt_prompt",
+            "ALTER TABLE admin_analysis_settings ADD COLUMN gpt_prompt LONGTEXT NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_analysis_settings",
+            "updated_by",
+            "ALTER TABLE admin_analysis_settings ADD COLUMN updated_by BIGINT NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_analysis_settings",
+            "updated_at",
+            "ALTER TABLE admin_analysis_settings ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+        )
 
         indicators_seed = [
             ("RSI", "RSI"),
@@ -543,6 +599,30 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             await cur.execute(
                 """
                 UPDATE strategy_analysis_settings
+                SET gpt_model = %s
+                WHERE gpt_model IS NULL OR TRIM(gpt_model) = ''
+                """,
+                (DEFAULT_ANALYSIS_GPT_MODEL,),
+            )
+            await cur.execute(
+                """
+                INSERT INTO admin_analysis_settings (id, engine, gpt_api_key, gpt_model, gpt_prompt, updated_by)
+                VALUES (1, 'backend', NULL, %s, %s, NULL)
+                ON DUPLICATE KEY UPDATE id = id
+                """,
+                (DEFAULT_ANALYSIS_GPT_MODEL, DEFAULT_ANALYSIS_GPT_PROMPT),
+            )
+            await cur.execute(
+                """
+                UPDATE admin_analysis_settings
+                SET gpt_prompt = %s
+                WHERE gpt_prompt IS NULL OR TRIM(gpt_prompt) = ''
+                """,
+                (DEFAULT_ANALYSIS_GPT_PROMPT,),
+            )
+            await cur.execute(
+                """
+                UPDATE admin_analysis_settings
                 SET gpt_model = %s
                 WHERE gpt_model IS NULL OR TRIM(gpt_model) = ''
                 """,

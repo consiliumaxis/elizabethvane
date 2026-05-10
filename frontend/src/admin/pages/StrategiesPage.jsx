@@ -56,6 +56,13 @@ export default function StrategiesPage() {
   const [items, setItems] = useState([]);
   const [indicators, setIndicators] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [analysisForm, setAnalysisForm] = useState({
+    engine: 'backend',
+    gpt_model: 'gpt-4o-mini',
+    gpt_prompt: '',
+    gpt_api_key: '',
+    gpt_key_configured: false,
+  });
   const [selectedId, setSelectedId] = useState(null);
   const [form, setForm] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -77,11 +84,15 @@ export default function StrategiesPage() {
         closed_signals: toInt(item.closed_signals),
         winrate: Number(item.winrate || 0),
         public_winrate: parsePublicWinrate(item.public_winrate),
-        analysis_engine: item.analysis_engine === 'gpt' ? 'gpt' : 'backend',
-        gpt_model: item.gpt_model || 'gpt-4o-mini',
-        gpt_prompt: item.gpt_prompt || '',
-        gpt_key_configured: Number(item.gpt_key_configured) === 1,
       }));
+      const settings = res.analysis_settings || {};
+      setAnalysisForm({
+        engine: settings.engine === 'gpt' ? 'gpt' : 'backend',
+        gpt_model: settings.gpt_model || 'gpt-4o-mini',
+        gpt_prompt: settings.gpt_prompt || '',
+        gpt_api_key: '',
+        gpt_key_configured: Number(settings.gpt_key_configured) === 1,
+      });
       setItems(normalized);
       setIndicators(Array.isArray(res.indicators) ? res.indicators : []);
       setSummary(res.summary || null);
@@ -136,11 +147,6 @@ export default function StrategiesPage() {
       signals_count: toInt(selected.signals_count),
       winrate: Number(selected.winrate || 0),
       public_winrate: selected.public_winrate === null ? '' : String(selected.public_winrate),
-      analysis_engine: selected.analysis_engine === 'gpt' && isSystemStrategy(selected) ? 'gpt' : 'backend',
-      gpt_model: selected.gpt_model || 'gpt-4o-mini',
-      gpt_prompt: selected.gpt_prompt || '',
-      gpt_api_key: '',
-      gpt_key_configured: Boolean(selected.gpt_key_configured),
       indicators: uniqueIndicatorIds,
     });
   }, [selected]);
@@ -217,14 +223,6 @@ export default function StrategiesPage() {
       setError('Отображаемый winrate должен быть числом от 0 до 100');
       return;
     }
-    if (form.analysis_engine === 'gpt' && !form.gpt_key_configured && !form.gpt_api_key.trim()) {
-      setError('Для GPT-анализа нужно сначала указать и проверить ключ');
-      return;
-    }
-    if (form.analysis_engine === 'gpt' && !form.gpt_prompt.trim()) {
-      setError('Промпт для GPT-анализа обязателен');
-      return;
-    }
 
     setError('');
     setStatus('');
@@ -238,10 +236,6 @@ export default function StrategiesPage() {
           allowed_timeframes: joinTimeframes(form.timeframes),
           public_winrate: publicWinrate,
           is_system: form.initial_is_system ? form.is_system : false,
-          analysis_engine: form.initial_is_system ? form.analysis_engine : 'backend',
-          gpt_model: form.gpt_model,
-          gpt_prompt: form.gpt_prompt,
-          gpt_api_key: form.gpt_api_key,
           indicators: form.indicators,
         }),
       });
@@ -253,8 +247,7 @@ export default function StrategiesPage() {
   };
 
   const validateGptKey = async () => {
-    if (!form) return;
-    if (!form.gpt_api_key.trim()) {
+    if (!analysisForm.gpt_api_key.trim()) {
       setError('Введите новый GPT ключ для проверки');
       return;
     }
@@ -264,13 +257,41 @@ export default function StrategiesPage() {
       const res = await apiAdminFetchJson('/api/admin/strategies/validate-gpt-key', {
         method: 'POST',
         body: JSON.stringify({
-          api_key: form.gpt_api_key,
-          model: form.gpt_model || 'gpt-4o-mini',
+          api_key: analysisForm.gpt_api_key,
+          model: analysisForm.gpt_model || 'gpt-4o-mini',
         }),
       });
       setStatus(res.warning ? `Ключ рабочий. ${res.warning}` : 'Ключ GPT проверен и готов к сохранению');
     } catch (e) {
       setError(e.message || 'Ключ GPT не прошел проверку');
+    }
+  };
+
+  const saveAnalysisSettings = async () => {
+    if (analysisForm.engine === 'gpt' && !analysisForm.gpt_key_configured && !analysisForm.gpt_api_key.trim()) {
+      setError('Для GPT-анализа нужно сначала указать и проверить ключ');
+      return;
+    }
+    if (analysisForm.engine === 'gpt' && !analysisForm.gpt_prompt.trim()) {
+      setError('Промпт для GPT-анализа обязателен');
+      return;
+    }
+    setError('');
+    setStatus('');
+    try {
+      await apiAdminFetchJson('/api/admin/analysis-settings', {
+        method: 'POST',
+        body: JSON.stringify({
+          engine: analysisForm.engine,
+          gpt_model: analysisForm.gpt_model,
+          gpt_prompt: analysisForm.gpt_prompt,
+          gpt_api_key: analysisForm.gpt_api_key,
+        }),
+      });
+      setStatus('Общие настройки движка анализа сохранены');
+      await load();
+    } catch (e) {
+      setError(e.message || 'Не удалось сохранить настройки анализа');
     }
   };
 
@@ -306,7 +327,6 @@ export default function StrategiesPage() {
             const usersCount = toInt(item.users_count);
             const signalsCount = toInt(item.signals_count);
             const shownWinrate = item.public_winrate ?? item.winrate;
-            const engineLabel = item.analysis_engine === 'gpt' ? 'GPT' : 'Backend';
             return (
               <button
                 key={item.id}
@@ -336,9 +356,6 @@ export default function StrategiesPage() {
                   ) : (
                     <span className="admin-chip admin-chip-state user">Пользовательская</span>
                   )}
-                  <span className={`admin-chip admin-chip-engine ${item.analysis_engine === 'gpt' ? 'gpt' : ''}`}>
-                    {engineLabel}
-                  </span>
                   {timeframes.map((timeframe) => (
                     <span key={`${item.id}-tf-${timeframe}`} className="admin-chip admin-chip-timeframe">
                       {timeframe}
@@ -444,80 +461,6 @@ export default function StrategiesPage() {
           <div className="admin-note">Текущий расчетный winrate по истории: {formatPercent(form.winrate)}.</div>
         </div>
 
-        <div className="admin-field admin-engine-panel">
-          <div className="admin-row-between">
-            <label className="admin-label">Движок анализа</label>
-            {!form.initial_is_system ? (
-              <span className="admin-note">Для пользовательских стратегий доступен только Backend</span>
-            ) : null}
-          </div>
-          <div className="admin-engine-toggle" aria-label="Движок анализа">
-            <button
-              type="button"
-              className={form.analysis_engine === 'backend' ? 'active' : ''}
-              onClick={() => setForm((prev) => ({ ...prev, analysis_engine: 'backend' }))}
-            >
-              Backend
-            </button>
-            <button
-              type="button"
-              className={form.analysis_engine === 'gpt' ? 'active' : ''}
-              disabled={!form.initial_is_system}
-              onClick={() => setForm((prev) => ({ ...prev, analysis_engine: 'gpt' }))}
-            >
-              GPT
-            </button>
-          </div>
-          <div className="admin-note">
-            Backend использует текущую формулу индикаторов. GPT получает те же сырые рыночные данные и возвращает сигнал в нашем формате.
-          </div>
-
-          {form.analysis_engine === 'gpt' ? (
-            <div className="admin-gpt-box">
-              <div className="admin-field">
-                <label className="admin-label">Модель</label>
-                <input
-                  className="admin-input"
-                  value={form.gpt_model}
-                  onChange={(e) => setForm((prev) => ({ ...prev, gpt_model: e.target.value }))}
-                  placeholder="gpt-4o-mini"
-                />
-              </div>
-
-              <div className="admin-field">
-                <label className="admin-label">
-                  GPT ключ {form.gpt_key_configured ? <span className="admin-key-state">ключ уже сохранён</span> : null}
-                </label>
-                <div className="admin-key-row">
-                  <input
-                    className="admin-input"
-                    type="password"
-                    value={form.gpt_api_key}
-                    onChange={(e) => setForm((prev) => ({ ...prev, gpt_api_key: e.target.value }))}
-                    placeholder={form.gpt_key_configured ? 'Оставьте пустым, если не меняем ключ' : 'sk-...'}
-                  />
-                  <button className="admin-btn-outline" type="button" onClick={validateGptKey}>
-                    Проверить
-                  </button>
-                </div>
-              </div>
-
-              <div className="admin-field">
-                <label className="admin-label">Промпт анализа</label>
-                <textarea
-                  className="admin-textarea admin-gpt-prompt"
-                  value={form.gpt_prompt}
-                  onChange={(e) => setForm((prev) => ({ ...prev, gpt_prompt: e.target.value }))}
-                  rows={12}
-                />
-                <div className="admin-note">
-                  Здесь описываем, как GPT должен превращать сырые индикаторы, цену, сессию и уровни в BUY / SELL / NEUTRAL, SL и Take Profit.
-                </div>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
         <div className="admin-row-between">
           {form.initial_is_system ? (
             <label className="admin-muted">
@@ -601,6 +544,92 @@ export default function StrategiesPage() {
             <div className="admin-metric-label">Пользовательские</div>
             <div className="admin-metric-value small">{computedSummary.user}</div>
           </div>
+        </div>
+      </div>
+
+      <div className="admin-card admin-engine-panel admin-global-engine-panel">
+        <div className="admin-row-between">
+          <div>
+            <h3 className="admin-section-title">Движок анализа</h3>
+            <div className="admin-note">
+              Общая настройка для всех стратегий. Пользователь не видит, какой движок используется.
+            </div>
+          </div>
+          <span className={`admin-chip admin-chip-engine ${analysisForm.engine === 'gpt' ? 'gpt' : ''}`}>
+            {analysisForm.engine === 'gpt' ? 'GPT' : 'Backend'}
+          </span>
+        </div>
+
+        <div className="admin-engine-toggle" aria-label="Движок анализа">
+          <button
+            type="button"
+            className={analysisForm.engine === 'backend' ? 'active' : ''}
+            onClick={() => setAnalysisForm((prev) => ({ ...prev, engine: 'backend' }))}
+          >
+            Backend
+          </button>
+          <button
+            type="button"
+            className={analysisForm.engine === 'gpt' ? 'active' : ''}
+            onClick={() => setAnalysisForm((prev) => ({ ...prev, engine: 'gpt' }))}
+          >
+            GPT
+          </button>
+        </div>
+
+        <div className="admin-note">
+          Backend оставляет текущую формулу индикаторов. GPT получает те же сырые рыночные данные, стратегию и индикаторы, после чего возвращает сигнал в нашем стандартном формате.
+        </div>
+
+        {analysisForm.engine === 'gpt' ? (
+          <div className="admin-gpt-box">
+            <div className="admin-field">
+              <label className="admin-label">Модель</label>
+              <input
+                className="admin-input"
+                value={analysisForm.gpt_model}
+                onChange={(e) => setAnalysisForm((prev) => ({ ...prev, gpt_model: e.target.value }))}
+                placeholder="gpt-4o-mini"
+              />
+            </div>
+
+            <div className="admin-field">
+              <label className="admin-label">
+                GPT ключ {analysisForm.gpt_key_configured ? <span className="admin-key-state">ключ уже сохранён</span> : null}
+              </label>
+              <div className="admin-key-row">
+                <input
+                  className="admin-input"
+                  type="password"
+                  value={analysisForm.gpt_api_key}
+                  onChange={(e) => setAnalysisForm((prev) => ({ ...prev, gpt_api_key: e.target.value }))}
+                  placeholder={analysisForm.gpt_key_configured ? 'Оставьте пустым, если не меняем ключ' : 'sk-...'}
+                />
+                <button className="admin-btn-outline" type="button" onClick={validateGptKey}>
+                  Проверить
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-field">
+              <label className="admin-label">Промпт анализа</label>
+              <textarea
+                className="admin-textarea admin-gpt-prompt"
+                value={analysisForm.gpt_prompt}
+                onChange={(e) => setAnalysisForm((prev) => ({ ...prev, gpt_prompt: e.target.value }))}
+                rows={12}
+              />
+              <div className="admin-note">
+                Здесь описываем, как GPT должен превращать сырые индикаторы, цену, сессию и уровни в BUY / SELL / NEUTRAL, SL и Take Profit.
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="admin-row-actions admin-stream-save-row">
+          <button className="admin-btn" type="button" onClick={saveAnalysisSettings}>
+            Сохранить движок
+          </button>
         </div>
       </div>
 
