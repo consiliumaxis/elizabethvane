@@ -56,6 +56,13 @@ export default function StrategiesPage() {
   const [items, setItems] = useState([]);
   const [indicators, setIndicators] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [analysisForm, setAnalysisForm] = useState({
+    engine: 'backend',
+    gpt_model: 'gpt-4o-mini',
+    gpt_prompt: '',
+    gpt_api_key: '',
+    gpt_key_configured: false,
+  });
   const [selectedId, setSelectedId] = useState(null);
   const [form, setForm] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -78,6 +85,14 @@ export default function StrategiesPage() {
         winrate: Number(item.winrate || 0),
         public_winrate: parsePublicWinrate(item.public_winrate),
       }));
+      const settings = res.analysis_settings || {};
+      setAnalysisForm({
+        engine: settings.engine === 'gpt' ? 'gpt' : 'backend',
+        gpt_model: settings.gpt_model || 'gpt-4o-mini',
+        gpt_prompt: settings.gpt_prompt || '',
+        gpt_api_key: '',
+        gpt_key_configured: Number(settings.gpt_key_configured) === 1,
+      });
       setItems(normalized);
       setIndicators(Array.isArray(res.indicators) ? res.indicators : []);
       setSummary(res.summary || null);
@@ -228,6 +243,55 @@ export default function StrategiesPage() {
       await load();
     } catch (e) {
       setError(e.message || 'Не удалось сохранить стратегию');
+    }
+  };
+
+  const validateGptKey = async () => {
+    if (!analysisForm.gpt_api_key.trim()) {
+      setError('Введите новый GPT ключ для проверки');
+      return;
+    }
+    setError('');
+    setStatus('');
+    try {
+      const res = await apiAdminFetchJson('/api/admin/strategies/validate-gpt-key', {
+        method: 'POST',
+        body: JSON.stringify({
+          api_key: analysisForm.gpt_api_key,
+          model: analysisForm.gpt_model || 'gpt-4o-mini',
+        }),
+      });
+      setStatus(res.warning ? `Ключ рабочий. ${res.warning}` : 'Ключ GPT проверен и готов к сохранению');
+    } catch (e) {
+      setError(e.message || 'Ключ GPT не прошел проверку');
+    }
+  };
+
+  const saveAnalysisSettings = async () => {
+    if (analysisForm.engine === 'gpt' && !analysisForm.gpt_key_configured && !analysisForm.gpt_api_key.trim()) {
+      setError('Для GPT-анализа нужно сначала указать и проверить ключ');
+      return;
+    }
+    if (analysisForm.engine === 'gpt' && !analysisForm.gpt_prompt.trim()) {
+      setError('Промпт для GPT-анализа обязателен');
+      return;
+    }
+    setError('');
+    setStatus('');
+    try {
+      await apiAdminFetchJson('/api/admin/analysis-settings', {
+        method: 'POST',
+        body: JSON.stringify({
+          engine: analysisForm.engine,
+          gpt_model: analysisForm.gpt_model,
+          gpt_prompt: analysisForm.gpt_prompt,
+          gpt_api_key: analysisForm.gpt_api_key,
+        }),
+      });
+      setStatus('Общие настройки движка анализа сохранены');
+      await load();
+    } catch (e) {
+      setError(e.message || 'Не удалось сохранить настройки анализа');
     }
   };
 
@@ -480,6 +544,92 @@ export default function StrategiesPage() {
             <div className="admin-metric-label">Пользовательские</div>
             <div className="admin-metric-value small">{computedSummary.user}</div>
           </div>
+        </div>
+      </div>
+
+      <div className="admin-card admin-engine-panel admin-global-engine-panel">
+        <div className="admin-row-between">
+          <div>
+            <h3 className="admin-section-title">Движок анализа</h3>
+            <div className="admin-note">
+              Общая настройка для всех стратегий. Пользователь не видит, какой движок используется.
+            </div>
+          </div>
+          <span className={`admin-chip admin-chip-engine ${analysisForm.engine === 'gpt' ? 'gpt' : ''}`}>
+            {analysisForm.engine === 'gpt' ? 'GPT' : 'Backend'}
+          </span>
+        </div>
+
+        <div className="admin-engine-toggle" aria-label="Движок анализа">
+          <button
+            type="button"
+            className={analysisForm.engine === 'backend' ? 'active' : ''}
+            onClick={() => setAnalysisForm((prev) => ({ ...prev, engine: 'backend' }))}
+          >
+            Backend
+          </button>
+          <button
+            type="button"
+            className={analysisForm.engine === 'gpt' ? 'active' : ''}
+            onClick={() => setAnalysisForm((prev) => ({ ...prev, engine: 'gpt' }))}
+          >
+            GPT
+          </button>
+        </div>
+
+        <div className="admin-note">
+          Backend оставляет текущую формулу индикаторов. GPT получает те же сырые рыночные данные, стратегию и индикаторы, после чего возвращает сигнал в нашем стандартном формате.
+        </div>
+
+        {analysisForm.engine === 'gpt' ? (
+          <div className="admin-gpt-box">
+            <div className="admin-field">
+              <label className="admin-label">Модель</label>
+              <input
+                className="admin-input"
+                value={analysisForm.gpt_model}
+                onChange={(e) => setAnalysisForm((prev) => ({ ...prev, gpt_model: e.target.value }))}
+                placeholder="gpt-4o-mini"
+              />
+            </div>
+
+            <div className="admin-field">
+              <label className="admin-label">
+                GPT ключ {analysisForm.gpt_key_configured ? <span className="admin-key-state">ключ уже сохранён</span> : null}
+              </label>
+              <div className="admin-key-row">
+                <input
+                  className="admin-input"
+                  type="password"
+                  value={analysisForm.gpt_api_key}
+                  onChange={(e) => setAnalysisForm((prev) => ({ ...prev, gpt_api_key: e.target.value }))}
+                  placeholder={analysisForm.gpt_key_configured ? 'Оставьте пустым, если не меняем ключ' : 'sk-...'}
+                />
+                <button className="admin-btn-outline" type="button" onClick={validateGptKey}>
+                  Проверить
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-field">
+              <label className="admin-label">Промпт анализа</label>
+              <textarea
+                className="admin-textarea admin-gpt-prompt"
+                value={analysisForm.gpt_prompt}
+                onChange={(e) => setAnalysisForm((prev) => ({ ...prev, gpt_prompt: e.target.value }))}
+                rows={12}
+              />
+              <div className="admin-note">
+                Здесь описываем, как GPT должен превращать сырые индикаторы, цену, сессию и уровни в BUY / SELL / NEUTRAL, SL и Take Profit.
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="admin-row-actions admin-stream-save-row">
+          <button className="admin-btn" type="button" onClick={saveAnalysisSettings}>
+            Сохранить движок
+          </button>
         </div>
       </div>
 
