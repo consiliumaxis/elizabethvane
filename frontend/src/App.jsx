@@ -429,7 +429,7 @@ function App() {
         return <ChatAI user={user} t={t} />;
         
       case 'faq':
-        return <FAQ />;
+        return <FAQ onAskAI={() => setCurrentPage('chatAI')} />;
 
       case 'support':
         return <Support />;
