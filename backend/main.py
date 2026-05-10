@@ -2010,6 +2010,12 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
             resp.raise_for_status()
             upstream_data = resp.json()
 
+            baseline_analysis_data = compute_analysis_decision(
+                upstream_data,
+                symbol=formatted_pair,
+                interval=interval,
+                allowed_indicators=allowed_indicators,
+            )
             analysis_settings = await get_admin_analysis_settings()
             if analysis_settings.get("engine") == "gpt":
                 if not analysis_settings.get("gpt_api_key"):
@@ -2026,17 +2032,13 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
                         interval=interval,
                         allowed_indicators=allowed_indicators,
                         strategy=strategy_context,
+                        baseline_analysis=baseline_analysis_data,
                     )
                 except Exception as e:
                     print(f"GPT analysis error: {e}")
                     return {"error": "Analysis is temporarily unavailable. Please try again later."}
             else:
-                analysis_data = compute_analysis_decision(
-                    upstream_data,
-                    symbol=formatted_pair,
-                    interval=interval,
-                    allowed_indicators=allowed_indicators,
-                )
+                analysis_data = baseline_analysis_data
             analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
             stream_override = await resolve_stream_override(strategy_id_int)
             if stream_override:
