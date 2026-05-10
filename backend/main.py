@@ -14,6 +14,7 @@ from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 import uvicorn
 import ai_service
+import analysis_ai_service
 from pydantic import BaseModel
 from typing import Optional
 from analysis_engine import compute_analysis_decision
@@ -286,6 +287,77 @@ async def get_user_strategy_id(user_id: int) -> Optional[int]:
         return int(row.get("strategy_id")) if row.get("strategy_id") is not None else None
     except (TypeError, ValueError):
         return None
+
+
+async def get_strategy_analysis_settings(strategy_id: Optional[int]) -> dict:
+    default_settings = {
+        "engine": "backend",
+        "gpt_api_key": "",
+        "gpt_model": analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
+        "gpt_prompt": analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
+    }
+    if not db_pool or strategy_id is None:
+        return default_settings
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT engine, gpt_api_key, gpt_model, gpt_prompt
+                    FROM strategy_analysis_settings
+                    WHERE strategy_id = %s
+                    LIMIT 1
+                    """,
+                    (int(strategy_id),),
+                )
+                row = await cur.fetchone()
+    except Exception as e:
+        print(f"Strategy analysis settings fallback: {e}")
+        return default_settings
+    if not row:
+        return default_settings
+    engine = str(row.get("engine") or "backend").strip().lower()
+    if engine not in ("backend", "gpt"):
+        engine = "backend"
+    return {
+        "engine": engine,
+        "gpt_api_key": str(row.get("gpt_api_key") or "").strip(),
+        "gpt_model": str(row.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL).strip()
+        or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
+        "gpt_prompt": str(row.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT).strip()
+        or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
+    }
+
+
+async def get_strategy_context(strategy_id: Optional[int]) -> dict:
+    if not db_pool or strategy_id is None:
+        return {}
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT
+                        p.id,
+                        p.name,
+                        p.icon,
+                        p.allowed_timeframes,
+                        GROUP_CONCAT(i.name ORDER BY i.id SEPARATOR ', ') AS indicators_list,
+                        GROUP_CONCAT(i.`key` ORDER BY i.id SEPARATOR ',') AS indicator_keys
+                    FROM presets p
+                    LEFT JOIN preset_indicators pi ON pi.preset_id = p.id
+                    LEFT JOIN indicators i ON i.id = pi.indicator_id
+                    WHERE p.id = %s
+                    GROUP BY p.id
+                    LIMIT 1
+                    """,
+                    (int(strategy_id),),
+                )
+                row = await cur.fetchone()
+    except Exception as e:
+        print(f"Strategy context fallback: {e}")
+        return {}
+    return row or {}
 
 
 def normalize_allowed_timeframes(raw_value) -> str:
@@ -1128,6 +1200,10 @@ async def admin_strategies(admin=Depends(get_admin_user)):
             await cur.execute(
                 """
                 SELECT p.id, p.name, p.icon, p.is_system, p.allowed_timeframes, p.public_winrate,
+                       COALESCE(sas.engine, 'backend') AS analysis_engine,
+                       COALESCE(sas.gpt_model, %s) AS gpt_model,
+                       COALESCE(sas.gpt_prompt, %s) AS gpt_prompt,
+                       CASE WHEN sas.gpt_api_key IS NOT NULL AND TRIM(sas.gpt_api_key) != '' THEN 1 ELSE 0 END AS gpt_key_configured,
                        (
                            SELECT GROUP_CONCAT(i.name ORDER BY i.name SEPARATOR ', ')
                            FROM preset_indicators pi
@@ -1161,8 +1237,10 @@ async def admin_strategies(admin=Depends(get_admin_user)):
                            WHERE ua.strategy_id = p.id AND ua.status IN ('success', 'fail')
                        ) AS closed_signals
                 FROM presets p
+                LEFT JOIN strategy_analysis_settings sas ON sas.strategy_id = p.id
                 ORDER BY p.is_system DESC, p.id ASC
-                """
+                """,
+                (analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL, analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT),
             )
             rows = await cur.fetchall()
             await cur.execute("SELECT id, name, `key` FROM indicators ORDER BY name ASC")
@@ -1188,6 +1266,11 @@ async def admin_strategies(admin=Depends(get_admin_user)):
         row["closed_signals"] = closed_signals
         row["winrate"] = winrate
         row["public_winrate"] = public_winrate
+        analysis_engine = str(row.get("analysis_engine") or "backend").strip().lower()
+        row["analysis_engine"] = analysis_engine if analysis_engine in ("backend", "gpt") else "backend"
+        row["gpt_model"] = str(row.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL)
+        row["gpt_prompt"] = str(row.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT)
+        row["gpt_key_configured"] = 1 if int(row.get("gpt_key_configured") or 0) == 1 else 0
         normalized_rows.append(row)
 
     system_count = sum(1 for row in normalized_rows if int(row.get("is_system") or 0) == 1)
@@ -1205,6 +1288,17 @@ async def admin_strategies(admin=Depends(get_admin_user)):
     }
 
 
+@app.post("/api/admin/strategies/validate-gpt-key")
+async def admin_strategies_validate_gpt_key(request: Request, admin=Depends(get_admin_user)):
+    data = await request.json()
+    api_key = (data.get("api_key") or "").strip()
+    model = (data.get("model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL).strip()
+    result = await analysis_ai_service.validate_openai_api_key(api_key, model=model)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "OpenAI key is invalid")
+    return {"status": "success", "warning": result.get("warning")}
+
+
 @app.post("/api/admin/strategies/update")
 async def admin_strategies_update(request: Request, admin=Depends(get_admin_user)):
     data = await request.json()
@@ -1218,6 +1312,16 @@ async def admin_strategies_update(request: Request, admin=Depends(get_admin_user
     is_system = 1 if bool(data.get("is_system")) else 0
     indicators = data.get("indicators")
     raw_public_winrate = data.get("public_winrate")
+    analysis_engine = str(data.get("analysis_engine") or "backend").strip().lower()
+    if analysis_engine not in ("backend", "gpt"):
+        analysis_engine = "backend"
+    gpt_model = (data.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL).strip()
+    gpt_prompt = (data.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT).strip()
+    gpt_api_key = (data.get("gpt_api_key") or "").strip()
+    if not gpt_model:
+        gpt_model = analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL
+    if not gpt_prompt:
+        gpt_prompt = analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT
     if not name:
         raise HTTPException(status_code=400, detail="Strategy name is required")
     if raw_public_winrate is None or (isinstance(raw_public_winrate, str) and not raw_public_winrate.strip()):
@@ -1245,16 +1349,36 @@ async def admin_strategies_update(request: Request, admin=Depends(get_admin_user
 
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT is_system FROM presets WHERE id = %s LIMIT 1", (strategy_id,))
+            await cur.execute(
+                """
+                SELECT p.is_system, sas.gpt_api_key
+                FROM presets p
+                LEFT JOIN strategy_analysis_settings sas ON sas.strategy_id = p.id
+                WHERE p.id = %s
+                LIMIT 1
+                """,
+                (strategy_id,),
+            )
             current_row = await cur.fetchone()
             if not current_row:
                 raise HTTPException(status_code=404, detail="Strategy not found")
 
             current_is_system = int(current_row[0] or 0)
+            current_gpt_api_key = str(current_row[1] or "").strip() if len(current_row) > 1 else ""
             if current_is_system == 0 and is_system == 1:
                 raise HTTPException(status_code=400, detail="User strategy cannot be converted to system strategy")
             if current_is_system == 0:
                 is_system = 0
+                analysis_engine = "backend"
+
+            stored_gpt_api_key = current_gpt_api_key
+            if gpt_api_key:
+                validation = await analysis_ai_service.validate_openai_api_key(gpt_api_key, model=gpt_model)
+                if not validation.get("ok"):
+                    raise HTTPException(status_code=400, detail=validation.get("error") or "OpenAI key is invalid")
+                stored_gpt_api_key = gpt_api_key
+            if analysis_engine == "gpt" and not stored_gpt_api_key:
+                raise HTTPException(status_code=400, detail="OpenAI key is required for GPT analysis")
 
             await cur.execute(
                 """
@@ -1267,6 +1391,34 @@ async def admin_strategies_update(request: Request, admin=Depends(get_admin_user
                 WHERE id = %s
                 """,
                 (name, icon, allowed_timeframes, public_winrate, is_system, strategy_id),
+            )
+
+            await cur.execute(
+                """
+                INSERT INTO strategy_analysis_settings (
+                    strategy_id,
+                    engine,
+                    gpt_api_key,
+                    gpt_model,
+                    gpt_prompt,
+                    updated_by
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    engine = VALUES(engine),
+                    gpt_api_key = VALUES(gpt_api_key),
+                    gpt_model = VALUES(gpt_model),
+                    gpt_prompt = VALUES(gpt_prompt),
+                    updated_by = VALUES(updated_by)
+                """,
+                (
+                    strategy_id,
+                    analysis_engine,
+                    stored_gpt_api_key or None,
+                    gpt_model,
+                    gpt_prompt,
+                    int(admin["user_id"]),
+                ),
             )
 
             if isinstance(indicators, list):
@@ -1300,6 +1452,7 @@ async def admin_strategies_delete(request: Request, admin=Depends(get_admin_user
         async with conn.cursor() as cur:
             await cur.execute("DELETE FROM preset_indicators WHERE preset_id = %s", (strategy_id,))
             await cur.execute("DELETE FROM user_presets WHERE preset_id = %s", (strategy_id,))
+            await cur.execute("DELETE FROM strategy_analysis_settings WHERE strategy_id = %s", (strategy_id,))
             await cur.execute("DELETE FROM presets WHERE id = %s", (strategy_id,))
             await cur.execute("UPDATE users SET strategy_id = 1 WHERE strategy_id = %s", (strategy_id,))
     return {"status": "success"}
@@ -1849,12 +2002,33 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
             resp.raise_for_status()
             upstream_data = resp.json()
 
-            analysis_data = compute_analysis_decision(
-                upstream_data,
-                symbol=formatted_pair,
-                interval=interval,
-                allowed_indicators=allowed_indicators,
-            )
+            analysis_settings = await get_strategy_analysis_settings(strategy_id_int)
+            if analysis_settings.get("engine") == "gpt":
+                if not analysis_settings.get("gpt_api_key"):
+                    print(f"GPT analysis is not configured for strategy_id={strategy_id_int}")
+                    return {"error": "Analysis is temporarily unavailable. Please try again later."}
+                strategy_context = await get_strategy_context(strategy_id_int)
+                try:
+                    analysis_data = await analysis_ai_service.generate_gpt_analysis(
+                        api_key=analysis_settings.get("gpt_api_key") or "",
+                        model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
+                        prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
+                        raw_payload=upstream_data,
+                        symbol=formatted_pair,
+                        interval=interval,
+                        allowed_indicators=allowed_indicators,
+                        strategy=strategy_context,
+                    )
+                except Exception as e:
+                    print(f"GPT analysis error for strategy_id={strategy_id_int}: {e}")
+                    return {"error": "Analysis is temporarily unavailable. Please try again later."}
+            else:
+                analysis_data = compute_analysis_decision(
+                    upstream_data,
+                    symbol=formatted_pair,
+                    interval=interval,
+                    allowed_indicators=allowed_indicators,
+                )
             analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
             stream_override = await resolve_stream_override(strategy_id_int)
             if stream_override:

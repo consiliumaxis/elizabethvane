@@ -77,6 +77,10 @@ export default function StrategiesPage() {
         closed_signals: toInt(item.closed_signals),
         winrate: Number(item.winrate || 0),
         public_winrate: parsePublicWinrate(item.public_winrate),
+        analysis_engine: item.analysis_engine === 'gpt' ? 'gpt' : 'backend',
+        gpt_model: item.gpt_model || 'gpt-4o-mini',
+        gpt_prompt: item.gpt_prompt || '',
+        gpt_key_configured: Number(item.gpt_key_configured) === 1,
       }));
       setItems(normalized);
       setIndicators(Array.isArray(res.indicators) ? res.indicators : []);
@@ -132,6 +136,11 @@ export default function StrategiesPage() {
       signals_count: toInt(selected.signals_count),
       winrate: Number(selected.winrate || 0),
       public_winrate: selected.public_winrate === null ? '' : String(selected.public_winrate),
+      analysis_engine: selected.analysis_engine === 'gpt' && isSystemStrategy(selected) ? 'gpt' : 'backend',
+      gpt_model: selected.gpt_model || 'gpt-4o-mini',
+      gpt_prompt: selected.gpt_prompt || '',
+      gpt_api_key: '',
+      gpt_key_configured: Boolean(selected.gpt_key_configured),
       indicators: uniqueIndicatorIds,
     });
   }, [selected]);
@@ -208,6 +217,14 @@ export default function StrategiesPage() {
       setError('Отображаемый winrate должен быть числом от 0 до 100');
       return;
     }
+    if (form.analysis_engine === 'gpt' && !form.gpt_key_configured && !form.gpt_api_key.trim()) {
+      setError('Для GPT-анализа нужно сначала указать и проверить ключ');
+      return;
+    }
+    if (form.analysis_engine === 'gpt' && !form.gpt_prompt.trim()) {
+      setError('Промпт для GPT-анализа обязателен');
+      return;
+    }
 
     setError('');
     setStatus('');
@@ -221,6 +238,10 @@ export default function StrategiesPage() {
           allowed_timeframes: joinTimeframes(form.timeframes),
           public_winrate: publicWinrate,
           is_system: form.initial_is_system ? form.is_system : false,
+          analysis_engine: form.initial_is_system ? form.analysis_engine : 'backend',
+          gpt_model: form.gpt_model,
+          gpt_prompt: form.gpt_prompt,
+          gpt_api_key: form.gpt_api_key,
           indicators: form.indicators,
         }),
       });
@@ -228,6 +249,28 @@ export default function StrategiesPage() {
       await load();
     } catch (e) {
       setError(e.message || 'Не удалось сохранить стратегию');
+    }
+  };
+
+  const validateGptKey = async () => {
+    if (!form) return;
+    if (!form.gpt_api_key.trim()) {
+      setError('Введите новый GPT ключ для проверки');
+      return;
+    }
+    setError('');
+    setStatus('');
+    try {
+      const res = await apiAdminFetchJson('/api/admin/strategies/validate-gpt-key', {
+        method: 'POST',
+        body: JSON.stringify({
+          api_key: form.gpt_api_key,
+          model: form.gpt_model || 'gpt-4o-mini',
+        }),
+      });
+      setStatus(res.warning ? `Ключ рабочий. ${res.warning}` : 'Ключ GPT проверен и готов к сохранению');
+    } catch (e) {
+      setError(e.message || 'Ключ GPT не прошел проверку');
     }
   };
 
@@ -263,6 +306,7 @@ export default function StrategiesPage() {
             const usersCount = toInt(item.users_count);
             const signalsCount = toInt(item.signals_count);
             const shownWinrate = item.public_winrate ?? item.winrate;
+            const engineLabel = item.analysis_engine === 'gpt' ? 'GPT' : 'Backend';
             return (
               <button
                 key={item.id}
@@ -292,6 +336,9 @@ export default function StrategiesPage() {
                   ) : (
                     <span className="admin-chip admin-chip-state user">Пользовательская</span>
                   )}
+                  <span className={`admin-chip admin-chip-engine ${item.analysis_engine === 'gpt' ? 'gpt' : ''}`}>
+                    {engineLabel}
+                  </span>
                   {timeframes.map((timeframe) => (
                     <span key={`${item.id}-tf-${timeframe}`} className="admin-chip admin-chip-timeframe">
                       {timeframe}
@@ -395,6 +442,80 @@ export default function StrategiesPage() {
           />
           <div className="admin-note">Это публичное значение winrate, которое показывается пользователям во фронте.</div>
           <div className="admin-note">Текущий расчетный winrate по истории: {formatPercent(form.winrate)}.</div>
+        </div>
+
+        <div className="admin-field admin-engine-panel">
+          <div className="admin-row-between">
+            <label className="admin-label">Движок анализа</label>
+            {!form.initial_is_system ? (
+              <span className="admin-note">Для пользовательских стратегий доступен только Backend</span>
+            ) : null}
+          </div>
+          <div className="admin-engine-toggle" aria-label="Движок анализа">
+            <button
+              type="button"
+              className={form.analysis_engine === 'backend' ? 'active' : ''}
+              onClick={() => setForm((prev) => ({ ...prev, analysis_engine: 'backend' }))}
+            >
+              Backend
+            </button>
+            <button
+              type="button"
+              className={form.analysis_engine === 'gpt' ? 'active' : ''}
+              disabled={!form.initial_is_system}
+              onClick={() => setForm((prev) => ({ ...prev, analysis_engine: 'gpt' }))}
+            >
+              GPT
+            </button>
+          </div>
+          <div className="admin-note">
+            Backend использует текущую формулу индикаторов. GPT получает те же сырые рыночные данные и возвращает сигнал в нашем формате.
+          </div>
+
+          {form.analysis_engine === 'gpt' ? (
+            <div className="admin-gpt-box">
+              <div className="admin-field">
+                <label className="admin-label">Модель</label>
+                <input
+                  className="admin-input"
+                  value={form.gpt_model}
+                  onChange={(e) => setForm((prev) => ({ ...prev, gpt_model: e.target.value }))}
+                  placeholder="gpt-4o-mini"
+                />
+              </div>
+
+              <div className="admin-field">
+                <label className="admin-label">
+                  GPT ключ {form.gpt_key_configured ? <span className="admin-key-state">ключ уже сохранён</span> : null}
+                </label>
+                <div className="admin-key-row">
+                  <input
+                    className="admin-input"
+                    type="password"
+                    value={form.gpt_api_key}
+                    onChange={(e) => setForm((prev) => ({ ...prev, gpt_api_key: e.target.value }))}
+                    placeholder={form.gpt_key_configured ? 'Оставьте пустым, если не меняем ключ' : 'sk-...'}
+                  />
+                  <button className="admin-btn-outline" type="button" onClick={validateGptKey}>
+                    Проверить
+                  </button>
+                </div>
+              </div>
+
+              <div className="admin-field">
+                <label className="admin-label">Промпт анализа</label>
+                <textarea
+                  className="admin-textarea admin-gpt-prompt"
+                  value={form.gpt_prompt}
+                  onChange={(e) => setForm((prev) => ({ ...prev, gpt_prompt: e.target.value }))}
+                  rows={12}
+                />
+                <div className="admin-note">
+                  Здесь описываем, как GPT должен превращать сырые индикаторы, цену, сессию и уровни в BUY / SELL / NEUTRAL, SL и Take Profit.
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="admin-row-between">
