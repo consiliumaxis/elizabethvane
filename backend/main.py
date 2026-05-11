@@ -16,7 +16,7 @@ import uvicorn
 import ai_service
 import analysis_ai_service
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any, Dict, List
 from analysis_engine import compute_analysis_decision
 try:
     from backend.telegram_auth import get_telegram_user
@@ -46,6 +46,27 @@ def get_env_int(name: str, default: int) -> int:
 API_HOST = (os.getenv("API_HOST") or "0.0.0.0").strip() or "0.0.0.0"
 API_PORT = get_env_int("API_PORT", 8000)
 ALLOWED_STRATEGY_TIMEFRAMES = ("1m", "3m", "5m", "10m", "15m", "30m", "1h", "4h", "1d")
+DEVSBITE_API_BASE_URL = (os.getenv("DEVSBITE_API_BASE_URL") or "https://api.devsbite.com").strip().rstrip("/")
+DEVSBITE_MIN_PAYOUT = int((os.getenv("DEVSBITE_MIN_PAYOUT") or "34").strip() or "34")
+DEVSBITE_EXPIRATIONS_URL = (os.getenv("DEVSBITE_EXPIRATIONS_URL") or "").strip()
+BINARY_EXPIRATION_OPTIONS = (os.getenv("BINARY_EXPIRATION_OPTIONS") or "5s,15s,1m,3m,5m,15m,1h").strip()
+MARKET_KIND_CONFIG = {
+    "forex": {"title": "Forex", "path": "forex"},
+    "otc": {"title": "OTC", "path": "otc"},
+    "commodities": {"title": "Metals", "path": "otc/commodities"},
+    "stocks": {"title": "Stocks", "path": "otc/stocks"},
+    "crypto": {"title": "Crypto", "path": "otc/crypto"},
+}
+MARKET_KIND_ALIASES = {
+    "metal": "commodities",
+    "metals": "commodities",
+    "commodity": "commodities",
+    "commodities": "commodities",
+    "stock": "stocks",
+    "stocks": "stocks",
+    "crypto": "crypto",
+    "crypta": "crypto",
+}
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST"),
@@ -1777,24 +1798,221 @@ async def update_mode(request: Request, user=Depends(get_telegram_user)):
         return {"status": "success", "mode": new_mode}
     return {"error": "Invalid data"}
 
-@app.get("/api/pairs/forex")
-async def get_forex_pairs(user=Depends(get_telegram_user)):
+def normalize_market_kind(kind: str) -> str:
+    raw = str(kind or "").strip().lower()
+    if raw in MARKET_KIND_CONFIG:
+        return raw
+    if raw in MARKET_KIND_ALIASES:
+        return MARKET_KIND_ALIASES[raw]
+    return "otc" if raw == "otc" else "forex"
+
+
+def extract_market_rows(payload: Any) -> List[Any]:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in ("pairs", "data", "items", "results", "assets", "symbols", "instruments"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            nested = extract_market_rows(value)
+            if nested:
+                return nested
+    return []
+
+
+def market_pair_label(row: Dict[str, Any]) -> str:
+    direct = (
+        row.get("pair")
+        or row.get("name")
+        or row.get("label")
+        or row.get("asset")
+        or row.get("display_name")
+        or row.get("display")
+        or row.get("title")
+        or row.get("ticker")
+        or row.get("symbol")
+    )
+    label = str(direct or "").strip()
+    if label:
+        return label
+    base = str(row.get("base") or row.get("base_asset") or row.get("currency_base") or "").strip()
+    quote = str(row.get("quote") or row.get("quote_asset") or row.get("currency_quote") or "").strip()
+    return f"{base}/{quote}" if base and quote else ""
+
+
+def normalize_market_symbol(value: str) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .upper()
+        .replace(" ", "")
+        .replace("/", "")
+        .replace("-", "")
+        .replace("_", "")
+    )
+
+
+def normalize_market_pairs(payload: Any) -> List[Dict[str, Any]]:
+    normalized = []
+    seen = set()
+    for row in extract_market_rows(payload):
+        if not isinstance(row, dict):
+            continue
+        pair = market_pair_label(row)
+        symbol = normalize_market_symbol(row.get("symbol") or row.get("ticker") or row.get("code") or row.get("asset") or pair)
+        if not pair or not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        payout_raw = row.get("payout")
+        if payout_raw is None:
+            payout_raw = row.get("profit", row.get("percent"))
+        try:
+            payout = int(float(payout_raw)) if payout_raw is not None else None
+        except (TypeError, ValueError):
+            payout = None
+        normalized.append({"pair": pair, "payout": payout})
+    return sorted(normalized, key=lambda item: (item["payout"] is None, -(item["payout"] or 0), item["pair"]))
+
+
+def parse_expiration_options(raw_value: str) -> List[Dict[str, str]]:
+    values = []
+    seen = set()
+    for item in str(raw_value or "").replace(";", ",").split(","):
+        value = item.strip().lower()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        values.append({"value": value, "label": value})
+    return values
+
+
+def merge_expiration_options(*groups: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    merged = []
+    seen = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or item.get("label") or "").strip().lower()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            merged.append({"value": value, "label": str(item.get("label") or value)})
+    return merged or parse_expiration_options(BINARY_EXPIRATION_OPTIONS)
+
+
+async def fetch_devsbite_market_pairs(kind: str, min_payout: int) -> List[Dict[str, Any]]:
     token = os.getenv("DEVSBITE_TOKEN")
-    url = "https://api.devsbite.com/pairs/forex?min_payout=34"
+    if not token:
+        return []
+    market_kind = normalize_market_kind(kind)
+    pair_path = MARKET_KIND_CONFIG.get(market_kind, MARKET_KIND_CONFIG["forex"])["path"]
+    url = f"{DEVSBITE_API_BASE_URL}/pairs/{pair_path}"
     headers = {
         "accept": "application/json",
-        "X-Client-Token": token
+        "X-Client-Token": token,
+        "Cache-Control": "no-cache",
     }
+    params = {"min_payout": max(int(min_payout or 0), 0)}
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, headers=headers)
+            response = await client.get(url, headers=headers, params=params, timeout=12.0)
+            response.raise_for_status()
+            return normalize_market_pairs(response.json())
+        except Exception:
+            return []
+
+
+async def fetch_binary_expiration_options() -> List[Dict[str, str]]:
+    defaults = parse_expiration_options(BINARY_EXPIRATION_OPTIONS)
+    token = os.getenv("DEVSBITE_TOKEN")
+    if not token or not DEVSBITE_EXPIRATIONS_URL:
+        return defaults
+    headers = {
+        "accept": "application/json",
+        "X-Client-Token": token,
+        "Cache-Control": "no-cache",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(DEVSBITE_EXPIRATIONS_URL, headers=headers, timeout=10.0)
             response.raise_for_status()
             data = response.json()
-            if "pairs" in data:
-                data["pairs"] = sorted(data["pairs"], key=lambda x: x["payout"], reverse=True)
-            return data
-        except Exception as e:
-            return {"error": str(e), "pairs": []}
+    except Exception:
+        return defaults
+    if isinstance(data, dict):
+        raw_values = data.get("expirations") or data.get("items") or data.get("data") or []
+    elif isinstance(data, list):
+        raw_values = data
+    else:
+        raw_values = []
+    parsed = []
+    for item in raw_values:
+        if isinstance(item, dict):
+            value = item.get("value") or item.get("label") or item.get("expiration") or item.get("time")
+            label = item.get("label") or value
+            if value:
+                parsed.append({"value": str(value).strip().lower(), "label": str(label).strip()})
+        else:
+            value = str(item or "").strip().lower()
+            if value:
+                parsed.append({"value": value, "label": value})
+    return merge_expiration_options(defaults, parsed)
+
+
+async def get_market_options_payload(kind: str, min_payout: int) -> Dict[str, Any]:
+    market_kind = normalize_market_kind(kind)
+    pairs = await fetch_devsbite_market_pairs(market_kind, min_payout)
+    expirations = await fetch_binary_expiration_options()
+    return {
+        "kind": market_kind,
+        "market_title": MARKET_KIND_CONFIG.get(market_kind, MARKET_KIND_CONFIG["forex"])["title"],
+        "available_markets": [{"key": key, "title": value["title"]} for key, value in MARKET_KIND_CONFIG.items()],
+        "pairs": pairs,
+        "expirations": expirations,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@app.get("/api/market/options")
+async def get_market_options(
+    kind: str = Query(default="forex"),
+    min_payout: int = Query(default=DEVSBITE_MIN_PAYOUT, ge=0, le=100),
+    user=Depends(get_telegram_user),
+):
+    return await get_market_options_payload(kind, min_payout)
+
+
+@app.get("/api/pairs/forex")
+async def get_forex_pairs(user=Depends(get_telegram_user)):
+    payload = await get_market_options_payload("forex", DEVSBITE_MIN_PAYOUT)
+    return {"pairs": payload["pairs"]}
+
+
+@app.get("/api/pairs/otc")
+async def get_otc_pairs(user=Depends(get_telegram_user)):
+    payload = await get_market_options_payload("otc", DEVSBITE_MIN_PAYOUT)
+    return {"pairs": payload["pairs"]}
+
+
+@app.get("/api/pairs")
+async def get_pairs_by_kind(kind: str = Query(default="forex"), user=Depends(get_telegram_user)):
+    payload = await get_market_options_payload(kind, DEVSBITE_MIN_PAYOUT)
+    return {
+        "kind": payload["kind"],
+        "market_title": payload["market_title"],
+        "pairs": payload["pairs"],
+    }
+
+
+@app.get("/api/expirations")
+async def get_expiration_options(user=Depends(get_telegram_user)):
+    return {"expirations": await fetch_binary_expiration_options()}
             
 @app.get("/api/pairs/commodity")
 async def get_commodity_pairs(user=Depends(get_telegram_user)):
