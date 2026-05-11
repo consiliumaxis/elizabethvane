@@ -31,6 +31,44 @@
   margin-top: 15px;
 }
 
+.market-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.empty-market-switcher {
+  margin: 0 0 18px;
+}
+
+.market-chip-btn {
+  border: 1px solid rgba(212, 175, 55, 0.28);
+  background: rgba(9, 16, 31, 0.82);
+  color: #fff;
+  border-radius: 999px;
+  padding: 9px 8px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.market-chip-btn.active,
+.market-chip-btn:hover {
+  border-color: #D4AF37;
+  color: #040811;
+  background: #D4AF37;
+}
+
+.market-load-error {
+  margin-top: 10px;
+  color: #e74c3c;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 .pair-item-btn, .exp-item-btn, .strategy-item-btn {
   background: #09101F;
   border: 1px solid rgba(212, 175, 55, 0.3);
@@ -177,6 +215,12 @@
   transform: scale(0.98);
 }
 
+.conduct-analysis-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .go-back-outline-btn {
   width: 100%;
   background: transparent;
@@ -241,6 +285,125 @@
 .analysis-result-container {
   width: 100%;
   animation: fadeIn 0.4s ease-in-out;
+}
+
+.analysis-head {
+  text-align: center;
+  margin-bottom: 14px;
+}
+
+.analysis-asset-title {
+  margin-bottom: 8px;
+}
+
+.analysis-meta-row,
+.analysis-strategy-row {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  align-items: center;
+  color: #aaa;
+  font-size: 0.82rem;
+}
+
+.analysis-meta-row span {
+  background: rgba(212, 175, 55, 0.12);
+  color: #D4AF37;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.analysis-strategy-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #fff;
+  font-weight: 700;
+}
+
+.binary-signal-hero {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.17), rgba(9, 16, 31, 0.92));
+  border: 1px solid rgba(212, 175, 55, 0.38);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 14px;
+  text-align: center;
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.32);
+}
+
+.binary-signal-caption {
+  display: block;
+  color: #aaa;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 5px;
+}
+
+.binary-signal-hero strong {
+  display: block;
+  font-size: 2rem;
+  letter-spacing: 0.08em;
+}
+
+.binary-signal-hero small {
+  color: #d9c58a;
+  font-size: 0.78rem;
+}
+
+.binary-levels-list {
+  border-top: 1px dashed rgba(212, 175, 55, 0.3);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.binary-result-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #09101F;
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 14px 0;
+}
+
+.binary-result-card span {
+  display: block;
+  color: #888;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.binary-result-card strong {
+  color: #fff;
+  font-size: 1rem;
+}
+
+.binary-result-success {
+  border-color: rgba(46, 204, 113, 0.55);
+  background: rgba(46, 204, 113, 0.1);
+}
+
+.binary-result-fail {
+  border-color: rgba(231, 76, 60, 0.55);
+  background: rgba(231, 76, 60, 0.1);
+}
+
+.binary-result-active {
+  border-color: rgba(212, 175, 55, 0.45);
+}
+
+.binary-countdown {
+  text-align: right;
+}
+
+.binary-countdown strong {
+  color: #D4AF37;
+  font-family: 'Fira Code', monospace;
 }
 
 .clean-analysis-card {

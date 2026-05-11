@@ -163,9 +163,10 @@ export const texts = {
     binarySettings: {
       marketClosed: "The market is currently closed. Please switch the mode in your profile or return later.",
       goHome: "Home",
-      selectPair: "Select a currency pair",
+      selectPair: "Select a market and pair",
       selectExpiration: "Select expiration time",
       summaryTitle: "The signal will be generated based on the following data",
+      marketLabel: "Market",
       pairLabel: "Pair",
       expirationLabel: "Timeframe",
       getSignalBtn: "Get signal",

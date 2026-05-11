@@ -16,7 +16,7 @@ import uvicorn
 import ai_service
 import analysis_ai_service
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any, Dict, List
 from analysis_engine import compute_analysis_decision
 try:
     from backend.telegram_auth import get_telegram_user
@@ -46,6 +46,28 @@ def get_env_int(name: str, default: int) -> int:
 API_HOST = (os.getenv("API_HOST") or "0.0.0.0").strip() or "0.0.0.0"
 API_PORT = get_env_int("API_PORT", 8000)
 ALLOWED_STRATEGY_TIMEFRAMES = ("1m", "3m", "5m", "10m", "15m", "30m", "1h", "4h", "1d")
+DEVSBITE_API_BASE_URL = (os.getenv("DEVSBITE_API_BASE_URL") or "https://api.devsbite.com").strip().rstrip("/")
+DEVSBITE_MIN_PAYOUT = int((os.getenv("DEVSBITE_MIN_PAYOUT") or "34").strip() or "34")
+DEVSBITE_EXPIRATIONS_URL = (os.getenv("DEVSBITE_EXPIRATIONS_URL") or "").strip()
+DEVSBITE_CLIENT_TOKEN = (os.getenv("DEVSBITE_CLIENT_TOKEN") or os.getenv("DEVSBITE_TOKEN") or "").strip()
+BINARY_EXPIRATION_OPTIONS = (os.getenv("BINARY_EXPIRATION_OPTIONS") or "5s,15s,1m,3m,5m,15m,1h").strip()
+MARKET_KIND_CONFIG = {
+    "forex": {"title": "Forex", "path": "forex"},
+    "otc": {"title": "OTC", "path": "otc"},
+    "commodities": {"title": "Metals", "path": "otc/commodities"},
+    "stocks": {"title": "Stocks", "path": "otc/stocks"},
+    "crypto": {"title": "Crypto", "path": "otc/crypto"},
+}
+MARKET_KIND_ALIASES = {
+    "metal": "commodities",
+    "metals": "commodities",
+    "commodity": "commodities",
+    "commodities": "commodities",
+    "stock": "stocks",
+    "stocks": "stocks",
+    "crypto": "crypto",
+    "crypta": "crypto",
+}
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST"),
@@ -1466,18 +1488,25 @@ async def admin_strategies_delete(request: Request, admin=Depends(get_admin_user
     return {"status": "success"}
 
 def parse_timeframe_mins(tf: str) -> int:
-    if not tf: return 5
-    tf = tf.lower()
+    seconds = parse_timeframe_seconds(tf)
+    return max(1, int((seconds + 59) // 60))
+
+def parse_timeframe_seconds(tf: str) -> int:
+    if not tf:
+        return 5 * 60
+    tf = str(tf).strip().lower()
     try:
-        if tf.endswith('m'): return int(tf[:-1])
-        if tf.endswith('min'): return int(tf[:-3])
-        if tf.endswith('h'): return int(tf[:-1]) * 60
-        if tf.endswith('hour'): return int(tf[:-4]) * 60
-        if tf.endswith('d'): return int(tf[:-1]) * 1440
-        if tf.endswith('day'): return int(tf[:-3]) * 1440
+        if tf.endswith('sec'): return max(1, int(tf[:-3]))
+        if tf.endswith('s'): return max(1, int(tf[:-1]))
+        if tf.endswith('min'): return max(1, int(tf[:-3]) * 60)
+        if tf.endswith('m'): return max(1, int(tf[:-1]) * 60)
+        if tf.endswith('hour'): return max(1, int(tf[:-4]) * 60 * 60)
+        if tf.endswith('h'): return max(1, int(tf[:-1]) * 60 * 60)
+        if tf.endswith('day'): return max(1, int(tf[:-3]) * 24 * 60 * 60)
+        if tf.endswith('d'): return max(1, int(tf[:-1]) * 24 * 60 * 60)
     except:
         pass
-    return 5
+    return 5 * 60
 
 async def get_price_for_symbol(client: httpx.AsyncClient, symbol: str, token: str) -> Optional[float]:
     clean_sym = symbol.replace("/", "").replace("-", "").strip().upper()
@@ -1522,6 +1551,196 @@ async def get_price_for_symbol(client: httpx.AsyncClient, symbol: str, token: st
 
     return None
 
+def extract_price_from_payload(payload: Any) -> Optional[float]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("price", "last", "close", "value", "bid", "ask"):
+        try:
+            price = float(payload.get(key))
+            if price > 0:
+                return price
+        except (TypeError, ValueError):
+            pass
+    for list_key in ("candles", "history", "points", "ticks", "data"):
+        rows = payload.get(list_key)
+        if not isinstance(rows, list):
+            continue
+        for row in reversed(rows):
+            if not isinstance(row, dict):
+                continue
+            nested = extract_price_from_payload(row)
+            if nested and nested > 0:
+                return nested
+    nested_data = payload.get("data")
+    if isinstance(nested_data, dict):
+        return extract_price_from_payload(nested_data)
+    return None
+
+def normalize_binary_quote_symbol(symbol: str) -> str:
+    return str(symbol or "").strip()
+
+async def fetch_binary_quote_payload(category: str, symbol: str, history_seconds: int = 300) -> Dict[str, Any]:
+    token = DEVSBITE_CLIENT_TOKEN or os.getenv("DEVSBITE_TOKEN") or ""
+    if not token:
+        return {}
+    market_kind = normalize_market_kind(category)
+    normalized_symbol = normalize_binary_quote_symbol(symbol)
+    headers = {
+        "accept": "application/json",
+        "X-Client-Token": token,
+        "Cache-Control": "no-cache",
+    }
+    params = {
+        "category": market_kind,
+        "symbol": normalized_symbol,
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(f"{DEVSBITE_API_BASE_URL}/quotes/price", headers=headers, params=params, timeout=10.0)
+            response.raise_for_status()
+            payload = response.json()
+            if extract_price_from_payload(payload):
+                return payload if isinstance(payload, dict) else {}
+        except Exception:
+            pass
+        try:
+            response = await client.get(
+                f"{DEVSBITE_API_BASE_URL}/quotes/quote",
+                headers=headers,
+                params={**params, "history_seconds": max(int(history_seconds or 300), 60)},
+                timeout=12.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+async def fetch_binary_quote_price(category: str, symbol: str) -> Optional[float]:
+    payload = await fetch_binary_quote_payload(category, symbol, 300)
+    price = extract_price_from_payload(payload)
+    if price and price > 0:
+        return price
+    token = os.getenv("DEVSBITE_TOKEN") or ""
+    async with httpx.AsyncClient() as client:
+        return await get_price_for_symbol(client, symbol, token)
+
+def binary_interval_for_analysis(expiration: str) -> str:
+    seconds = parse_timeframe_seconds(expiration)
+    if seconds >= 60 * 60:
+        return "1h"
+    if seconds >= 30 * 60:
+        return "30min"
+    if seconds >= 15 * 60:
+        return "15min"
+    return "5min"
+
+def format_pair_for_advanced_analysis(pair: str) -> str:
+    raw = str(pair or "").strip()
+    compact = raw.upper().replace("/", "").replace("-", "").replace(" ", "")
+    if len(compact) == 6 and compact.isalpha():
+        return f"{compact[:3]}/{compact[3:]}"
+    return raw
+
+def enforce_binary_signal(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+    indicators = analysis_data.get("indicators")
+    if not isinstance(indicators, dict):
+        return analysis_data
+    recommendation = str(analysis_data.get("recommendation") or "").strip().upper()
+    if recommendation in ("BUY", "SELL"):
+        return analysis_data
+    votes = {"BUY": 0, "SELL": 0}
+    for item in indicators.values():
+        if not isinstance(item, dict):
+            continue
+        signal = str(item.get("signal") or "").strip().upper()
+        if signal in votes:
+            votes[signal] += 1
+    if votes["BUY"] > votes["SELL"]:
+        analysis_data["recommendation"] = "BUY"
+    elif votes["SELL"] > votes["BUY"]:
+        analysis_data["recommendation"] = "SELL"
+    return analysis_data
+
+def get_analysis_remaining_seconds(row: Dict[str, Any]) -> int:
+    created_at = row.get("created_at")
+    if not created_at:
+        return 0
+    if isinstance(created_at, str):
+        try:
+            created_at = datetime.fromisoformat(created_at.replace("Z", "").replace("T", " "))
+        except Exception:
+            return 0
+    seconds = parse_timeframe_seconds(row.get("timeframe"))
+    if str(row.get("analysis_type") or "forex").lower() != "binary":
+        seconds += 10 * 60
+    return max(0, int(round((created_at + timedelta(seconds=seconds) - datetime.now()).total_seconds())))
+
+def serialize_user_analysis(row: Dict[str, Any]) -> Dict[str, Any]:
+    item = dict(row or {})
+    for key in ("raw_data", "news_data"):
+        if isinstance(item.get(key), str):
+            try:
+                item[key] = json.loads(item[key])
+            except Exception:
+                item[key] = {}
+    created_at = item.get("created_at")
+    closed_at = item.get("closed_at")
+    if hasattr(created_at, "isoformat"):
+        item["created_at"] = created_at.isoformat()
+    if hasattr(closed_at, "isoformat"):
+        item["closed_at"] = closed_at.isoformat()
+    item["remaining_seconds"] = get_analysis_remaining_seconds(row)
+    return item
+
+async def settle_user_analysis_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    analysis_id = int(row.get("id") or 0)
+    if not analysis_id:
+        raise HTTPException(status_code=400, detail="Analysis id is required")
+    raw = row.get("raw_data")
+    try:
+        raw_data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except Exception:
+        raw_data = {}
+    try:
+        entry_price = float(row.get("entry_price") or raw_data.get("price") or raw_data.get("entry_price") or 0)
+    except (TypeError, ValueError):
+        entry_price = 0.0
+    recommendation = str(raw_data.get("recommendation") or raw_data.get("signal") or "").strip().upper()
+    market_kind = row.get("market_kind") or raw_data.get("market_kind") or "forex"
+    pair = row.get("pair") or raw_data.get("symbol") or ""
+    exit_price = await fetch_binary_quote_price(market_kind, pair)
+    status = "skipped"
+    if entry_price > 0 and exit_price and exit_price > 0 and recommendation in ("BUY", "SELL"):
+        if recommendation == "BUY":
+            status = "success" if exit_price > entry_price else "fail" if exit_price < entry_price else "skipped"
+        if recommendation == "SELL":
+            status = "success" if exit_price < entry_price else "fail" if exit_price > entry_price else "skipped"
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                UPDATE user_analyses
+                SET status = %s, exit_price = %s, closed_at = NOW()
+                WHERE id = %s AND user_id = %s
+                """,
+                (status, float(exit_price or 0), analysis_id, int(row.get("user_id") or 0)),
+            )
+            await cur.execute(
+                """
+                SELECT a.id, a.user_id, a.pair, a.timeframe, a.strategy_id, a.analysis_type,
+                       a.market_kind, a.entry_price, a.exit_price, a.raw_data, a.news_data,
+                       a.status, a.created_at, a.closed_at, p.name as strategy_name
+                FROM user_analyses a
+                LEFT JOIN presets p ON a.strategy_id = p.id
+                WHERE a.id = %s
+                LIMIT 1
+                """,
+                (analysis_id,),
+            )
+            updated = await cur.fetchone()
+    return serialize_user_analysis(updated or row)
+
 async def analysis_producer():
     print("[Worker] Producer started...")
     while True:
@@ -1530,9 +1749,10 @@ async def analysis_producer():
                 async with db_pool.acquire() as conn:
                     async with conn.cursor(aiomysql.DictCursor) as cur:
                         await cur.execute("""
-                            SELECT id, pair, timeframe, created_at, raw_data 
-                            FROM user_analyses 
-                            WHERE status = 'active' AND created_at < NOW() - INTERVAL 5 MINUTE
+                            SELECT id, user_id, pair, timeframe, analysis_type, market_kind,
+                                   entry_price, created_at, raw_data
+                            FROM user_analyses
+                            WHERE status = 'active'
                         """)
                         rows = await cur.fetchall()
 
@@ -1549,8 +1769,10 @@ async def analysis_producer():
                         except:
                             continue
 
-                    tf_mins = parse_timeframe_mins(row['timeframe'])
-                    expiration_time = created_at + timedelta(minutes=tf_mins + 10)
+                    tf_seconds = parse_timeframe_seconds(row['timeframe'])
+                    if str(row.get("analysis_type") or "forex").lower() != "binary":
+                        tf_seconds += 10 * 60
+                    expiration_time = created_at + timedelta(seconds=tf_seconds)
 
                     if now >= expiration_time:
                         processing_ids.add(a_id)
@@ -1583,18 +1805,23 @@ async def analysis_consumer():
                             a_id = row['id']
                             symbol = row['pair']
                             raw_data = row['raw_data']
+                            analysis_type = str(row.get("analysis_type") or "forex").lower()
                             
                             try:
                                 raw = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
-                                orig_price = float(raw.get('price', 0))
-                                rec = raw.get('recommendation')
+                                orig_price = float(row.get("entry_price") or raw.get('price', 0) or raw.get("entry_price", 0))
+                                rec = str(raw.get('recommendation') or raw.get("signal") or "").strip().upper()
                             except:
                                 orig_price, rec = 0, None
                                 
                             new_status = 'skipped'
+                            current_price = None
                             
                             if orig_price > 0 and rec in ['BUY', 'SELL']:
-                                current_price = await get_price_for_symbol(client, symbol, token)
+                                if analysis_type == "binary":
+                                    current_price = await fetch_binary_quote_price(row.get("market_kind") or raw.get("market_kind") or "forex", symbol)
+                                else:
+                                    current_price = await get_price_for_symbol(client, symbol, token)
                                 
                                 if current_price is not None:
                                     if rec == 'BUY':
@@ -1604,7 +1831,10 @@ async def analysis_consumer():
                                         if current_price < orig_price: new_status = 'success'
                                         elif current_price > orig_price: new_status = 'fail'
                             
-                            await cur.execute("UPDATE user_analyses SET status = %s WHERE id = %s", (new_status, a_id))
+                            await cur.execute(
+                                "UPDATE user_analyses SET status = %s, exit_price = %s, closed_at = NOW() WHERE id = %s",
+                                (new_status, float(current_price) if current_price is not None else None, a_id),
+                            )
                             
                             processing_ids.discard(a_id)
                             analysis_queue.task_done()
@@ -1777,24 +2007,221 @@ async def update_mode(request: Request, user=Depends(get_telegram_user)):
         return {"status": "success", "mode": new_mode}
     return {"error": "Invalid data"}
 
-@app.get("/api/pairs/forex")
-async def get_forex_pairs(user=Depends(get_telegram_user)):
+def normalize_market_kind(kind: str) -> str:
+    raw = str(kind or "").strip().lower()
+    if raw in MARKET_KIND_CONFIG:
+        return raw
+    if raw in MARKET_KIND_ALIASES:
+        return MARKET_KIND_ALIASES[raw]
+    return "otc" if raw == "otc" else "forex"
+
+
+def extract_market_rows(payload: Any) -> List[Any]:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in ("pairs", "data", "items", "results", "assets", "symbols", "instruments"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            nested = extract_market_rows(value)
+            if nested:
+                return nested
+    return []
+
+
+def market_pair_label(row: Dict[str, Any]) -> str:
+    direct = (
+        row.get("pair")
+        or row.get("name")
+        or row.get("label")
+        or row.get("asset")
+        or row.get("display_name")
+        or row.get("display")
+        or row.get("title")
+        or row.get("ticker")
+        or row.get("symbol")
+    )
+    label = str(direct or "").strip()
+    if label:
+        return label
+    base = str(row.get("base") or row.get("base_asset") or row.get("currency_base") or "").strip()
+    quote = str(row.get("quote") or row.get("quote_asset") or row.get("currency_quote") or "").strip()
+    return f"{base}/{quote}" if base and quote else ""
+
+
+def normalize_market_symbol(value: str) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .upper()
+        .replace(" ", "")
+        .replace("/", "")
+        .replace("-", "")
+        .replace("_", "")
+    )
+
+
+def normalize_market_pairs(payload: Any) -> List[Dict[str, Any]]:
+    normalized = []
+    seen = set()
+    for row in extract_market_rows(payload):
+        if not isinstance(row, dict):
+            continue
+        pair = market_pair_label(row)
+        symbol = normalize_market_symbol(row.get("symbol") or row.get("ticker") or row.get("code") or row.get("asset") or pair)
+        if not pair or not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        payout_raw = row.get("payout")
+        if payout_raw is None:
+            payout_raw = row.get("profit", row.get("percent"))
+        try:
+            payout = int(float(payout_raw)) if payout_raw is not None else None
+        except (TypeError, ValueError):
+            payout = None
+        normalized.append({"pair": pair, "payout": payout})
+    return sorted(normalized, key=lambda item: (item["payout"] is None, -(item["payout"] or 0), item["pair"]))
+
+
+def parse_expiration_options(raw_value: str) -> List[Dict[str, str]]:
+    values = []
+    seen = set()
+    for item in str(raw_value or "").replace(";", ",").split(","):
+        value = item.strip().lower()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        values.append({"value": value, "label": value})
+    return values
+
+
+def merge_expiration_options(*groups: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    merged = []
+    seen = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or item.get("label") or "").strip().lower()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            merged.append({"value": value, "label": str(item.get("label") or value)})
+    return merged or parse_expiration_options(BINARY_EXPIRATION_OPTIONS)
+
+
+async def fetch_devsbite_market_pairs(kind: str, min_payout: int) -> List[Dict[str, Any]]:
     token = os.getenv("DEVSBITE_TOKEN")
-    url = "https://api.devsbite.com/pairs/forex?min_payout=34"
+    if not token:
+        return []
+    market_kind = normalize_market_kind(kind)
+    pair_path = MARKET_KIND_CONFIG.get(market_kind, MARKET_KIND_CONFIG["forex"])["path"]
+    url = f"{DEVSBITE_API_BASE_URL}/pairs/{pair_path}"
     headers = {
         "accept": "application/json",
-        "X-Client-Token": token
+        "X-Client-Token": token,
+        "Cache-Control": "no-cache",
     }
+    params = {"min_payout": max(int(min_payout or 0), 0)}
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, headers=headers)
+            response = await client.get(url, headers=headers, params=params, timeout=12.0)
+            response.raise_for_status()
+            return normalize_market_pairs(response.json())
+        except Exception:
+            return []
+
+
+async def fetch_binary_expiration_options() -> List[Dict[str, str]]:
+    defaults = parse_expiration_options(BINARY_EXPIRATION_OPTIONS)
+    token = os.getenv("DEVSBITE_TOKEN")
+    if not token or not DEVSBITE_EXPIRATIONS_URL:
+        return defaults
+    headers = {
+        "accept": "application/json",
+        "X-Client-Token": token,
+        "Cache-Control": "no-cache",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(DEVSBITE_EXPIRATIONS_URL, headers=headers, timeout=10.0)
             response.raise_for_status()
             data = response.json()
-            if "pairs" in data:
-                data["pairs"] = sorted(data["pairs"], key=lambda x: x["payout"], reverse=True)
-            return data
-        except Exception as e:
-            return {"error": str(e), "pairs": []}
+    except Exception:
+        return defaults
+    if isinstance(data, dict):
+        raw_values = data.get("expirations") or data.get("items") or data.get("data") or []
+    elif isinstance(data, list):
+        raw_values = data
+    else:
+        raw_values = []
+    parsed = []
+    for item in raw_values:
+        if isinstance(item, dict):
+            value = item.get("value") or item.get("label") or item.get("expiration") or item.get("time")
+            label = item.get("label") or value
+            if value:
+                parsed.append({"value": str(value).strip().lower(), "label": str(label).strip()})
+        else:
+            value = str(item or "").strip().lower()
+            if value:
+                parsed.append({"value": value, "label": value})
+    return merge_expiration_options(defaults, parsed)
+
+
+async def get_market_options_payload(kind: str, min_payout: int) -> Dict[str, Any]:
+    market_kind = normalize_market_kind(kind)
+    pairs = await fetch_devsbite_market_pairs(market_kind, min_payout)
+    expirations = await fetch_binary_expiration_options()
+    return {
+        "kind": market_kind,
+        "market_title": MARKET_KIND_CONFIG.get(market_kind, MARKET_KIND_CONFIG["forex"])["title"],
+        "available_markets": [{"key": key, "title": value["title"]} for key, value in MARKET_KIND_CONFIG.items()],
+        "pairs": pairs,
+        "expirations": expirations,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@app.get("/api/market/options")
+async def get_market_options(
+    kind: str = Query(default="forex"),
+    min_payout: int = Query(default=DEVSBITE_MIN_PAYOUT, ge=0, le=100),
+    user=Depends(get_telegram_user),
+):
+    return await get_market_options_payload(kind, min_payout)
+
+
+@app.get("/api/pairs/forex")
+async def get_forex_pairs(user=Depends(get_telegram_user)):
+    payload = await get_market_options_payload("forex", DEVSBITE_MIN_PAYOUT)
+    return {"pairs": payload["pairs"]}
+
+
+@app.get("/api/pairs/otc")
+async def get_otc_pairs(user=Depends(get_telegram_user)):
+    payload = await get_market_options_payload("otc", DEVSBITE_MIN_PAYOUT)
+    return {"pairs": payload["pairs"]}
+
+
+@app.get("/api/pairs")
+async def get_pairs_by_kind(kind: str = Query(default="forex"), user=Depends(get_telegram_user)):
+    payload = await get_market_options_payload(kind, DEVSBITE_MIN_PAYOUT)
+    return {
+        "kind": payload["kind"],
+        "market_title": payload["market_title"],
+        "pairs": payload["pairs"],
+    }
+
+
+@app.get("/api/expirations")
+async def get_expiration_options(user=Depends(get_telegram_user)):
+    return {"expirations": await fetch_binary_expiration_options()}
             
 @app.get("/api/pairs/commodity")
 async def get_commodity_pairs(user=Depends(get_telegram_user)):
@@ -1836,20 +2263,17 @@ async def get_active_analyses(user=Depends(get_telegram_user)):
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("""
-                SELECT a.id, a.pair, a.timeframe, a.strategy_id, a.raw_data, a.news_data, a.created_at, p.name as strategy_name
+                SELECT a.id, a.user_id, a.pair, a.timeframe, a.strategy_id, a.analysis_type,
+                       a.market_kind, a.entry_price, a.exit_price, a.raw_data, a.news_data,
+                       a.status, a.created_at, a.closed_at, p.name as strategy_name
                 FROM user_analyses a
                 LEFT JOIN presets p ON a.strategy_id = p.id
                 WHERE a.user_id = %s AND a.status = 'active'
                 ORDER BY a.created_at DESC
             """, (user_id,))
             analyses = await cur.fetchall()
-            
-            for a in analyses:
-                if isinstance(a['raw_data'], str):
-                    a['raw_data'] = json.loads(a['raw_data'])
-                if a.get('news_data') and isinstance(a['news_data'], str):
-                    a['news_data'] = json.loads(a['news_data'])
-                    
+            analyses = [serialize_user_analysis(a) for a in analyses]
+
     return {"analyses": analyses}
 
 @app.get("/api/analysis/history")
@@ -1868,7 +2292,9 @@ async def get_analysis_history(
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(f"""
-                SELECT a.id, a.pair, a.timeframe, a.status, a.created_at, a.strategy_id, p.name as strategy_name, p.public_winrate
+                SELECT a.id, a.pair, a.timeframe, a.status, a.created_at, a.closed_at,
+                       a.analysis_type, a.market_kind, a.entry_price, a.exit_price,
+                       a.strategy_id, p.name as strategy_name, p.public_winrate
                 FROM user_analyses a
                 LEFT JOIN presets p ON a.strategy_id = p.id
                 WHERE {where_clause}
@@ -1948,6 +2374,187 @@ async def fetch_news_data():
 @app.get("/api/news")
 async def get_news(user=Depends(get_telegram_user)):
     return await fetch_news_data()
+
+@app.post("/api/analysis/binary")
+async def create_binary_analysis(request: Request, user=Depends(get_telegram_user)):
+    data = await request.json()
+    user_id = int(user["user_id"])
+    pair = str(data.get("pair") or "").strip()
+    interval_raw = str(data.get("exp") or "1m").strip().lower()
+    market_kind = normalize_market_kind(data.get("market") or data.get("market_kind") or "forex")
+    strategy_id = data.get("strategy_id")
+    try:
+        strategy_id_int = int(strategy_id) if strategy_id is not None and str(strategy_id).strip() else None
+    except (TypeError, ValueError):
+        strategy_id_int = None
+    if strategy_id_int is None:
+        strategy_id_int = await get_user_strategy_id(user_id)
+    allowed_indicators = data.get("allowed_indicators", [])
+    if not isinstance(allowed_indicators, list):
+        allowed_indicators = []
+    if not pair:
+        raise HTTPException(status_code=400, detail="Pair is required")
+
+    analysis_interval = binary_interval_for_analysis(interval_raw)
+    formatted_pair = format_pair_for_advanced_analysis(pair)
+    token = os.getenv("DEVSBITE_TOKEN")
+    url = (os.getenv("ANALYSIS_GATEWAY_URL") or "https://api.devsbite.com/analysis/advanced").strip()
+    headers = {"accept": "application/json", "Content-Type": "application/json"}
+    if token:
+        headers["X-Client-Token"] = token
+    payload = {
+        "symbol": formatted_pair,
+        "interval": analysis_interval,
+        "allowed_indicators": allowed_indicators,
+        "exchange": data.get("exchange"),
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(url, headers=headers, json=payload, timeout=20.0)
+            resp.raise_for_status()
+            upstream_data = resp.json()
+            baseline_analysis_data = compute_analysis_decision(
+                upstream_data,
+                symbol=formatted_pair,
+                interval=analysis_interval,
+                allowed_indicators=allowed_indicators,
+            )
+            analysis_settings = await get_admin_analysis_settings()
+            if analysis_settings.get("engine") == "gpt":
+                if not analysis_settings.get("gpt_api_key"):
+                    return {"error": "Analysis is temporarily unavailable. Please try again later."}
+                strategy_context = await get_strategy_context(strategy_id_int)
+                try:
+                    analysis_data = await analysis_ai_service.generate_gpt_analysis(
+                        api_key=analysis_settings.get("gpt_api_key") or "",
+                        model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
+                        prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
+                        raw_payload=upstream_data,
+                        symbol=formatted_pair,
+                        interval=analysis_interval,
+                        allowed_indicators=allowed_indicators,
+                        strategy=strategy_context,
+                        baseline_analysis=baseline_analysis_data,
+                    )
+                except Exception as e:
+                    print(f"GPT binary analysis error: {e}")
+                    return {"error": "Analysis is temporarily unavailable. Please try again later."}
+            else:
+                analysis_data = baseline_analysis_data
+            analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
+            stream_override = await resolve_stream_override(strategy_id_int)
+            if stream_override:
+                analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
+            analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
+            analysis_data = enforce_binary_signal(analysis_data)
+            recommendation = str(analysis_data.get("recommendation") or analysis_data.get("signal") or "").strip().upper()
+            if recommendation not in ("BUY", "SELL"):
+                return {"error": "Market is neutral right now. Try another pair or expiration."}
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text
+            print(f"BINARY ANALYSIS GATEWAY ERROR [{e.response.status_code}]: {error_text} (Payload: {payload})")
+            return {"error": f"API Error: {error_text}"}
+        except ValueError as e:
+            return {"error": f"Analysis parse error: {str(e)}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    entry_price = None
+    for key in ("price", "entry_price"):
+        try:
+            value = float(analysis_data.get(key))
+            if value > 0:
+                entry_price = value
+                break
+        except (TypeError, ValueError):
+            pass
+    if not entry_price:
+        entry_price = await fetch_binary_quote_price(market_kind, pair)
+    if entry_price:
+        analysis_data["price"] = float(entry_price)
+        analysis_data["entry_price"] = float(entry_price)
+    else:
+        return {"error": "Live price is unavailable right now. Try another pair or expiration."}
+    analysis_data["symbol"] = pair
+    analysis_data["market_kind"] = market_kind
+    analysis_data["selected_expiration"] = interval_raw
+    analysis_data["analysis_interval"] = analysis_interval
+    analysis_data["fetched_at"] = datetime.utcnow().isoformat() + "Z"
+    news_data = await fetch_news_data()
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                INSERT INTO user_analyses (
+                    user_id, pair, timeframe, strategy_id, analysis_type, market_kind,
+                    entry_price, raw_data, news_data, status
+                )
+                VALUES (%s, %s, %s, %s, 'binary', %s, %s, %s, %s, 'active')
+                """,
+                (
+                    user_id,
+                    pair,
+                    interval_raw,
+                    strategy_id_int,
+                    market_kind,
+                    float(entry_price or 0) if entry_price else None,
+                    json.dumps(analysis_data, ensure_ascii=False),
+                    json.dumps(news_data, ensure_ascii=False),
+                ),
+            )
+            analysis_id = int(cur.lastrowid or 0)
+            await cur.execute(
+                """
+                SELECT a.id, a.user_id, a.pair, a.timeframe, a.strategy_id, a.analysis_type,
+                       a.market_kind, a.entry_price, a.exit_price, a.raw_data, a.news_data,
+                       a.status, a.created_at, a.closed_at, p.name as strategy_name
+                FROM user_analyses a
+                LEFT JOIN presets p ON a.strategy_id = p.id
+                WHERE a.id = %s
+                LIMIT 1
+                """,
+                (analysis_id,),
+            )
+            row = await cur.fetchone()
+
+    return {
+        "status": "success",
+        "analysis_id": analysis_id,
+        "data": analysis_data,
+        "news_data": news_data,
+        "analysis": serialize_user_analysis(row or {}),
+    }
+
+@app.post("/api/analysis/settle")
+async def settle_analysis_now(request: Request, user=Depends(get_telegram_user)):
+    data = await request.json()
+    analysis_id = int(data.get("analysis_id") or 0)
+    user_id = int(user["user_id"])
+    if not analysis_id:
+        raise HTTPException(status_code=400, detail="Analysis id is required")
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT a.id, a.user_id, a.pair, a.timeframe, a.strategy_id, a.analysis_type,
+                       a.market_kind, a.entry_price, a.exit_price, a.raw_data, a.news_data,
+                       a.status, a.created_at, a.closed_at, p.name as strategy_name
+                FROM user_analyses a
+                LEFT JOIN presets p ON a.strategy_id = p.id
+                WHERE a.id = %s AND a.user_id = %s
+                LIMIT 1
+                """,
+                (analysis_id, user_id),
+            )
+            row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if row.get("status") != "active":
+        return {"status": "success", "analysis": serialize_user_analysis(row)}
+    updated = await settle_user_analysis_row(row)
+    return {"status": "success", "analysis": updated}
     
 @app.post("/api/analysis/forex")
 async def create_forex_analysis(request: Request, user=Depends(get_telegram_user)):

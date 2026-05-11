@@ -133,9 +133,14 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     pair VARCHAR(64) NOT NULL,
                     timeframe VARCHAR(16) NOT NULL,
                     strategy_id BIGINT NULL,
+                    analysis_type VARCHAR(16) NOT NULL DEFAULT 'forex',
+                    market_kind VARCHAR(32) NULL,
+                    entry_price DOUBLE NULL,
+                    exit_price DOUBLE NULL,
                     raw_data LONGTEXT NULL,
                     news_data LONGTEXT NULL,
                     status VARCHAR(16) NOT NULL DEFAULT 'active',
+                    closed_at TIMESTAMP NULL DEFAULT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -276,6 +281,34 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             conn,
             db_name,
             "user_analyses",
+            "analysis_type",
+            "ALTER TABLE user_analyses ADD COLUMN analysis_type VARCHAR(16) NOT NULL DEFAULT 'forex'",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "user_analyses",
+            "market_kind",
+            "ALTER TABLE user_analyses ADD COLUMN market_kind VARCHAR(32) NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "user_analyses",
+            "entry_price",
+            "ALTER TABLE user_analyses ADD COLUMN entry_price DOUBLE NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "user_analyses",
+            "exit_price",
+            "ALTER TABLE user_analyses ADD COLUMN exit_price DOUBLE NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "user_analyses",
             "status",
             "ALTER TABLE user_analyses ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active'",
         )
@@ -285,6 +318,13 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             "user_analyses",
             "updated_at",
             "ALTER TABLE user_analyses ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "user_analyses",
+            "closed_at",
+            "ALTER TABLE user_analyses ADD COLUMN closed_at TIMESTAMP NULL DEFAULT NULL",
         )
 
         await _ensure_column(conn, db_name, "ai_chats", "title", "ALTER TABLE ai_chats ADD COLUMN title VARCHAR(255) NOT NULL DEFAULT 'New Chat'")
@@ -405,6 +445,13 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             "user_analyses",
             "idx_user_analyses_user_status_created",
             "CREATE INDEX idx_user_analyses_user_status_created ON user_analyses(user_id, status, created_at)",
+        )
+        await _ensure_index(
+            conn,
+            db_name,
+            "user_analyses",
+            "idx_user_analyses_type_status_created",
+            "CREATE INDEX idx_user_analyses_type_status_created ON user_analyses(analysis_type, status, created_at)",
         )
         await _ensure_index(
             conn,
