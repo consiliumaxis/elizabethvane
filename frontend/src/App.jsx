@@ -245,7 +245,7 @@ function App() {
     : Math.max(contentAreaTop + 56, safeAreaTop + 98);
 
   const isChatPage = currentPage === 'chatAI';
-  const bottomPadding = isChatPage ? 86 : 106;
+  const bottomPadding = 106;
 
   if (!isTgWebApp) return <OpenViaBot botUsername={botUsername} />;
   if (adminMode) {
@@ -474,7 +474,9 @@ function App() {
         className="main-content"
         style={{
           paddingTop: `${mainPaddingTop}px`,
-          paddingBottom: `calc(${bottomPadding}px + env(safe-area-inset-bottom))`
+          paddingBottom: isChatPage
+            ? 'calc(var(--app-bottom-overlay-height, 54px) + 18px)'
+            : `calc(${bottomPadding}px + env(safe-area-inset-bottom))`
         }}
       >
         {renderContent()}
