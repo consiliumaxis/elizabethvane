@@ -346,6 +346,7 @@ function App() {
             binaryParams={binaryParams}
             setBinaryParams={setBinaryParams}
             onGoHome={handleGoHome}
+            onUpdateStrategy={handleUpdateStrategy}
             setBackHandler={setBackHandler}
             user={user}
             strategies={strategies}

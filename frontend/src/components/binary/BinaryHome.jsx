@@ -27,10 +27,6 @@ export default function BinaryHome({ t: globalT, onStartSignal }) {
           {t.cta}
         </button>
       </div>
-
-      <div className="disclaimer-box">
-        <p>{t.disclaimer}</p>
-      </div>
     </div>
   );
 }

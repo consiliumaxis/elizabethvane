@@ -347,17 +347,6 @@
   letter-spacing: 0.08em;
 }
 
-.binary-signal-hero small {
-  color: #d9c58a;
-  font-size: 0.78rem;
-}
-
-.binary-levels-list {
-  border-top: 1px dashed rgba(212, 175, 55, 0.3);
-  margin-top: 10px;
-  padding-top: 10px;
-}
-
 .binary-result-card {
   display: flex;
   align-items: center;
@@ -438,20 +427,6 @@
 .sig-buy { color: #2ecc71; }
 .sig-sell { color: #e74c3c; }
 .sig-neutral { color: #f1c40f; }
-
-.levels-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px; 
-}
-.level-row {
-  display: flex;
-  justify-content: space-between;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  padding-bottom: 4px;
-}
-.level-label { color: #aaa; font-size: 0.8rem; } 
-.level-val { color: #D4AF37; font-weight: bold; font-family: 'Fira Code', monospace; font-size: 0.85rem;}
 
 .timer-box {
   text-align: center;
