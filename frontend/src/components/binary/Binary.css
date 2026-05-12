@@ -51,17 +51,8 @@
   box-shadow: 0 2px 10px rgba(212, 175, 55, 0.2);
 }
 
-.lottie-animation-wrapper { 
-    margin-bottom: 10px; 
-    display: flex; 
-    justify-content: center; 
-}
-
-.disclaimer-box { 
-    font-size: 10px; 
-    color: #888; 
-    text-align: center; 
-    margin-top: 30px; 
-    padding: 10px; 
-    border-top: 1px solid #333; 
+.lottie-animation-wrapper {
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: center;
 }

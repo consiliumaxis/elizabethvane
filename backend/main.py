@@ -1579,7 +1579,137 @@ def extract_price_from_payload(payload: Any) -> Optional[float]:
 def normalize_binary_quote_symbol(symbol: str) -> str:
     return str(symbol or "").strip()
 
-async def fetch_binary_quote_payload(category: str, symbol: str, history_seconds: int = 300) -> Dict[str, Any]:
+def extract_quote_ohlc_rows(payload: Any) -> List[Dict[str, float]]:
+    rows: List[Dict[str, float]] = []
+
+    def as_float(value: Any) -> Optional[float]:
+        try:
+            parsed = float(value)
+            return parsed if parsed > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def walk(node: Any) -> None:
+        if rows or not isinstance(node, dict):
+            return
+        for key in ("candles", "history", "points", "ticks", "data", "values"):
+            value = node.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    if not isinstance(item, dict):
+                        continue
+                    close = as_float(item.get("close") or item.get("price") or item.get("value") or item.get("last"))
+                    if close is None:
+                        continue
+                    high = as_float(item.get("high")) or close
+                    low = as_float(item.get("low")) or close
+                    rows.append({"high": high, "low": low, "close": close})
+                if rows:
+                    return
+            elif isinstance(value, dict):
+                walk(value)
+                if rows:
+                    return
+        nested = node.get("snapshot")
+        if isinstance(nested, dict):
+            walk(nested)
+
+    walk(payload)
+    return rows
+
+def calculate_ema_values(values: List[float], period: int) -> List[float]:
+    if not values:
+        return []
+    alpha = 2 / (period + 1)
+    ema = values[0]
+    result = [ema]
+    for value in values[1:]:
+        ema = (value * alpha) + (ema * (1 - alpha))
+        result.append(ema)
+    return result
+
+def calculate_binary_quote_indicators(candles: List[Dict[str, float]], price: float) -> Dict[str, Any]:
+    closes = [float(item["close"]) for item in candles if item.get("close")]
+    highs = [float(item["high"]) for item in candles if item.get("high")]
+    lows = [float(item["low"]) for item in candles if item.get("low")]
+    indicators: Dict[str, Any] = {}
+    if len(closes) < 2:
+        return indicators
+
+    def last_ema(period: int) -> Optional[float]:
+        source = closes[-max(period * 3, period):]
+        if len(source) < 2:
+            return None
+        return calculate_ema_values(source, period)[-1]
+
+    ema9 = last_ema(9)
+    ema21 = last_ema(21)
+    ema50 = last_ema(50) or (sum(closes[-50:]) / min(len(closes), 50))
+    ema200 = last_ema(200) or (sum(closes) / len(closes))
+    indicators["EMA9"] = {"ema": ema9 or price}
+    indicators["EMA21"] = {"ema": ema21 or ema50}
+    indicators["EMA50"] = {"ema": ema50}
+    indicators["EMA200"] = {"ema": ema200}
+
+    gains: List[float] = []
+    losses: List[float] = []
+    for current, previous in zip(closes[-15:], closes[-16:-1]):
+        delta = current - previous
+        gains.append(max(delta, 0))
+        losses.append(abs(min(delta, 0)))
+    if gains and losses:
+        avg_gain = sum(gains) / len(gains)
+        avg_loss = sum(losses) / len(losses)
+        rsi = 100.0 if avg_loss == 0 else 100 - (100 / (1 + (avg_gain / avg_loss)))
+        indicators["RSI"] = {"rsi": rsi}
+
+    macd_fast = calculate_ema_values(closes[-80:], 12)
+    macd_slow = calculate_ema_values(closes[-80:], 26)
+    if macd_fast and macd_slow:
+        macd_line_series = [fast - slow for fast, slow in zip(macd_fast[-len(macd_slow):], macd_slow)]
+        signal_series = calculate_ema_values(macd_line_series, 9)
+        if macd_line_series and signal_series:
+            indicators["MACD"] = {"macd": macd_line_series[-1], "macd_signal": signal_series[-1]}
+
+    if len(highs) >= 14 and len(lows) >= 14 and len(closes) >= 14:
+        recent_high = max(highs[-14:])
+        recent_low = min(lows[-14:])
+        if recent_high > recent_low:
+            k = ((price - recent_low) / (recent_high - recent_low)) * 100
+            prev_closes = closes[-17:-2] if len(closes) >= 17 else closes[:-1]
+            d_values = []
+            for idx in range(max(0, len(prev_closes) - 3), len(prev_closes)):
+                window_high = max(highs[max(0, idx - 13):idx + 1] or [recent_high])
+                window_low = min(lows[max(0, idx - 13):idx + 1] or [recent_low])
+                close_value = prev_closes[idx] if idx < len(prev_closes) else price
+                if window_high > window_low:
+                    d_values.append(((close_value - window_low) / (window_high - window_low)) * 100)
+            indicators["STOCH"] = {"slow_k": k, "slow_d": (sum(d_values) / len(d_values)) if d_values else k}
+
+    if len(closes) >= 20:
+        window = closes[-20:]
+        middle = sum(window) / len(window)
+        variance = sum((value - middle) ** 2 for value in window) / len(window)
+        deviation = variance ** 0.5
+        indicators["BB"] = {"lower_band": middle - 2 * deviation, "upper_band": middle + 2 * deviation}
+
+    true_ranges = []
+    for index in range(1, len(candles)):
+        high = float(candles[index]["high"])
+        low = float(candles[index]["low"])
+        prev_close = float(candles[index - 1]["close"])
+        true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+    if true_ranges:
+        indicators["ATR"] = {"atr": sum(true_ranges[-14:]) / min(len(true_ranges), 14)}
+
+    return indicators
+
+async def fetch_binary_quote_payload(
+    category: str,
+    symbol: str,
+    history_seconds: int = 300,
+    prefer_history: bool = False,
+) -> Dict[str, Any]:
     token = DEVSBITE_CLIENT_TOKEN or os.getenv("DEVSBITE_TOKEN") or ""
     if not token:
         return {}
@@ -1595,26 +1725,34 @@ async def fetch_binary_quote_payload(category: str, symbol: str, history_seconds
         "symbol": normalized_symbol,
     }
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(f"{DEVSBITE_API_BASE_URL}/quotes/price", headers=headers, params=params, timeout=10.0)
-            response.raise_for_status()
-            payload = response.json()
-            if extract_price_from_payload(payload):
+        async def request_price() -> Dict[str, Any]:
+            try:
+                response = await client.get(f"{DEVSBITE_API_BASE_URL}/quotes/price", headers=headers, params=params, timeout=10.0)
+                response.raise_for_status()
+                payload = response.json()
                 return payload if isinstance(payload, dict) else {}
-        except Exception:
-            pass
-        try:
-            response = await client.get(
-                f"{DEVSBITE_API_BASE_URL}/quotes/quote",
-                headers=headers,
-                params={**params, "history_seconds": max(int(history_seconds or 300), 60)},
-                timeout=12.0,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return payload if isinstance(payload, dict) else {}
-        except Exception:
-            return {}
+            except Exception:
+                return {}
+
+        async def request_history() -> Dict[str, Any]:
+            try:
+                response = await client.get(
+                    f"{DEVSBITE_API_BASE_URL}/quotes/quote",
+                    headers=headers,
+                    params={**params, "history_seconds": max(int(history_seconds or 300), 60)},
+                    timeout=12.0,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload if isinstance(payload, dict) else {}
+            except Exception:
+                return {}
+
+        first = await (request_history() if prefer_history else request_price())
+        if first and (extract_price_from_payload(first) or extract_quote_ohlc_rows(first)):
+            return first
+        second = await (request_price() if prefer_history else request_history())
+        return second if isinstance(second, dict) else {}
 
 async def fetch_binary_quote_price(category: str, symbol: str) -> Optional[float]:
     payload = await fetch_binary_quote_payload(category, symbol, 300)
@@ -1641,6 +1779,49 @@ def format_pair_for_advanced_analysis(pair: str) -> str:
     if len(compact) == 6 and compact.isalpha():
         return f"{compact[:3]}/{compact[3:]}"
     return raw
+
+async def build_quote_based_binary_analysis(
+    market_kind: str,
+    pair: str,
+    interval: str,
+    allowed_indicators: List[str],
+) -> Dict[str, Any]:
+    history_seconds = max(300, min(parse_timeframe_seconds(interval) * 120, 86400))
+    quote_payload = await fetch_binary_quote_payload(market_kind, pair, history_seconds, prefer_history=True)
+    price = extract_price_from_payload(quote_payload)
+    if not price:
+        raise ValueError("Live price is unavailable")
+    candles = extract_quote_ohlc_rows(quote_payload)
+    indicators = calculate_binary_quote_indicators(candles, float(price))
+    raw_payload = {
+        "ok": True,
+        "symbol": pair,
+        "interval": binary_interval_for_analysis(interval),
+        "price": float(price),
+        "indicators": indicators,
+        "candles": candles,
+        "session": {"multiplier": 1.0, "reason": f"quote_{market_kind}"},
+        "quote_payload": quote_payload,
+    }
+    analysis_data = compute_analysis_decision(
+        raw_payload,
+        symbol=pair,
+        interval=binary_interval_for_analysis(interval),
+        allowed_indicators=allowed_indicators,
+    )
+    if (
+        str(analysis_data.get("recommendation") or "").upper() == "NEUTRAL"
+        and allowed_indicators
+        and not analysis_data.get("indicators")
+    ):
+        analysis_data = compute_analysis_decision(
+            raw_payload,
+            symbol=pair,
+            interval=binary_interval_for_analysis(interval),
+            allowed_indicators=[],
+        )
+    analysis_data["quote_source"] = "devsbite_quotes"
+    return analysis_data
 
 def enforce_binary_signal(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     indicators = analysis_data.get("indicators")
@@ -2409,14 +2590,71 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
         "exchange": data.get("exchange"),
     }
 
-    async with httpx.AsyncClient() as client:
+    if market_kind == "forex":
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.post(url, headers=headers, json=payload, timeout=20.0)
+                resp.raise_for_status()
+                upstream_data = resp.json()
+                baseline_analysis_data = compute_analysis_decision(
+                    upstream_data,
+                    symbol=formatted_pair,
+                    interval=analysis_interval,
+                    allowed_indicators=allowed_indicators,
+                )
+                analysis_settings = await get_admin_analysis_settings()
+                if analysis_settings.get("engine") == "gpt":
+                    if not analysis_settings.get("gpt_api_key"):
+                        return {"error": "Analysis is temporarily unavailable. Please try again later."}
+                    strategy_context = await get_strategy_context(strategy_id_int)
+                    try:
+                        analysis_data = await analysis_ai_service.generate_gpt_analysis(
+                            api_key=analysis_settings.get("gpt_api_key") or "",
+                            model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
+                            prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
+                            raw_payload=upstream_data,
+                            symbol=formatted_pair,
+                            interval=analysis_interval,
+                            allowed_indicators=allowed_indicators,
+                            strategy=strategy_context,
+                            baseline_analysis=baseline_analysis_data,
+                        )
+                    except Exception as e:
+                        print(f"GPT binary analysis error: {e}")
+                        return {"error": "Analysis is temporarily unavailable. Please try again later."}
+                else:
+                    analysis_data = baseline_analysis_data
+            except httpx.HTTPStatusError as e:
+                error_text = e.response.text
+                print(f"BINARY ANALYSIS GATEWAY ERROR [{e.response.status_code}]: {error_text} (Payload: {payload})")
+                return {"error": f"API Error: {error_text}"}
+            except ValueError as e:
+                return {"error": f"Analysis parse error: {str(e)}"}
+            except Exception as e:
+                return {"error": str(e)}
+    else:
         try:
-            resp = await client.post(url, headers=headers, json=payload, timeout=20.0)
-            resp.raise_for_status()
-            upstream_data = resp.json()
+            upstream_data = await fetch_binary_quote_payload(
+                market_kind,
+                pair,
+                max(300, min(parse_timeframe_seconds(interval_raw) * 120, 86400)),
+                prefer_history=True,
+            )
             baseline_analysis_data = compute_analysis_decision(
-                upstream_data,
-                symbol=formatted_pair,
+                {
+                    "ok": True,
+                    "symbol": pair,
+                    "interval": analysis_interval,
+                    "price": extract_price_from_payload(upstream_data),
+                    "indicators": calculate_binary_quote_indicators(
+                        extract_quote_ohlc_rows(upstream_data),
+                        float(extract_price_from_payload(upstream_data) or 0),
+                    ),
+                    "candles": extract_quote_ohlc_rows(upstream_data),
+                    "session": {"multiplier": 1.0, "reason": f"quote_{market_kind}"},
+                    "quote_payload": upstream_data,
+                },
+                symbol=pair,
                 interval=analysis_interval,
                 allowed_indicators=allowed_indicators,
             )
@@ -2431,7 +2669,7 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
                         model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
                         prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
                         raw_payload=upstream_data,
-                        symbol=formatted_pair,
+                        symbol=pair,
                         interval=analysis_interval,
                         allowed_indicators=allowed_indicators,
                         strategy=strategy_context,
@@ -2442,23 +2680,20 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
                     return {"error": "Analysis is temporarily unavailable. Please try again later."}
             else:
                 analysis_data = baseline_analysis_data
-            analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-            stream_override = await resolve_stream_override(strategy_id_int)
-            if stream_override:
-                analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
-            analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-            analysis_data = enforce_binary_signal(analysis_data)
-            recommendation = str(analysis_data.get("recommendation") or analysis_data.get("signal") or "").strip().upper()
-            if recommendation not in ("BUY", "SELL"):
-                return {"error": "Market is neutral right now. Try another pair or expiration."}
-        except httpx.HTTPStatusError as e:
-            error_text = e.response.text
-            print(f"BINARY ANALYSIS GATEWAY ERROR [{e.response.status_code}]: {error_text} (Payload: {payload})")
-            return {"error": f"API Error: {error_text}"}
         except ValueError as e:
             return {"error": f"Analysis parse error: {str(e)}"}
         except Exception as e:
             return {"error": str(e)}
+
+    analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
+    stream_override = await resolve_stream_override(strategy_id_int)
+    if stream_override:
+        analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
+    analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
+    analysis_data = enforce_binary_signal(analysis_data)
+    recommendation = str(analysis_data.get("recommendation") or analysis_data.get("signal") or "").strip().upper()
+    if recommendation not in ("BUY", "SELL"):
+        return {"error": "Market is neutral right now. Try another pair or expiration."}
 
     entry_price = None
     for key in ("price", "entry_price"):

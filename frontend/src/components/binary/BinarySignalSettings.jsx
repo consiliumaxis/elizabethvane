@@ -64,23 +64,17 @@ function formatPrice(value) {
   return parsed.toFixed(6);
 }
 
-function formatLevelValue(value) {
-  const parsed = Number(String(value ?? '').replace(',', '.'));
-  if (Number.isFinite(parsed)) return formatPrice(parsed);
-  return safeRender(value);
-}
-
 export default function BinarySignalSettings({
   t: globalT,
   binaryParams,
   setBinaryParams,
   onGoHome,
+  onUpdateStrategy,
   setBackHandler,
   user = {},
   strategies = []
 }) {
   const t = globalT.binarySettings;
-  const disclaimerText = globalT.binaryAnalytics.disclaimer;
 
   const [pairs, setPairs] = useState([]);
   const [availableMarkets, setAvailableMarkets] = useState(DEFAULT_MARKETS);
@@ -212,6 +206,13 @@ export default function BinarySignalSettings({
 
   const handleSelectExp = (expStr) => {
     setBinaryParams({ ...binaryParams, exp: expStr });
+    setEditMode(null);
+  };
+
+  const handleSelectStrategy = (strategyId) => {
+    if (onUpdateStrategy) {
+      onUpdateStrategy(strategyId);
+    }
     setEditMode(null);
   };
 
@@ -359,7 +360,6 @@ export default function BinarySignalSettings({
         <div className="binary-signal-hero">
           <span className="binary-signal-caption">Signal</span>
           <strong className={signalTone}>{signal}</strong>
-          <small>{safeRender(data.confidence, 0)}% confidence</small>
         </div>
 
         <div className="clean-analysis-card">
@@ -387,18 +387,6 @@ export default function BinarySignalSettings({
             </div>
           </div>
 
-          {data.key_levels && (
-            <div className="levels-list binary-levels-list">
-              <div className="level-row">
-                <span className="level-label">{globalT.analysisSettings?.conservativeSl || 'Conservative SL'}</span>
-                <span className="level-val">{formatLevelValue(data.key_levels.conservative_sl)}</span>
-              </div>
-              <div className="level-row">
-                <span className="level-label">{globalT.analysisSettings?.targetLabel || 'Target'}</span>
-                <span className="level-val">{formatLevelValue(data.key_levels.rr_2_1_target)}</span>
-              </div>
-            </div>
-          )}
         </div>
 
         <div className={`binary-result-card ${resultClass}`}>
@@ -431,9 +419,6 @@ export default function BinarySignalSettings({
           </button>
         </div>
 
-        <div className="disclaimer-box">
-          <p>{disclaimerText}</p>
-        </div>
       </div>
     );
   }
@@ -466,6 +451,7 @@ export default function BinarySignalSettings({
 
   const isSelectingPair = editMode === 'pair';
   const isSelectingExp = editMode === 'exp';
+  const isSelectingStrategy = editMode === 'strategy';
   const isShowingSummary = !editMode && binaryParams.pair && binaryParams.exp;
   const selectedMarketTitle = availableMarkets.find(m => m.key === (binaryParams.market || marketKind))?.title || marketKind.toUpperCase();
 
@@ -512,6 +498,24 @@ export default function BinarySignalSettings({
         </div>
       )}
 
+      {isSelectingStrategy && (
+        <div className="step-container fade-in">
+          <h3 className="settings-main-title">{globalT.analysisSettings?.selectStrategy || 'Select strategy'}</h3>
+          <div className="strategies-grid">
+            {strategies.map((strat) => (
+              <button
+                key={strat.id}
+                className={`strategy-item-btn ${Number(user.strategy_id) === Number(strat.id) ? 'active' : ''}`}
+                onClick={() => handleSelectStrategy(strat.id)}
+              >
+                <span style={{ fontSize: '1.2rem' }}>{safeRender(strat.icon || '\u26A1')}</span>
+                <span>{safeRender(strat.name)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {isShowingSummary && (
         <div className="summary-step fade-in">
           <h3 className="settings-main-title" style={{ marginBottom: '20px', fontSize: '0.95rem' }}>
@@ -550,7 +554,7 @@ export default function BinarySignalSettings({
             </div>
 
 
-            <div className="summary-row-box" style={{ cursor: 'default' }}>
+            <div className="summary-row-box" onClick={() => setEditMode('strategy')}>
               <div className="summary-info">
                 <span className="summary-label">{globalT.analysisSettings?.strategyLabel || 'Strategy'}</span>
                 <span className="summary-value" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -558,7 +562,9 @@ export default function BinarySignalSettings({
                   {selectedStrategy?.name || 'System Strategy'}
                 </span>
               </div>
-
+              <div className="icon-edit-btn">
+                <span className="edit-icon-mask" style={{ maskImage: `url("${iconEdit}")`, WebkitMaskImage: `url("${iconEdit}")` }}></span>
+              </div>
             </div>
 
           </div>
@@ -575,10 +581,6 @@ export default function BinarySignalSettings({
         <button className="go-back-outline-btn" onClick={onGoHome}>
           {t.goHome}
         </button>
-      </div>
-
-      <div className="disclaimer-box">
-        <p>{disclaimerText}</p>
       </div>
 
     </div>
