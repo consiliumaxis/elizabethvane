@@ -103,12 +103,115 @@ async def call_openai(messages, model="gpt-4o-mini", api_key: str = "") -> Dict[
 
     return {"ok": False, "error": last_error}
 
+
+def _get_project_name() -> str:
+    configured = (os.getenv("PROJECT_NAME") or os.getenv("APP_NAME") or "").strip()
+    if configured:
+        return configured
+    cwd_name = os.path.basename(os.getcwd()).lower()
+    if "eric" in cwd_name:
+        return "Eric Cole"
+    if "elizabeth" in cwd_name or "vane" in cwd_name:
+        return "Elizabeth Vane"
+    return "the analytics app"
+
+
+def _compact_join(items: List[str], limit: int = 12) -> str:
+    clean = [str(item or "").strip() for item in items if str(item or "").strip()]
+    if not clean:
+        return "none listed"
+    if len(clean) <= limit:
+        return ", ".join(clean)
+    return ", ".join(clean[:limit]) + f", and {len(clean) - limit} more"
+
+
+async def get_app_knowledge(db_pool) -> str:
+    project_name = _get_project_name()
+    default_context = f"""
+Application context:
+- Product: {project_name}, a Telegram WebApp for educational trading analytics.
+- Main sections: Profile, Forex analysis, Binary signals, Analysis log, AI chat, FAQ, and Admin Center for administrators.
+- The app uses Telegram WebApp authorization, user modes, strategy selection, technical indicators, market news checks, and analysis history.
+- It is an educational analytics tool, not financial advice. Never promise profits or guaranteed outcomes.
+""".strip()
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT name, `key` FROM indicators ORDER BY name ASC")
+                indicators = await cur.fetchall()
+                await cur.execute(
+                    """
+                    SELECT
+                        p.id,
+                        p.name,
+                        p.icon,
+                        p.is_system,
+                        p.allowed_timeframes,
+                        p.public_winrate,
+                        GROUP_CONCAT(i.name ORDER BY i.name SEPARATOR ', ') AS indicators_list
+                    FROM presets p
+                    LEFT JOIN preset_indicators pi ON pi.preset_id = p.id
+                    LEFT JOIN indicators i ON i.id = pi.indicator_id
+                    GROUP BY p.id
+                    ORDER BY p.is_system DESC, p.id ASC
+                    LIMIT 30
+                    """
+                )
+                strategies = await cur.fetchall()
+    except Exception as e:
+        print(f"AI app context fallback due to DB error: {e}")
+        return default_context
+
+    indicator_lines = []
+    for item in indicators[:40]:
+        name = str(item.get("name") or "").strip()
+        key = str(item.get("key") or "").strip()
+        if name and key:
+            indicator_lines.append(f"{name} ({key})")
+        elif name:
+            indicator_lines.append(name)
+
+    system_strategy_lines = []
+    custom_strategy_lines = []
+    for row in strategies:
+        name = str(row.get("name") or "Unnamed strategy").strip()
+        icon = str(row.get("icon") or "").strip()
+        timeframes = str(row.get("allowed_timeframes") or "").strip() or "default timeframes"
+        indicators_list = str(row.get("indicators_list") or "").strip() or "no indicators listed"
+        public_winrate = row.get("public_winrate")
+        winrate_part = ""
+        if public_winrate is not None:
+            try:
+                winrate_part = f", displayed winrate {float(public_winrate):.1f}%"
+            except (TypeError, ValueError):
+                winrate_part = ""
+        line = f"{icon + ' ' if icon else ''}{name}: timeframes {timeframes}; indicators: {indicators_list}{winrate_part}"
+        if int(row.get("is_system") or 0) == 1:
+            system_strategy_lines.append(line)
+        else:
+            custom_strategy_lines.append(line)
+
+    return f"""
+Application context:
+- Product: {project_name}, a Telegram WebApp for educational trading analytics.
+- Main sections: Profile, Forex analysis, Binary signals, Analysis log, AI chat, FAQ, and Admin Center for administrators.
+- Profile: users can choose mode, choose a system strategy, view strategy indicators and displayed winrate, and manage custom strategies where available.
+- Forex analysis: users select a pair, timeframe, and strategy; the app returns indicator readings, consensus, key levels, news background, and a recommendation.
+- Binary signals: users select a market, pair, expiration, and strategy; the app shows a signal card, countdown, indicators, consensus, and later closes the signal as success, failed, or skipped.
+- Analysis log: users can filter historical results by strategy and see success/failure stats and winrate.
+- Admin Center: admins manage stats, users, broadcasts, settings, strategies, stream fallback settings, and AI/chat settings.
+- Available indicators: {_compact_join(indicator_lines, 40)}.
+- System strategies: {_compact_join(system_strategy_lines, 20)}.
+- Custom/user strategies may also exist: {_compact_join(custom_strategy_lines, 10)}.
+- Safety: this is an educational analytics tool, not financial advice. Never promise profits, certainty, or guaranteed outcomes.
+""".strip()
+
 async def generate_title_task(db_pool, chat_id, user_id, first_messages):
-    prompt = """Analyze the user's message and generate a very short title for this chat (1 to 3 words maximum). 
+    prompt = """Analyze the user's message and generate a very short English title for this chat (1 to 3 words maximum).
     Rules:
+    - Always write in English.
     - NEVER use quotes.
     - NEVER use punctuation at the end.
-    - Write strictly in the exact same language the user is speaking.
     - Just the essence. Example: Bitcoin Analysis"""
     
     messages = [{"role": "system", "content": prompt}]
@@ -147,9 +250,20 @@ async def process_user_message(db_pool, user_id: int, chat_id: int, text: str):
                 asyncio.create_task(generate_title_task(db_pool, chat_id, user_id, [{"role": "user", "content": text}]))
 
     settings = await get_ai_settings(db_pool)
-    
-    system_prompt = f"{settings['system_prompt']} IMPORTANT: Always reply in the EXACT SAME LANGUAGE that the user used in their message."
-    
+    app_context = await get_app_knowledge(db_pool)
+
+    system_prompt = f"""{settings['system_prompt']}
+
+{app_context}
+
+Response rules:
+- Always answer in English only, even if the user writes in another language.
+- Be helpful and practical about how to use the app: strategies, indicators, signals, analysis history, profile settings, FAQ, and admin features.
+- If the user asks where something is, give clear navigation steps inside the app.
+- When discussing trading, keep it educational and risk-aware. Do not promise profit or certainty.
+- If live account, payment, server, or private user data is needed and you cannot see it, say what the user should check in the app instead of inventing facts.
+""".strip()
+
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("""
