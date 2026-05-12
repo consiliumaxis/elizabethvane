@@ -11,17 +11,19 @@ async def get_ai_settings(db_pool):
     default_settings = {
         "system_prompt": "You are a helpful trading assistant.",
         "model": "gpt-4o-mini",
+        "api_key": "",
     }
     try:
         async with db_pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute("SELECT system_prompt, model FROM ai_settings WHERE id = 1")
-                row = await cur.fetchone()
-                if not row:
-                    return default_settings
+                row = await cur.fetchone() or {}
+                await cur.execute("SELECT gpt_api_key FROM admin_analysis_settings WHERE id = 1 LIMIT 1")
+                admin_row = await cur.fetchone() or {}
                 return {
                     "system_prompt": row.get("system_prompt") or default_settings["system_prompt"],
                     "model": row.get("model") or default_settings["model"],
+                    "api_key": str(admin_row.get("gpt_api_key") or "").strip(),
                 }
     except Exception as e:
         print(f"AI settings fallback due to DB error: {e}")
@@ -57,18 +59,14 @@ def _build_model_candidates(model: str) -> List[str]:
     return unique
 
 
-async def call_openai(messages, model="gpt-4o-mini") -> Dict[str, Any]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    
-    if not api_key:
-        err = "OPENAI_API_KEY is not configured"
+async def call_openai(messages, model="gpt-4o-mini", api_key: str = "") -> Dict[str, Any]:
+    selected_key = (api_key or "").strip() or (os.getenv("OPENAI_API_KEY") or "").strip()
+
+    if not selected_key:
+        err = "OpenAI API key is not configured"
         print(f"CRITICAL ERROR: {err}")
         return {"ok": False, "error": err}
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
     timeout = float((os.getenv("OPENAI_TIMEOUT_SEC") or "30").strip())
     url = (os.getenv("OPENAI_URL") or OPENAI_URL).strip() or OPENAI_URL
     last_error = "Unknown OpenAI error"
@@ -80,6 +78,10 @@ async def call_openai(messages, model="gpt-4o-mini") -> Dict[str, Any]:
                 "messages": messages,
                 "max_tokens": 1000,
                 "temperature": 0.7
+            }
+            headers = {
+                "Authorization": f"Bearer {selected_key}",
+                "Content-Type": "application/json"
             }
             try:
                 response = await client.post(url, headers=headers, json=payload, timeout=timeout)
@@ -113,7 +115,8 @@ async def generate_title_task(db_pool, chat_id, user_id, first_messages):
     for msg in first_messages:
         messages.append({"role": msg["role"], "content": msg["content"]})
     
-    result = await call_openai(messages)
+    settings = await get_ai_settings(db_pool)
+    result = await call_openai(messages, model=settings["model"], api_key=settings.get("api_key") or "")
     if not result.get("ok"):
         return
     title = str(result.get("text") or "").replace('"', '').replace("'", "").strip()
@@ -161,7 +164,7 @@ async def process_user_message(db_pool, user_id: int, chat_id: int, text: str):
     for msg in recent_messages:
         messages_payload.append({"role": msg['role'], "content": msg['content']})
 
-    ai_result = await call_openai(messages_payload, model=settings['model'])
+    ai_result = await call_openai(messages_payload, model=settings['model'], api_key=settings.get('api_key') or '')
     if not ai_result.get("ok"):
         return {"status": "error", "error": ai_result.get("error") or "AI provider request failed"}
     ai_response = ai_result.get("text") or ""
