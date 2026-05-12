@@ -2751,6 +2751,23 @@ class AIChatRequest(BaseModel):
     text: Optional[str] = None
     chat_id: Optional[int] = None
 
+
+def normalize_ai_chat_title(title: str) -> str:
+    raw = str(title or "").strip()
+    translations = {
+        "Новый диалог": "New Chat",
+        "новый диалог": "New Chat",
+        "Приветствие": "Welcome",
+        "приветствие": "Welcome",
+    }
+    return translations.get(raw, raw or "New Chat")
+
+
+def normalize_ai_chat_row(row):
+    if isinstance(row, dict):
+        row["title"] = normalize_ai_chat_title(row.get("title"))
+    return row
+
 async def get_or_create_active_chat_for_user(user_id: int):
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -2772,7 +2789,7 @@ async def get_or_create_active_chat_for_user(user_id: int):
             await cur.execute("SELECT id, role, content, created_at as timestamp FROM ai_messages WHERE chat_id = %s ORDER BY id ASC", (chat['id'],))
             messages = await cur.fetchall()
             
-            return {"status": "success", "chat_id": chat['id'], "title": chat['title'], "messages": messages}
+            return {"status": "success", "chat_id": chat['id'], "title": normalize_ai_chat_title(chat.get("title")), "messages": messages}
 
 @app.post("/api/ai/chat/active")
 async def get_or_create_active_chat(request: AIChatRequest, user=Depends(get_telegram_user)):
@@ -2802,6 +2819,7 @@ async def get_chat_history(request: AIChatRequest, user=Depends(get_telegram_use
                 LIMIT 10
             """, (user_id,))
             chats = await cur.fetchall()
+            chats = [normalize_ai_chat_row(chat) for chat in chats]
     return {"status": "success", "chats": chats}
 
 @app.post("/api/ai/chat/load")
