@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './Header.css';
 import { texts } from '../../locales/texts';
@@ -21,6 +21,7 @@ export default function Header({
   isDesktop = false
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const bottomBarRef = useRef(null);
   const t = texts.en;
 
   const toggleMenu = () => setIsMenuOpen((prev) => !prev);
@@ -74,6 +75,41 @@ export default function Header({
     ? desktopHeaderHeight + 10
     : Math.max(contentAreaTop + 16, mobileButtonTop + mobileButtonHeight + 12);
 
+  useEffect(() => {
+    const root = document.documentElement;
+
+    const updateBottomOverlay = () => {
+      if (!bottomBarRef.current) return;
+
+      const rect = bottomBarRef.current.getBoundingClientRect();
+      const viewportHeight = window.visualViewport?.height || window.innerHeight;
+      const overlayHeight = Math.max(0, viewportHeight - rect.top);
+
+      root.style.setProperty('--app-bottom-overlay-height', `${Math.ceil(overlayHeight)}px`);
+    };
+
+    updateBottomOverlay();
+
+    const observer = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(updateBottomOverlay)
+      : null;
+
+    if (observer && bottomBarRef.current) {
+      observer.observe(bottomBarRef.current);
+    }
+
+    window.addEventListener('resize', updateBottomOverlay);
+    window.visualViewport?.addEventListener('resize', updateBottomOverlay);
+    window.visualViewport?.addEventListener('scroll', updateBottomOverlay);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateBottomOverlay);
+      window.visualViewport?.removeEventListener('resize', updateBottomOverlay);
+      window.visualViewport?.removeEventListener('scroll', updateBottomOverlay);
+    };
+  }, []);
+
   return (
     <>
       {isDesktop && <div className="tg-desktop-header-fill"></div>}
@@ -97,7 +133,7 @@ export default function Header({
         </button>
       </div>
 
-      <div className="premium-bottom-bar">
+      <div className="premium-bottom-bar" ref={bottomBarRef}>
         <div className="micro-disclaimer">
           {mode === 'demo' && (
             <div className="demo-watermark-global">
