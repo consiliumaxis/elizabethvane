@@ -73,6 +73,9 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     lang VARCHAR(16) NOT NULL DEFAULT 'ru',
                     mode VARCHAR(16) NOT NULL DEFAULT 'forex',
                     strategy_id BIGINT NULL,
+                    is_blocked TINYINT(1) NOT NULL DEFAULT 0,
+                    blocked_by BIGINT NULL,
+                    blocked_at TIMESTAMP NULL DEFAULT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -245,6 +248,9 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "users", "strategy_id", "ALTER TABLE users ADD COLUMN strategy_id BIGINT NULL")
         await _ensure_column(conn, db_name, "users", "lang", "ALTER TABLE users ADD COLUMN lang VARCHAR(16) NOT NULL DEFAULT 'ru'")
         await _ensure_column(conn, db_name, "users", "mode", "ALTER TABLE users ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'forex'")
+        await _ensure_column(conn, db_name, "users", "is_blocked", "ALTER TABLE users ADD COLUMN is_blocked TINYINT(1) NOT NULL DEFAULT 0")
+        await _ensure_column(conn, db_name, "users", "blocked_by", "ALTER TABLE users ADD COLUMN blocked_by BIGINT NULL")
+        await _ensure_column(conn, db_name, "users", "blocked_at", "ALTER TABLE users ADD COLUMN blocked_at TIMESTAMP NULL DEFAULT NULL")
         await _ensure_column(
             conn,
             db_name,

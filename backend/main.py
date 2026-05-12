@@ -869,7 +869,8 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
             try:
                 await cur.execute(
                     """
-                    SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id, u.created_at,
+                    SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
+                           COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at, u.blocked_by, u.created_at,
                            p.name AS strategy_name,
                            CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
                            a.granted_at
@@ -886,7 +887,8 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
             except Exception:
                 await cur.execute(
                     """
-                    SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id, NULL AS created_at,
+                    SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
+                           0 AS is_blocked, NULL AS blocked_at, NULL AS blocked_by, NULL AS created_at,
                            p.name AS strategy_name,
                            CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
                            a.granted_at
@@ -912,6 +914,53 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
             total = int((await cur.fetchone() or {}).get("cnt") or 0)
 
     return {"status": "success", "users": users_rows or [], "total": total, "limit": limit, "offset": offset}
+
+
+@app.post("/api/admin/users/block")
+async def admin_block_user(request: Request, admin=Depends(get_admin_user)):
+    data = await request.json()
+    try:
+        target_user_id = int(data.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target_user_id = 0
+    is_blocked = 1 if bool(data.get("is_blocked")) else 0
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="User id is required")
+    if target_user_id == int(admin.get("user_id") or 0) and is_blocked:
+        raise HTTPException(status_code=400, detail="You cannot block yourself")
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT user_id FROM users WHERE user_id = %s LIMIT 1", (target_user_id,))
+            if not await cur.fetchone():
+                raise HTTPException(status_code=404, detail="User not found")
+            await cur.execute(
+                """
+                UPDATE users
+                SET is_blocked = %s,
+                    blocked_by = CASE WHEN %s = 1 THEN %s ELSE NULL END,
+                    blocked_at = CASE WHEN %s = 1 THEN NOW() ELSE NULL END
+                WHERE user_id = %s
+                """,
+                (is_blocked, is_blocked, int(admin.get("user_id") or 0), is_blocked, target_user_id),
+            )
+            await cur.execute(
+                """
+                SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
+                       COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at, u.blocked_by, u.created_at,
+                       p.name AS strategy_name,
+                       CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
+                       a.granted_at
+                FROM users u
+                LEFT JOIN presets p ON p.id = u.strategy_id
+                LEFT JOIN admin_users a ON a.user_id = u.user_id
+                WHERE u.user_id = %s
+                LIMIT 1
+                """,
+                (target_user_id,),
+            )
+            row = await cur.fetchone()
+    return {"status": "success", "user": row}
 
 
 @app.get("/api/admin/admins")
@@ -2032,8 +2081,9 @@ async def get_profile(user=Depends(get_telegram_user)):
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("""
-                SELECT u.user_id, u.lang, u.mode, u.username, u.first_name, u.avatar_url, 
-                       u.strategy_id, p.name as strategy_name
+                SELECT u.user_id, u.lang, u.mode, u.username, u.first_name, u.avatar_url,
+                       u.strategy_id, COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at,
+                       p.name as strategy_name
                 FROM users u
                 LEFT JOIN presets p ON u.strategy_id = p.id
                 WHERE u.user_id = %s

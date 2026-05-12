@@ -18,6 +18,7 @@ import FAQ from './components/pages/FAQ';
 import Support from './components/pages/Support';
 import LogAnalysis from './components/pages/LogAnalysis';
 import OpenViaBot from './components/pages/OpenViaBot';
+import BlockedAccess from './components/pages/BlockedAccess';
 import AdminApp from './admin/AdminApp';
 
 import Header from './components/Header/Header.jsx';
@@ -89,17 +90,24 @@ function App() {
           method: 'POST',
         });
 
-        const [userData, stratData, indData] = await Promise.all([
-          apiFetchJson('/api/user/profile', {
-            method: 'POST',
-          }),
+        const userData = await apiFetchJson('/api/user/profile', {
+          method: 'POST',
+        });
+
+        setUser(userData);
+
+        if (Number(userData?.is_blocked) === 1) {
+          setCurrentPage('blocked');
+          return;
+        }
+
+        const [stratData, indData] = await Promise.all([
           apiFetchJson('/api/strategies'),
           apiFetchJson('/api/indicators')
         ]);
 
         setAllIndicators(indData.indicators || []);
         setStrategies(stratData.strategies || []);
-        setUser(userData);
         
         if (userData.mode === 'demo') {
           setCurrentPage('demoHome');
@@ -253,6 +261,7 @@ function App() {
     return <AdminApp adminUser={adminUser} authError={adminAuthError} />;
   }
   if (!user) return <Loader t={t} />;
+  if (Number(user?.is_blocked) === 1) return <BlockedAccess />;
 
   const handlePageChange = (newPage) => {
     activeBackHandler.current = null; 

@@ -10,7 +10,7 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedUserId, setSelectedUserId] = useState(null);
-  const [accessMap, setAccessMap] = useState({});
+  const [actionLoading, setActionLoading] = useState(false);
 
   const loadUsers = useCallback(async (currentSearch = '') => {
     setLoading(true);
@@ -25,16 +25,6 @@ export default function UsersPage() {
       const rows = res.users || [];
       setUsers(rows);
       setTotal(Number(res.total || 0));
-      setAccessMap((prev) => {
-        const next = { ...prev };
-        rows.forEach((user) => {
-          const key = String(user.user_id);
-          if (typeof next[key] === 'undefined') {
-            next[key] = true;
-          }
-        });
-        return next;
-      });
     } catch (e) {
       setError(e.message || 'Не удалось загрузить пользователей');
     } finally {
@@ -51,7 +41,7 @@ export default function UsersPage() {
     [users, selectedUserId]
   );
 
-  const isAccessEnabled = selectedUser ? Boolean(accessMap[String(selectedUser.user_id)]) : false;
+  const isBlocked = selectedUser ? Number(selectedUser.is_blocked) === 1 : false;
 
   const onSubmit = (e) => {
     e.preventDefault();
@@ -66,9 +56,27 @@ export default function UsersPage() {
     setSelectedUserId(null);
   };
 
-  const toggleAccess = (userId) => {
-    const key = String(userId);
-    setAccessMap((prev) => ({ ...prev, [key]: !prev[key] }));
+  const toggleBlocked = async (user) => {
+    if (!user || actionLoading) return;
+    setActionLoading(true);
+    setError('');
+    try {
+      const res = await apiAdminFetchJson('/api/admin/users/block', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: user.user_id,
+          is_blocked: Number(user.is_blocked) !== 1,
+        }),
+      });
+      const updatedUser = res.user || { ...user, is_blocked: Number(user.is_blocked) === 1 ? 0 : 1 };
+      setUsers((prev) => prev.map((item) => (
+        String(item.user_id) === String(updatedUser.user_id) ? { ...item, ...updatedUser } : item
+      )));
+    } catch (e) {
+      setError(e.message || 'Не удалось изменить блокировку');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   if (selectedUser) {
@@ -83,7 +91,7 @@ export default function UsersPage() {
 
         <div className="admin-user-detail">
           <div className="admin-user-detail-head">
-            <span className="admin-user-state">{isAccessEnabled ? '✅ Доступ есть' : '❌ Доступа нет'}</span>
+            <span className="admin-user-state">{isBlocked ? '⛔ Заблокирован' : '✅ Активен'}</span>
             <strong>{getDisplayName(selectedUser)}</strong>
           </div>
 
@@ -95,14 +103,19 @@ export default function UsersPage() {
             <div><span>Стратегия:</span> {selectedUser.strategy_name || selectedUser.strategy_id || '-'}</div>
             <div><span>Язык:</span> {selectedUser.lang || '-'}</div>
             <div><span>Админ:</span> {Number(selectedUser.is_admin) === 1 ? 'Да' : 'Нет'}</div>
+            <div><span>Блокировка:</span> {isBlocked ? `Да${selectedUser.blocked_at ? `, ${selectedUser.blocked_at}` : ''}` : 'Нет'}</div>
             <div><span>Создан:</span> {selectedUser.created_at || '-'}</div>
           </div>
 
           <div className="admin-user-actions">
-            <button className="admin-btn" onClick={() => toggleAccess(selectedUser.user_id)}>
-              {isAccessEnabled ? 'Забрать доступ' : 'Выдать доступ'}
+            <button
+              className={isBlocked ? 'admin-btn' : 'admin-btn-outline danger'}
+              onClick={() => toggleBlocked(selectedUser)}
+              disabled={actionLoading}
+            >
+              {isBlocked ? 'Разблокировать' : 'Заблокировать'}
             </button>
-            <div className="admin-muted">Временный frontend fallback. Подключим backend позже.</div>
+            <div className="admin-muted">Заблокированный пользователь увидит экран ограничения при входе в приложение.</div>
           </div>
         </div>
       </div>
@@ -131,17 +144,17 @@ export default function UsersPage() {
 
       <div className="admin-entity-list">
         {users.map((user) => {
-          const hasAccess = Boolean(accessMap[String(user.user_id)]);
+          const blocked = Number(user.is_blocked) === 1;
           return (
             <button
               key={user.user_id}
-              className="admin-entity-card"
+              className={`admin-entity-card ${blocked ? 'blocked' : ''}`}
               type="button"
               onClick={() => openUserCard(user.user_id)}
             >
               <div className="admin-entity-head">
                 <div className="admin-entity-title">
-                  <span className="admin-state-icon">{hasAccess ? '✅' : '❌'}</span>
+                  <span className="admin-state-icon">{blocked ? '⛔' : '✅'}</span>
                   <span>{getDisplayName(user)}</span>
                 </div>
                 <span
@@ -155,7 +168,7 @@ export default function UsersPage() {
                 </span>
               </div>
               <div className="admin-entity-meta">
-                ID: {user.user_id} | {user.mode || '-'} | {user.strategy_name || user.strategy_id || '-'}
+                ID: {user.user_id} | {blocked ? 'blocked' : (user.mode || '-')} | {user.strategy_name || user.strategy_id || '-'}
               </div>
             </button>
           );
