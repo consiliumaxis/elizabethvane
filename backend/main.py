@@ -54,7 +54,7 @@ BINARY_EXPIRATION_OPTIONS = (os.getenv("BINARY_EXPIRATION_OPTIONS") or "5s,15s,1
 MARKET_KIND_CONFIG = {
     "forex": {"title": "Forex", "path": "forex"},
     "otc": {"title": "OTC", "path": "otc"},
-    "commodities": {"title": "Metals", "path": "otc/commodities"},
+    "commodities": {"title": "Commodities", "path": "otc/commodities"},
     "stocks": {"title": "Stocks", "path": "otc/stocks"},
     "crypto": {"title": "Crypto", "path": "otc/crypto"},
 }
