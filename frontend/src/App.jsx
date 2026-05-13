@@ -12,7 +12,6 @@ import DemoHome from './components/demo/DemoHome';
 import DemoAnalysisSettings from './components/demo/DemoAnalysisSettings';
 
 import Profile from './components/pages/Profile';
-import History from './components/pages/History';
 import ChatAI from './components/pages/ChatAI';
 import FAQ from './components/pages/FAQ';
 import Support from './components/pages/Support';
@@ -433,7 +432,7 @@ function App() {
         );
 
       case 'history':
-        return <History />;
+        return <LogAnalysis user={user} t={t} strategies={strategies} mode="binary" />;
 
       case 'chatAI':
         return <ChatAI user={user} t={t} />;
@@ -442,10 +441,10 @@ function App() {
         return <FAQ onAskAI={() => setCurrentPage('chatAI')} />;
 
       case 'support':
-        return <Support />;
+        return <Support onOpenFaq={() => setCurrentPage('faq')} />;
 
       case 'logAnalysis':
-        return <LogAnalysis user={user} t={t} strategies={strategies} />;
+        return <LogAnalysis user={user} t={t} strategies={strategies} mode="forex" />;
 
       default:
         if (user.mode === 'demo') {
