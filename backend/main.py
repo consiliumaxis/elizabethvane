@@ -690,10 +690,41 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
     }
     return ensure_analysis_key_levels(analysis_data, preferred_signal=forced_signal)
 
+async def get_support_links_row():
+    fallback = {
+        "channel_url": (os.getenv("CHANNEL_URL") or "").strip(),
+        "support_url": (os.getenv("SUPPORT_URL") or "").strip(),
+    }
+    if not db_pool:
+        return fallback
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT channel_url, support_url
+                    FROM admin_support_links
+                    WHERE id = 1
+                    LIMIT 1
+                    """
+                )
+                row = await cur.fetchone()
+    except Exception as e:
+        print(f"Support links fallback: {e}")
+        return fallback
+    if not row:
+        return fallback
+    return {
+        "channel_url": (row.get("channel_url") or fallback["channel_url"] or "").strip(),
+        "support_url": (row.get("support_url") or fallback["support_url"] or "").strip(),
+    }
+
+
 @app.get("/api/support/links")
 async def get_support_links():
-    channel_url = (os.getenv("CHANNEL_URL") or "").strip()
-    support_url = (os.getenv("SUPPORT_URL") or "").strip()
+    links = await get_support_links_row()
+    channel_url = links["channel_url"]
+    support_url = links["support_url"]
     return {
         "channel_url": channel_url,
         "support_url": support_url
@@ -1105,6 +1136,7 @@ async def admin_broadcast(request: Request, admin=Depends(get_admin_user)):
 @app.get("/api/admin/settings")
 async def admin_settings(admin=Depends(get_admin_user)):
     stream_settings = await get_stream_settings_row()
+    support_links = await get_support_links_row()
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("SELECT id, system_prompt, model, updated_at FROM ai_settings WHERE id = 1")
@@ -1135,10 +1167,7 @@ async def admin_settings(admin=Depends(get_admin_user)):
             "ai": ai_settings,
             "streams": stream_settings,
             "stream_strategies": stream_strategies or [],
-            "support": {
-                "channel_url": (os.getenv("CHANNEL_URL") or "").strip(),
-                "support_url": (os.getenv("SUPPORT_URL") or "").strip(),
-            },
+            "support": support_links,
         },
     }
 
@@ -1148,6 +1177,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
     data = await request.json()
     ai_data = data.get("ai") or {}
     streams_data = data.get("streams") or {}
+    support_data = data.get("support") or {}
     system_prompt = (ai_data.get("system_prompt") or "").strip()
     model = (ai_data.get("model") or "").strip()
 
@@ -1265,6 +1295,20 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         message,
                         updated_by,
                     ),
+                )
+            if isinstance(support_data, dict) and support_data:
+                channel_url = str(support_data.get("channel_url") or "").strip()[:1000]
+                support_url = str(support_data.get("support_url") or "").strip()[:1000]
+                await cur.execute(
+                    """
+                    INSERT INTO admin_support_links (id, channel_url, support_url, updated_by)
+                    VALUES (1, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        channel_url = VALUES(channel_url),
+                        support_url = VALUES(support_url),
+                        updated_by = VALUES(updated_by)
+                    """,
+                    (channel_url, support_url, int(admin["user_id"])),
                 )
     return {"status": "success"}
 

@@ -177,6 +177,8 @@ export default function SettingsPage({ adminUser }) {
   const [streamStrategies, setStreamStrategies] = useState([]);
 
   const [systemAccessEnabled, setSystemAccessEnabled] = useState(true);
+  const [channelUrl, setChannelUrl] = useState('');
+  const [supportUrl, setSupportUrl] = useState('');
 
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
@@ -238,6 +240,10 @@ export default function SettingsPage({ adminUser }) {
       setStreamIndicatorOverrides(nextOverrides);
 
       setStreamStrategies(settingsRes?.settings?.stream_strategies || []);
+
+      const support = settingsRes?.settings?.support || {};
+      setChannelUrl(support.channel_url || '');
+      setSupportUrl(support.support_url || '');
     } catch (e) {
       setError(e.message || 'Не удалось загрузить настройки');
     }
@@ -291,14 +297,17 @@ export default function SettingsPage({ adminUser }) {
   }, [previewIndicatorsBase, streamScope, streamSignal, streamStrategyId, streamIndicatorMode, streamIndicatorOverrides]);
 
   const saveSettings = async (source = 'all') => {
-    if (streamEnabled && streamScope === 'strategy' && !streamStrategyId) {
+    const shouldSaveStreams = source === 'streams' || source === 'all';
+    const shouldSaveSupport = source === 'support' || source === 'all';
+
+    if (shouldSaveStreams && streamEnabled && streamScope === 'strategy' && !streamStrategyId) {
       setError('Выберите стратегию для стрима');
       return;
     }
 
     const manualSL = toMaybeNumber(streamManualSL);
     const manualTP = toMaybeNumber(streamManualTP);
-    if (streamEnabled && streamLevelsMode === 'manual' && (manualSL === null || manualTP === null)) {
+    if (shouldSaveStreams && streamEnabled && streamLevelsMode === 'manual' && (manualSL === null || manualTP === null)) {
       setError('Для ручных уровней нужно указать Conservative SL и Target (Take Profit)');
       return;
     }
@@ -308,34 +317,48 @@ export default function SettingsPage({ adminUser }) {
     setStatus('');
 
     try {
+      const payload = {
+        ai: {
+          model: model.trim(),
+          system_prompt: systemPrompt,
+        },
+      };
+
+      if (shouldSaveStreams) {
+        payload.streams = {
+          is_enabled: streamEnabled,
+          scope: streamScope,
+          strategy_id: streamScope === 'strategy' ? Number(streamStrategyId) : null,
+          forced_signal: streamSignal,
+          levels_mode: streamLevelsMode,
+          manual_conservative_sl: streamLevelsMode === 'manual' ? manualSL : null,
+          manual_take_profit: streamLevelsMode === 'manual' ? manualTP : null,
+          indicator_mode: streamScope === 'strategy' ? streamIndicatorMode : 'auto',
+          indicator_overrides:
+            streamScope === 'strategy' && streamIndicatorMode === 'manual'
+              ? streamIndicatorOverrides
+              : {},
+        };
+      }
+
+      if (shouldSaveSupport) {
+        payload.support = {
+          channel_url: channelUrl.trim(),
+          support_url: supportUrl.trim(),
+        };
+      }
+
       await apiAdminFetchJson('/api/admin/settings', {
         method: 'POST',
-        body: JSON.stringify({
-          ai: {
-            model: model.trim(),
-            system_prompt: systemPrompt,
-          },
-          streams: {
-            is_enabled: streamEnabled,
-            scope: streamScope,
-            strategy_id: streamScope === 'strategy' ? Number(streamStrategyId) : null,
-            forced_signal: streamSignal,
-            levels_mode: streamLevelsMode,
-            manual_conservative_sl: streamLevelsMode === 'manual' ? manualSL : null,
-            manual_take_profit: streamLevelsMode === 'manual' ? manualTP : null,
-            indicator_mode: streamScope === 'strategy' ? streamIndicatorMode : 'auto',
-            indicator_overrides:
-              streamScope === 'strategy' && streamIndicatorMode === 'manual'
-                ? streamIndicatorOverrides
-                : {},
-          },
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (source === 'ai') {
         setStatus('Настройки AI чата сохранены');
       } else if (source === 'streams') {
         setStatus('Настройки стримов сохранены');
+      } else if (source === 'support') {
+        setStatus('Ссылки поддержки сохранены');
       } else {
         setStatus('Настройки сохранены');
       }
@@ -423,13 +446,19 @@ export default function SettingsPage({ adminUser }) {
         subtitle: systemAccessEnabled ? 'Доступ открыт' : 'Доступ ограничен',
       },
       {
+        key: 'support',
+        icon: '🔗',
+        title: 'Управление ссылками',
+        subtitle: channelUrl || supportUrl ? 'Ссылки настроены' : 'Ссылки не заданы',
+      },
+      {
         key: 'admins',
         icon: '🛡️',
         title: 'Выдать админку',
         subtitle: `Текущих админов: ${admins.length}`,
       },
     ],
-    [admins.length, model, streamEnabled, systemAccessEnabled]
+    [admins.length, channelUrl, model, streamEnabled, supportUrl, systemAccessEnabled]
   );
 
   const goMenu = () => {
@@ -778,6 +807,50 @@ export default function SettingsPage({ adminUser }) {
 
         <div className="admin-muted">
           Сейчас это временный frontend fallback. Когда подключим backend и БД под доступ, логика автоматически переедет сюда.
+        </div>
+
+        {error ? <div className="admin-error">{error}</div> : null}
+        {status ? <div className="admin-success">{status}</div> : null}
+      </div>
+    );
+  }
+
+  if (activeSection === 'support') {
+    return (
+      <div className="admin-card admin-settings-detail">
+        <div className="admin-row-between">
+          <h3 className="admin-section-title">Управление ссылками</h3>
+          <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
+        </div>
+
+        <div className="admin-muted">
+          Эти ссылки используются в разделе поддержки: кнопка канала и кнопка личного обращения.
+        </div>
+
+        <div className="admin-field">
+          <label className="admin-label">Ссылка на канал</label>
+          <input
+            className="admin-input"
+            placeholder="https://t.me/channel"
+            value={channelUrl}
+            onChange={(e) => setChannelUrl(e.target.value)}
+          />
+        </div>
+
+        <div className="admin-field">
+          <label className="admin-label">Ссылка на личный чат / поддержку</label>
+          <input
+            className="admin-input"
+            placeholder="https://t.me/support_username"
+            value={supportUrl}
+            onChange={(e) => setSupportUrl(e.target.value)}
+          />
+        </div>
+
+        <div className="admin-row-actions">
+          <button className="admin-btn" onClick={() => saveSettings('support')} disabled={saving}>
+            {saving ? 'Сохранение...' : 'Сохранить ссылки'}
+          </button>
         </div>
 
         {error ? <div className="admin-error">{error}</div> : null}

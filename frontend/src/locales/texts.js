@@ -195,7 +195,7 @@ export const texts = {
       openFaq: "Open FAQ",
       openChannel: "Open Channel",
       writeSupport: "Write to Support",
-      envHint: "Configure backend .env: CHANNEL_URL and SUPPORT_URL."
+      envHint: "Set support links in Admin Center → Settings → Link management."
     },
     tvChart: {
       title: "Live Market Chart",
