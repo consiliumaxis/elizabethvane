@@ -442,7 +442,7 @@ function App() {
         return <FAQ onAskAI={() => setCurrentPage('chatAI')} />;
 
       case 'support':
-        return <Support />;
+        return <Support onOpenFaq={() => setCurrentPage('faq')} />;
 
       case 'logAnalysis':
         return <LogAnalysis user={user} t={t} strategies={strategies} />;
