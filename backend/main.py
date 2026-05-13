@@ -2510,28 +2510,36 @@ async def get_active_analyses(user=Depends(get_telegram_user)):
 @app.get("/api/analysis/history")
 async def get_analysis_history(
     strategy_id: Optional[int] = Query(default=None),
+    analysis_type: Optional[str] = Query(default=None),
     user=Depends(get_telegram_user),
 ):
     user_id = int(user["user_id"])
     strategy_filter = int(strategy_id) if strategy_id is not None and int(strategy_id) > 0 else None
+    type_filter = str(analysis_type or "").strip().lower()
+    if type_filter not in ("forex", "binary"):
+        type_filter = None
     where_clause = "a.user_id = %s AND a.status != 'active'"
     params = [user_id]
     if strategy_filter is not None:
         where_clause += " AND a.strategy_id = %s"
         params.append(strategy_filter)
+    if type_filter is not None:
+        where_clause += " AND LOWER(COALESCE(a.analysis_type, 'forex')) = %s"
+        params.append(type_filter)
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(f"""
                 SELECT a.id, a.pair, a.timeframe, a.status, a.created_at, a.closed_at,
                        a.analysis_type, a.market_kind, a.entry_price, a.exit_price,
-                       a.strategy_id, p.name as strategy_name, p.public_winrate
+                       a.strategy_id, a.raw_data, p.name as strategy_name, p.public_winrate
                 FROM user_analyses a
                 LEFT JOIN presets p ON a.strategy_id = p.id
                 WHERE {where_clause}
                 ORDER BY a.created_at DESC
             """, tuple(params))
             history = await cur.fetchall()
+            history = [serialize_user_analysis(item) for item in history]
 
     success_count = sum(1 for item in history if item['status'] == 'success')
     fail_count = sum(1 for item in history if item['status'] == 'fail')
@@ -2551,6 +2559,7 @@ async def get_analysis_history(
         },
         "applied_filter": {
             "strategy_id": strategy_filter,
+            "analysis_type": type_filter,
         },
     }
 

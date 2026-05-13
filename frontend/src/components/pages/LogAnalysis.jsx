@@ -16,12 +16,45 @@ const formatPercent = (value) => {
   return Math.abs(rounded - Math.round(rounded)) < 0.01 ? `${Math.round(rounded)}%` : `${rounded.toFixed(1)}%`;
 };
 
+const formatPrice = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return '---';
+  if (parsed >= 100) return parsed.toFixed(2);
+  if (parsed >= 1) return parsed.toFixed(4);
+  return parsed.toFixed(6);
+};
+
 const resolveStrategyWinrate = (strategy) =>
   toNumberOrNull(strategy?.display_winrate) ??
   toNumberOrNull(strategy?.actual_winrate) ??
   toNumberOrNull(strategy?.public_winrate);
 
-export default function LogAnalysis({ user, t, strategies = [] }) {
+const resolveSignal = (item) => {
+  const raw = item?.raw_data || {};
+  return String(raw.recommendation || raw.signal || item?.recommendation || '').toUpperCase();
+};
+
+const formatSignalLabel = (signal) => {
+  if (signal === 'BUY') return 'CALL';
+  if (signal === 'SELL') return 'PUT';
+  return signal || '---';
+};
+
+const formatMarket = (market) => {
+  const raw = String(market || '').trim();
+  if (!raw) return 'Forex';
+  if (raw === 'otc') return 'OTC';
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+};
+
+const getStatusTone = (status) => {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'success') return 'success';
+  if (normalized === 'skipped') return 'skipped';
+  return 'fail';
+};
+
+export default function LogAnalysis({ user, t, strategies = [], mode }) {
   const [history, setHistory] = useState([]);
   const [stats, setStats] = useState({ success: 0, fail: 0, skipped: 0, total: 0, closed_total: 0, winrate: 0 });
   const [loading, setLoading] = useState(true);
@@ -31,6 +64,8 @@ export default function LogAnalysis({ user, t, strategies = [] }) {
 
   const i18n = t || texts.en;
   const logT = i18n.logAnalysis || texts.en.logAnalysis;
+  const analysisType = mode || (user?.mode === 'binary' ? 'binary' : 'forex');
+  const isBinaryHistory = analysisType === 'binary';
 
   const strategiesMap = useMemo(() => {
     const map = new Map();
@@ -71,6 +106,7 @@ export default function LogAnalysis({ user, t, strategies = [] }) {
       setLoading(true);
       try {
         const params = new URLSearchParams();
+        params.set('analysis_type', analysisType);
         if (selectedStrategyId !== 'all') {
           params.set('strategy_id', selectedStrategyId);
         }
@@ -93,7 +129,7 @@ export default function LogAnalysis({ user, t, strategies = [] }) {
     return () => {
       cancelled = true;
     };
-  }, [user, selectedStrategyId]);
+  }, [user, selectedStrategyId, analysisType]);
 
   if (loading) return <Loader t={i18n} />;
 
@@ -105,10 +141,12 @@ export default function LogAnalysis({ user, t, strategies = [] }) {
   const selectedStrategyWinrate = resolveStrategyWinrate(selectedStrategy);
   const allStrategiesLabel = logT.allStrategies || 'All strategies';
   const selectedStrategyTitle = selectedStrategy ? `${selectedStrategy.icon || '\u26A1'} ${selectedStrategy.name}` : allStrategiesLabel;
+  const pageTitle = isBinaryHistory ? 'Signal history' : (logT.title || 'Analysis log');
+  const emptyText = isBinaryHistory ? 'Signal history is empty.' : logT.empty;
 
   return (
     <div className="profile-wrapper">
-      <h2 className="settings-main-title" style={{ marginBottom: '14px' }}>{logT.title}</h2>
+      <h2 className="settings-main-title" style={{ marginBottom: '14px' }}>{pageTitle}</h2>
 
       <div className="log-filter-card" ref={dropdownRef}>
         <label className="log-filter-label">{logT.selectStrategy || 'Strategy filter'}</label>
@@ -191,17 +229,31 @@ export default function LogAnalysis({ user, t, strategies = [] }) {
       </div>
 
       {history.length === 0 ? (
-        <div className="empty-market-card"><p>{logT.empty}</p></div>
+        <div className="empty-market-card"><p>{emptyText}</p></div>
       ) : (
         <div className="log-list">
           {history.map((item) => {
             const mappedStrategy = strategiesMap.get(Number(item.strategy_id));
             const strategyWinrate = resolveStrategyWinrate(mappedStrategy) ?? toNumberOrNull(item.public_winrate);
+            const signal = resolveSignal(item);
+            const signalLabel = formatSignalLabel(signal);
+            const signalClass = signal === 'BUY' ? 'sig-buy' : signal === 'SELL' ? 'sig-sell' : 'sig-neutral';
+            const statusTone = getStatusTone(item.status);
+            const statusLabel = statusTone === 'success'
+              ? logT.success
+              : statusTone === 'skipped'
+                ? 'Skipped'
+                : logT.fail;
+            const statusColor = statusTone === 'success'
+              ? 'var(--success)'
+              : statusTone === 'skipped'
+                ? 'var(--text-soft)'
+                : 'var(--danger)';
             return (
               <div
                 key={item.id}
-                className="log-card"
-                style={{ borderLeft: item.status === 'success' ? '4px solid var(--success)' : '4px solid var(--danger)' }}
+                className={`log-card ${isBinaryHistory ? 'log-card-binary' : ''}`}
+                style={{ borderLeft: `4px solid ${statusColor}` }}
               >
                 <div className="log-card-top">
                   <strong className="log-card-pair">{item.pair}</strong>
@@ -211,16 +263,25 @@ export default function LogAnalysis({ user, t, strategies = [] }) {
                 </div>
 
                 <div className="log-card-meta">
-                  <span>{logT.interval} <span style={{ color: 'var(--accent)' }}>{item.timeframe}</span></span>
+                  <span>{isBinaryHistory ? 'Timeframe:' : logT.interval} <span style={{ color: 'var(--accent)' }}>{item.timeframe}</span></span>
                   <span>{item.strategy_name || logT.customStrategy}</span>
                 </div>
+
+                {isBinaryHistory ? (
+                  <div className="log-binary-details">
+                    <span>{formatMarket(item.market_kind)}</span>
+                    <span className={`log-binary-signal ${signalClass}`}>{signalLabel}</span>
+                    <span>Entry {formatPrice(item.entry_price)}</span>
+                    <span>Close {formatPrice(item.exit_price)}</span>
+                  </div>
+                ) : null}
 
                 <div className="log-card-bottom">
                   <span
                     className="log-card-status"
-                    style={{ color: item.status === 'success' ? 'var(--success)' : 'var(--danger)' }}
+                    style={{ color: statusColor }}
                   >
-                    {item.status === 'success' ? logT.success : logT.fail}
+                    {statusLabel}
                   </span>
                   {strategyWinrate !== null ? (
                     <span className="log-card-winrate">Winrate {formatPercent(strategyWinrate)}</span>
