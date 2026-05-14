@@ -1694,17 +1694,17 @@ def build_binary_quote_symbol_candidates(symbol: str) -> List[str]:
     aliases = {
         "gas": ["Natural Gas OTC", "Natural Gas", "NG/USD", "NGUSD", "Gas OTC"],
         "naturalgas": ["Natural Gas OTC", "Natural Gas", "NG/USD", "NGUSD", "Gas OTC"],
-        "cotton": ["Cotton OTC", "Cotton", "CT1"],
-        "sugar": ["Sugar OTC", "Sugar", "SB1"],
-        "cocoa": ["Cocoa OTC", "Cocoa", "CC1"],
-        "coffee": ["Coffee OTC", "Coffee", "KC1"],
-        "soy": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
-        "soya": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
-        "soybean": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
-        "soybeans": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
-        "corn": ["Corn OTC", "Corn", "C_1"],
-        "maize": ["Corn OTC", "Corn", "C_1"],
-        "wheat": ["Wheat OTC", "Wheat", "W_1"],
+        "cotton": ["Cotton OTC", "Cotton", "CT1", "COTN"],
+        "sugar": ["SB1", "Sugar OTC", "Sugar"],
+        "cocoa": ["CC1", "COCO", "Cocoa OTC", "Cocoa"],
+        "coffee": ["KC1", "COFF", "Coffee OTC", "Coffee"],
+        "soy": ["SOYB", "Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
+        "soya": ["SOYB", "Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
+        "soybean": ["SOYB", "Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
+        "soybeans": ["SOYB", "Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
+        "corn": ["CORN", "Corn OTC", "Corn", "C_1"],
+        "maize": ["CORN", "Corn OTC", "Corn", "C_1"],
+        "wheat": ["WEAT", "Wheat OTC", "Wheat", "W_1"],
     }
     candidates = [raw]
     candidates.extend(aliases.get(cleaned_key, []))
