@@ -245,6 +245,18 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 """
             )
 
+            await cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS admin_support_links (
+                    id INT NOT NULL PRIMARY KEY,
+                    channel_url TEXT NULL,
+                    support_url TEXT NULL,
+                    updated_by BIGINT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
         await _ensure_column(conn, db_name, "users", "strategy_id", "ALTER TABLE users ADD COLUMN strategy_id BIGINT NULL")
         await _ensure_column(conn, db_name, "users", "lang", "ALTER TABLE users ADD COLUMN lang VARCHAR(16) NOT NULL DEFAULT 'ru'")
         await _ensure_column(conn, db_name, "users", "mode", "ALTER TABLE users ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'forex'")
@@ -680,6 +692,20 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 WHERE gpt_model IS NULL OR TRIM(gpt_model) = ''
                 """,
                 (DEFAULT_ANALYSIS_GPT_MODEL,),
+            )
+
+            await cur.execute(
+                """
+                INSERT INTO admin_support_links (id, channel_url, support_url, updated_by)
+                VALUES (1, %s, %s, NULL)
+                ON DUPLICATE KEY UPDATE
+                    channel_url = COALESCE(NULLIF(channel_url, ''), VALUES(channel_url)),
+                    support_url = COALESCE(NULLIF(support_url, ''), VALUES(support_url))
+                """,
+                (
+                    (os.getenv("CHANNEL_URL") or "").strip(),
+                    (os.getenv("SUPPORT_URL") or "").strip(),
+                ),
             )
 
             raw_default_admin_id = (os.getenv("ADMIN_DEFAULT_USER_ID") or "7097261848").strip()

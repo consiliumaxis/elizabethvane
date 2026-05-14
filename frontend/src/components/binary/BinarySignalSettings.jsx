@@ -9,7 +9,7 @@ import iconEdit from '../../assets/icons/edit.svg?url';
 const DEFAULT_MARKETS = [
   { key: 'forex', title: 'Forex' },
   { key: 'otc', title: 'OTC' },
-  { key: 'commodities', title: 'Metals' },
+  { key: 'commodities', title: 'Commodities' },
   { key: 'stocks', title: 'Stocks' },
   { key: 'crypto', title: 'Crypto' }
 ];
