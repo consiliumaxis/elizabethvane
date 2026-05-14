@@ -1692,19 +1692,19 @@ def build_binary_quote_symbol_candidates(symbol: str) -> List[str]:
     cleaned_key = "".join(ch for ch in raw.lower() if ch.isalnum())
     cleaned_key = cleaned_key.replace("otc", "").replace("spot", "")
     aliases = {
-        "gas": ["Natural Gas OTC", "Natural Gas", "Gas OTC"],
-        "naturalgas": ["Natural Gas OTC", "Natural Gas", "Gas OTC"],
-        "cotton": ["Cotton OTC", "Cotton"],
-        "sugar": ["Sugar OTC", "Sugar"],
-        "cocoa": ["Cocoa OTC", "Cocoa"],
-        "coffee": ["Coffee OTC", "Coffee"],
-        "soy": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans"],
-        "soya": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans"],
-        "soybean": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans"],
-        "soybeans": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans"],
-        "corn": ["Corn OTC", "Corn"],
-        "maize": ["Corn OTC", "Corn"],
-        "wheat": ["Wheat OTC", "Wheat"],
+        "gas": ["Natural Gas OTC", "Natural Gas", "NG/USD", "NGUSD", "Gas OTC"],
+        "naturalgas": ["Natural Gas OTC", "Natural Gas", "NG/USD", "NGUSD", "Gas OTC"],
+        "cotton": ["Cotton OTC", "Cotton", "CT1"],
+        "sugar": ["Sugar OTC", "Sugar", "SB1"],
+        "cocoa": ["Cocoa OTC", "Cocoa", "CC1"],
+        "coffee": ["Coffee OTC", "Coffee", "KC1"],
+        "soy": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
+        "soya": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
+        "soybean": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
+        "soybeans": ["Soybean OTC", "Soybeans OTC", "Soybean", "Soybeans", "S_1"],
+        "corn": ["Corn OTC", "Corn", "C_1"],
+        "maize": ["Corn OTC", "Corn", "C_1"],
+        "wheat": ["Wheat OTC", "Wheat", "W_1"],
     }
     candidates = [raw]
     candidates.extend(aliases.get(cleaned_key, []))
@@ -2014,6 +2014,16 @@ async def fetch_binary_quote_payload(
                     second["_resolved_quote_category"] = quote_category
                     second["_resolved_quote_symbol"] = quote_symbol
                     return second
+                legacy_price = await get_price_for_symbol(client, quote_symbol, token)
+                if legacy_price and legacy_price > 0:
+                    return {
+                        "ok": True,
+                        "price": float(legacy_price),
+                        "symbol": symbol,
+                        "_resolved_quote_category": quote_category,
+                        "_resolved_quote_symbol": quote_symbol,
+                        "_quote_source": "devsbite_price",
+                    }
         return last_payload if isinstance(last_payload, dict) else {}
 
 async def fetch_binary_quote_price(category: str, symbol: str) -> Optional[float]:
