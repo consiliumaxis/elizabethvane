@@ -211,6 +211,10 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     indicator_mode VARCHAR(16) NOT NULL DEFAULT 'auto',
                     indicator_overrides LONGTEXT NULL,
                     message TEXT NULL,
+                    emulation_market VARCHAR(32) NULL,
+                    emulation_symbol VARCHAR(128) NULL,
+                    emulation_price DOUBLE NULL,
+                    emulation_strategy_id BIGINT NULL,
                     updated_by BIGINT NULL,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -444,6 +448,34 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             conn,
             db_name,
             "admin_stream_settings",
+            "emulation_market",
+            "ALTER TABLE admin_stream_settings ADD COLUMN emulation_market VARCHAR(32) NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_stream_settings",
+            "emulation_symbol",
+            "ALTER TABLE admin_stream_settings ADD COLUMN emulation_symbol VARCHAR(128) NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_stream_settings",
+            "emulation_price",
+            "ALTER TABLE admin_stream_settings ADD COLUMN emulation_price DOUBLE NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_stream_settings",
+            "emulation_strategy_id",
+            "ALTER TABLE admin_stream_settings ADD COLUMN emulation_strategy_id BIGINT NULL",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_stream_settings",
             "updated_by",
             "ALTER TABLE admin_stream_settings ADD COLUMN updated_by BIGINT NULL",
         )
@@ -646,9 +678,13 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     indicator_mode,
                     indicator_overrides,
                     message,
+                    emulation_market,
+                    emulation_symbol,
+                    emulation_price,
+                    emulation_strategy_id,
                     updated_by
                 )
-                VALUES (1, 0, 'all', NULL, 'BUY', 'auto', NULL, NULL, 'auto', '{}', '', NULL)
+                VALUES (1, 0, 'all', NULL, 'BUY', 'auto', NULL, NULL, 'auto', '{}', '', NULL, NULL, NULL, NULL, NULL)
                 ON DUPLICATE KEY UPDATE id = id
                 """
             )

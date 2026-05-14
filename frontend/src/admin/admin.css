@@ -571,6 +571,35 @@
   gap: 10px;
 }
 
+.admin-stream-emulation-block {
+  background: linear-gradient(145deg, rgba(255, 252, 246, 0.9) 0%, rgba(250, 239, 219, 0.72) 100%);
+}
+
+.admin-stream-hint {
+  margin-bottom: 10px;
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.admin-stream-emulation-grid {
+  display: grid;
+  grid-template-columns: 0.8fr 1.4fr 1fr;
+  gap: 10px;
+}
+
+.admin-stream-preview-note {
+  margin-top: 4px;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 720px) {
+  .admin-stream-emulation-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .admin-stream-indicators-list {
   margin-top: 10px;
   display: grid;

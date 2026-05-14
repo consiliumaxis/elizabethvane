@@ -190,6 +190,10 @@ async def get_stream_settings_row():
         "indicator_mode": "auto",
         "indicator_overrides": {},
         "message": "",
+        "emulation_market": "",
+        "emulation_symbol": "",
+        "emulation_price": None,
+        "emulation_strategy_id": None,
         "updated_at": None,
         "updated_by": None,
     }
@@ -210,6 +214,10 @@ async def get_stream_settings_row():
                     indicator_mode,
                     indicator_overrides,
                     message,
+                    emulation_market,
+                    emulation_symbol,
+                    emulation_price,
+                    emulation_strategy_id,
                     updated_at,
                     updated_by
                 FROM admin_stream_settings
@@ -269,6 +277,20 @@ async def get_stream_settings_row():
             normalized_overrides[key_norm] = signal
     settings["indicator_overrides"] = normalized_overrides
     settings["message"] = str(settings.get("message") or "")
+    settings["emulation_market"] = normalize_market_kind(settings.get("emulation_market") or "") if settings.get("emulation_market") else ""
+    settings["emulation_symbol"] = str(settings.get("emulation_symbol") or "").strip()
+    try:
+        settings["emulation_price"] = float(settings["emulation_price"]) if settings.get("emulation_price") is not None else None
+    except (TypeError, ValueError):
+        settings["emulation_price"] = None
+    if settings.get("emulation_price") is not None and settings["emulation_price"] <= 0:
+        settings["emulation_price"] = None
+    try:
+        settings["emulation_strategy_id"] = (
+            int(settings["emulation_strategy_id"]) if settings.get("emulation_strategy_id") is not None else None
+        )
+    except (TypeError, ValueError):
+        settings["emulation_strategy_id"] = None
     return settings
 
 
@@ -489,6 +511,22 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
     if forced_signal not in ("BUY", "SELL"):
         return analysis_data
 
+    emulation_symbol = str(stream_settings.get("emulation_symbol") or "").strip()
+    emulation_market = str(stream_settings.get("emulation_market") or "").strip()
+    emulation_price = None
+    try:
+        raw_emulation_price = stream_settings.get("emulation_price")
+        emulation_price = float(raw_emulation_price) if raw_emulation_price is not None else None
+    except (TypeError, ValueError):
+        emulation_price = None
+    if emulation_price is not None and emulation_price > 0:
+        analysis_data["price"] = float(emulation_price)
+        analysis_data["entry_price"] = float(emulation_price)
+    if emulation_symbol:
+        analysis_data["symbol"] = emulation_symbol
+    if emulation_market:
+        analysis_data["market_kind"] = normalize_market_kind(emulation_market)
+
     def normalize_alias(value: str) -> str:
         return str(value or "").strip().upper().replace(" ", "").replace("_", "").replace("-", "")
 
@@ -687,6 +725,10 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
         "indicator_mode": stream_settings.get("indicator_mode") or "auto",
         "indicator_overrides": manual_overrides if manual_overrides else {},
         "message": stream_settings.get("message") or "",
+        "emulation_market": normalize_market_kind(emulation_market) if emulation_market else "",
+        "emulation_symbol": emulation_symbol,
+        "emulation_price": emulation_price if emulation_price is not None and emulation_price > 0 else None,
+        "emulation_strategy_id": stream_settings.get("emulation_strategy_id"),
     }
     return ensure_analysis_key_levels(analysis_data, preferred_signal=forced_signal)
 
@@ -1133,6 +1175,15 @@ async def admin_broadcast(request: Request, admin=Depends(get_admin_user)):
     }
 
 
+@app.get("/api/admin/market-options")
+async def admin_market_options(
+    kind: str = Query(default="forex"),
+    min_payout: int = Query(default=DEVSBITE_MIN_PAYOUT, ge=0, le=100),
+    admin=Depends(get_admin_user),
+):
+    return await get_market_options_payload(kind, min_payout)
+
+
 @app.get("/api/admin/settings")
 async def admin_settings(admin=Depends(get_admin_user)):
     stream_settings = await get_stream_settings_row()
@@ -1233,6 +1284,30 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                 if levels_mode == "manual" and (manual_conservative_sl is None or manual_take_profit is None):
                     raise HTTPException(status_code=400, detail="manual levels require conservative_sl and take_profit")
 
+                emulation_market_raw = str(streams_data.get("emulation_market") or "").strip()
+                emulation_market = normalize_market_kind(emulation_market_raw) if emulation_market_raw else ""
+                emulation_symbol = str(streams_data.get("emulation_symbol") or "").strip()[:128]
+                raw_emulation_price = streams_data.get("emulation_price")
+                try:
+                    emulation_price = (
+                        float(raw_emulation_price)
+                        if raw_emulation_price is not None and str(raw_emulation_price).strip()
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    emulation_price = None
+                if emulation_price is not None and emulation_price <= 0:
+                    raise HTTPException(status_code=400, detail="emulation_price must be greater than zero")
+                emulation_strategy_id = streams_data.get("emulation_strategy_id", strategy_id)
+                try:
+                    emulation_strategy_id = (
+                        int(emulation_strategy_id)
+                        if emulation_strategy_id is not None and str(emulation_strategy_id).strip()
+                        else strategy_id
+                    )
+                except (TypeError, ValueError):
+                    emulation_strategy_id = strategy_id
+
                 indicator_mode = str(streams_data.get("indicator_mode") or "auto").strip().lower()
                 if indicator_mode not in ("auto", "manual"):
                     indicator_mode = "auto"
@@ -1266,9 +1341,13 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         indicator_mode,
                         indicator_overrides,
                         message,
+                        emulation_market,
+                        emulation_symbol,
+                        emulation_price,
+                        emulation_strategy_id,
                         updated_by
                     )
-                    VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         is_enabled = VALUES(is_enabled),
                         scope = VALUES(scope),
@@ -1280,6 +1359,10 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         indicator_mode = VALUES(indicator_mode),
                         indicator_overrides = VALUES(indicator_overrides),
                         message = VALUES(message),
+                        emulation_market = VALUES(emulation_market),
+                        emulation_symbol = VALUES(emulation_symbol),
+                        emulation_price = VALUES(emulation_price),
+                        emulation_strategy_id = VALUES(emulation_strategy_id),
                         updated_by = VALUES(updated_by)
                     """,
                     (
@@ -1293,6 +1376,10 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         indicator_mode,
                         indicator_overrides_json,
                         message,
+                        emulation_market,
+                        emulation_symbol,
+                        emulation_price,
+                        emulation_strategy_id,
                         updated_by,
                     ),
                 )
@@ -2999,6 +3086,10 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
     if recommendation not in ("BUY", "SELL"):
         return {"error": "Market is neutral right now. Try another pair or expiration."}
 
+    stream_meta = analysis_data.get("stream_override") if isinstance(analysis_data.get("stream_override"), dict) else {}
+    analysis_pair = str(stream_meta.get("emulation_symbol") or pair).strip() or pair
+    analysis_market_kind = normalize_market_kind(stream_meta.get("emulation_market") or market_kind)
+
     entry_price = None
     for key in ("price", "entry_price"):
         try:
@@ -3009,14 +3100,14 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
         except (TypeError, ValueError):
             pass
     if not entry_price:
-        entry_price = await fetch_binary_quote_price(market_kind, pair)
+        entry_price = await fetch_binary_quote_price(analysis_market_kind, analysis_pair)
     if entry_price:
         analysis_data["price"] = float(entry_price)
         analysis_data["entry_price"] = float(entry_price)
     else:
         return {"error": "Live price is unavailable right now. Try another pair or expiration."}
-    analysis_data["symbol"] = pair
-    analysis_data["market_kind"] = market_kind
+    analysis_data["symbol"] = analysis_pair
+    analysis_data["market_kind"] = analysis_market_kind
     analysis_data["selected_expiration"] = interval_raw
     analysis_data["analysis_interval"] = analysis_interval
     analysis_data["fetched_at"] = datetime.utcnow().isoformat() + "Z"
@@ -3034,10 +3125,10 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
                 """,
                 (
                     user_id,
-                    pair,
+                    analysis_pair,
                     interval_raw,
                     strategy_id_int,
-                    market_kind,
+                    analysis_market_kind,
                     float(entry_price or 0) if entry_price else None,
                     json.dumps(analysis_data, ensure_ascii=False),
                     json.dumps(news_data, ensure_ascii=False),
@@ -3190,6 +3281,9 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
             if stream_override:
                 analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
             analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
+            stream_meta = analysis_data.get("stream_override") if isinstance(analysis_data.get("stream_override"), dict) else {}
+            analysis_pair = str(stream_meta.get("emulation_symbol") or pair).strip() or pair
+            analysis_data["symbol"] = analysis_pair
             news_data = await fetch_news_data()
         except httpx.HTTPStatusError as e:
             error_text = e.response.text
@@ -3207,7 +3301,7 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
                 INSERT INTO user_analyses (user_id, pair, timeframe, strategy_id, raw_data, news_data, status)
                 VALUES (%s, %s, %s, %s, %s, %s, 'active')
                 """,
-                (user_id, pair, interval_raw, strategy_id_int, json.dumps(analysis_data), json.dumps(news_data)),
+                (user_id, analysis_pair, interval_raw, strategy_id_int, json.dumps(analysis_data), json.dumps(news_data)),
             )
             analysis_id = cur.lastrowid
 
