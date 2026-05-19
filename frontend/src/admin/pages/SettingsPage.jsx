@@ -4,6 +4,13 @@ import { apiAdminFetchJson } from '../../lib/api';
 const ACCESS_STORAGE_KEY = 'admin_system_access_enabled';
 const STREAM_SIGNALS = ['BUY', 'SELL'];
 const INDICATOR_SIGNAL_OPTIONS = ['AUTO', 'BUY', 'SELL', 'NEUTRAL'];
+const STREAM_MARKETS = [
+  { key: 'forex', title: 'Forex' },
+  { key: 'otc', title: 'OTC' },
+  { key: 'commodities', title: 'Commodities' },
+  { key: 'stocks', title: 'Stocks' },
+  { key: 'crypto', title: 'Crypto' },
+];
 
 const normalizeIndicatorKey = (value) =>
   String(value || '')
@@ -175,6 +182,11 @@ export default function SettingsPage({ adminUser }) {
   const [streamIndicatorMode, setStreamIndicatorMode] = useState('auto');
   const [streamIndicatorOverrides, setStreamIndicatorOverrides] = useState({});
   const [streamStrategies, setStreamStrategies] = useState([]);
+  const [streamMarket, setStreamMarket] = useState('forex');
+  const [streamSymbol, setStreamSymbol] = useState('');
+  const [streamManualPrice, setStreamManualPrice] = useState('');
+  const [streamMarketOptions, setStreamMarketOptions] = useState([]);
+  const [streamMarketLoading, setStreamMarketLoading] = useState(false);
 
   const [systemAccessEnabled, setSystemAccessEnabled] = useState(true);
   const [channelUrl, setChannelUrl] = useState('');
@@ -238,6 +250,10 @@ export default function SettingsPage({ adminUser }) {
         });
       }
       setStreamIndicatorOverrides(nextOverrides);
+      const emulationMarket = String(streams.emulation_market || '').trim().toLowerCase();
+      setStreamMarket(STREAM_MARKETS.some((item) => item.key === emulationMarket) ? emulationMarket : 'forex');
+      setStreamSymbol(streams.emulation_symbol || '');
+      setStreamManualPrice(streams.emulation_price !== null && streams.emulation_price !== undefined ? String(streams.emulation_price) : '');
 
       setStreamStrategies(settingsRes?.settings?.stream_strategies || []);
 
@@ -252,6 +268,38 @@ export default function SettingsPage({ adminUser }) {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadMarketOptions = async () => {
+      if (activeSection !== 'streams' || !streamMarket) {
+        return;
+      }
+      setStreamMarketLoading(true);
+      try {
+        const res = await apiAdminFetchJson(`/api/admin/market-options?kind=${encodeURIComponent(streamMarket)}`);
+        if (!cancelled) {
+          setStreamMarketOptions(Array.isArray(res?.pairs) ? res.pairs : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setStreamMarketOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setStreamMarketLoading(false);
+        }
+      }
+    };
+    loadMarketOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, streamMarket]);
+
+  const selectedStreamMarketTitle = useMemo(() => {
+    return STREAM_MARKETS.find((item) => item.key === streamMarket)?.title || streamMarket || 'Market';
+  }, [streamMarket]);
 
   const selectedStrategy = useMemo(
     () => streamStrategies.find((item) => String(item.id) === String(streamStrategyId)) || null,
@@ -307,8 +355,13 @@ export default function SettingsPage({ adminUser }) {
 
     const manualSL = toMaybeNumber(streamManualSL);
     const manualTP = toMaybeNumber(streamManualTP);
+    const emulationPrice = toMaybeNumber(streamManualPrice);
     if (shouldSaveStreams && streamEnabled && streamLevelsMode === 'manual' && (manualSL === null || manualTP === null)) {
       setError('Для ручных уровней нужно указать Conservative SL и Target (Take Profit)');
+      return;
+    }
+    if (shouldSaveStreams && streamManualPrice.trim() && emulationPrice === null) {
+      setError('Текущая цена должна быть числом');
       return;
     }
 
@@ -338,6 +391,10 @@ export default function SettingsPage({ adminUser }) {
             streamScope === 'strategy' && streamIndicatorMode === 'manual'
               ? streamIndicatorOverrides
               : {},
+          emulation_market: streamSymbol.trim() ? streamMarket : '',
+          emulation_symbol: streamSymbol.trim(),
+          emulation_price: emulationPrice,
+          emulation_strategy_id: streamScope === 'strategy' && streamStrategyId ? Number(streamStrategyId) : null,
         };
       }
 
@@ -599,6 +656,57 @@ export default function SettingsPage({ adminUser }) {
           </div>
         ) : null}
 
+        <div className="admin-stream-block admin-stream-emulation-block">
+          <label className="admin-label">Актив и цена для эмуляции записи</label>
+          <div className="admin-stream-hint">
+            Можно оставить пустым: тогда пользовательский актив и live-цена останутся как обычно. Если указать актив, именно он попадёт в карточку и историю сигнала. Если указать текущую цену, анализ и запись возьмут её как entry price.
+          </div>
+          <div className="admin-stream-emulation-grid">
+            <div className="admin-field">
+              <label className="admin-label">Рынок</label>
+              <select
+                className="admin-input"
+                value={streamMarket}
+                onChange={(e) => {
+                  setStreamMarket(e.target.value);
+                  setStreamSymbol('');
+                }}
+              >
+                {STREAM_MARKETS.map((market) => (
+                  <option key={market.key} value={market.key}>{market.title}</option>
+                ))}
+              </select>
+            </div>
+            <div className="admin-field">
+              <label className="admin-label">Актив</label>
+              <input
+                className="admin-input"
+                list={`stream-asset-options-${streamMarket}`}
+                placeholder={streamMarketLoading ? 'Загружаем активы...' : 'Например AUD/CHF или Netflix OTC'}
+                value={streamSymbol}
+                onChange={(e) => setStreamSymbol(e.target.value)}
+              />
+              <datalist id={`stream-asset-options-${streamMarket}`}>
+                {streamMarketOptions.map((asset) => (
+                  <option key={`${asset.pair}-${asset.payout || 'np'}`} value={asset.pair}>
+                    {asset.payout ? `${asset.payout}%` : selectedStreamMarketTitle}
+                  </option>
+                ))}
+              </datalist>
+            </div>
+            <div className="admin-field">
+              <label className="admin-label">Текущая цена</label>
+              <input
+                className="admin-input"
+                inputMode="decimal"
+                placeholder="Автоматически, если пусто"
+                value={streamManualPrice}
+                onChange={(e) => setStreamManualPrice(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+
         <div className="admin-stream-block">
           <label className="admin-label">Итоговый вердикт системы</label>
           <div className="admin-pill-group">
@@ -730,6 +838,11 @@ export default function SettingsPage({ adminUser }) {
               <div className="admin-stream-preview-meta">
                 {previewStrategy ? `${previewStrategy.icon || '📌'} ${previewStrategy.name}` : 'Без выбранной стратегии'}
                 {previewStrategy?.allowed_timeframes ? ` | ${previewStrategy.allowed_timeframes}` : ''}
+              </div>
+              <div className="admin-stream-preview-note">
+                Актив: {streamSymbol.trim() ? `${selectedStreamMarketTitle} · ${streamSymbol.trim()}` : 'как выбрал пользователь'}
+                {' · '}
+                Цена: {toMaybeNumber(streamManualPrice) !== null ? formatLevel(streamManualPrice) : 'live'}
               </div>
             </div>
             <div className={`admin-stream-verdict ${previewVerdict === 'BUY' ? 'buy' : previewVerdict === 'SELL' ? 'sell' : 'off'}`}>
