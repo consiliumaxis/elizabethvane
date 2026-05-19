@@ -1491,7 +1491,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         emulation_strategy_id,
                         updated_by
                     )
-                    VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         is_enabled = VALUES(is_enabled),
                         scope = VALUES(scope),
