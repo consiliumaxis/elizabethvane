@@ -640,14 +640,7 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
     if emulation_price is not None and emulation_price > 0:
         analysis_data["price"] = float(emulation_price)
         analysis_data["entry_price"] = float(emulation_price)
-    if emulation_symbol:
-        analysis_data["symbol"] = emulation_symbol
     emulation_analysis_type = str(stream_settings.get("emulation_analysis_type") or "forex").strip().lower()
-    if emulation_market:
-        if emulation_analysis_type == "binary":
-            analysis_data["market_kind"] = normalize_market_kind(emulation_market)
-        else:
-            analysis_data["market_kind"] = normalize_forex_stream_market(emulation_market)
 
     def normalize_alias(value: str) -> str:
         return str(value or "").strip().upper().replace(" ", "").replace("_", "").replace("-", "")
@@ -3232,9 +3225,8 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
     if recommendation not in ("BUY", "SELL"):
         return {"error": "Market is neutral right now. Try another pair or expiration."}
 
-    stream_meta = analysis_data.get("stream_override") if isinstance(analysis_data.get("stream_override"), dict) else {}
-    analysis_pair = str(stream_meta.get("emulation_symbol") or pair).strip() or pair
-    analysis_market_kind = normalize_market_kind(stream_meta.get("emulation_market") or market_kind)
+    analysis_pair = str(pair).strip() or pair
+    analysis_market_kind = normalize_market_kind(market_kind)
 
     entry_price = None
     for key in ("price", "entry_price"):
@@ -3427,8 +3419,7 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
             if stream_override:
                 analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
             analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-            stream_meta = analysis_data.get("stream_override") if isinstance(analysis_data.get("stream_override"), dict) else {}
-            analysis_pair = str(stream_meta.get("emulation_symbol") or pair).strip() or pair
+            analysis_pair = str(pair).strip() or pair
             analysis_data["symbol"] = analysis_pair
             news_data = await fetch_news_data()
         except httpx.HTTPStatusError as e:
