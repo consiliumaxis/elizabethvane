@@ -301,13 +301,44 @@ async def get_stream_settings_row():
     return settings
 
 
-async def resolve_stream_override(strategy_id: Optional[int], analysis_type: str = "forex"):
+def normalize_stream_asset_key(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    for token in ("otc", "spot"):
+        raw = raw.replace(token, "")
+    return "".join(ch for ch in raw if ch.isalnum())
+
+
+def stream_requested_asset_matches(settings: dict, analysis_type: str, requested_symbol: str, requested_market: str = "") -> bool:
+    emulation_symbol = str(settings.get("emulation_symbol") or "").strip()
+    if not emulation_symbol:
+        return True
+
+    admin_key = normalize_stream_asset_key(emulation_symbol)
+    request_key = normalize_stream_asset_key(requested_symbol)
+    if not admin_key or not request_key or admin_key != request_key:
+        return False
+
+    if str(analysis_type or "").strip().lower() == "binary":
+        emulation_market = str(settings.get("emulation_market") or "").strip()
+        if emulation_market and requested_market:
+            return normalize_market_kind(emulation_market) == normalize_market_kind(requested_market)
+    return True
+
+
+async def resolve_stream_override(
+    strategy_id: Optional[int],
+    analysis_type: str = "forex",
+    requested_symbol: str = "",
+    requested_market: str = "",
+):
     settings = await get_stream_settings_row()
     if int(settings.get("is_enabled") or 0) != 1:
         return None
     target_analysis_type = str(settings.get("emulation_analysis_type") or "forex").strip().lower()
     current_analysis_type = str(analysis_type or "forex").strip().lower()
     if target_analysis_type in ("forex", "binary") and target_analysis_type != current_analysis_type:
+        return None
+    if not stream_requested_asset_matches(settings, current_analysis_type, requested_symbol, requested_market):
         return None
     scope = settings.get("scope") or "all"
     if scope == "all":
@@ -3216,7 +3247,12 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
             return {"error": str(e)}
 
     analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-    stream_override = await resolve_stream_override(strategy_id_int, analysis_type="binary")
+    stream_override = await resolve_stream_override(
+        strategy_id_int,
+        analysis_type="binary",
+        requested_symbol=pair,
+        requested_market=market_kind,
+    )
     if stream_override:
         analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
     analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
@@ -3415,7 +3451,11 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
             else:
                 analysis_data = baseline_analysis_data
             analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-            stream_override = await resolve_stream_override(strategy_id_int, analysis_type="forex")
+            stream_override = await resolve_stream_override(
+                strategy_id_int,
+                analysis_type="forex",
+                requested_symbol=formatted_pair or pair,
+            )
             if stream_override:
                 analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
             analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
