@@ -211,6 +211,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     indicator_mode VARCHAR(16) NOT NULL DEFAULT 'auto',
                     indicator_overrides LONGTEXT NULL,
                     message TEXT NULL,
+                    emulation_analysis_type VARCHAR(16) NOT NULL DEFAULT 'forex',
                     emulation_market VARCHAR(32) NULL,
                     emulation_symbol VARCHAR(128) NULL,
                     emulation_price DOUBLE NULL,
@@ -448,6 +449,13 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             conn,
             db_name,
             "admin_stream_settings",
+            "emulation_analysis_type",
+            "ALTER TABLE admin_stream_settings ADD COLUMN emulation_analysis_type VARCHAR(16) NOT NULL DEFAULT 'forex'",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_stream_settings",
             "emulation_market",
             "ALTER TABLE admin_stream_settings ADD COLUMN emulation_market VARCHAR(32) NULL",
         )
@@ -678,13 +686,14 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     indicator_mode,
                     indicator_overrides,
                     message,
+                    emulation_analysis_type,
                     emulation_market,
                     emulation_symbol,
                     emulation_price,
                     emulation_strategy_id,
                     updated_by
                 )
-                VALUES (1, 0, 'all', NULL, 'BUY', 'auto', NULL, NULL, 'auto', '{}', '', NULL, NULL, NULL, NULL, NULL)
+                VALUES (1, 0, 'all', NULL, 'BUY', 'auto', NULL, NULL, 'auto', '{}', '', 'forex', NULL, NULL, NULL, NULL, NULL)
                 ON DUPLICATE KEY UPDATE id = id
                 """
             )

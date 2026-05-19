@@ -582,6 +582,18 @@
   line-height: 1.45;
 }
 
+.admin-stream-type-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.admin-stream-hint.compact {
+  margin-top: 0;
+  font-size: 0.78rem;
+}
+
 .admin-stream-emulation-grid {
   display: grid;
   grid-template-columns: 0.8fr 1.4fr 1fr;
