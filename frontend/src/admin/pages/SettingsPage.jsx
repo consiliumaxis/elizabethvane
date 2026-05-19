@@ -4,11 +4,21 @@ import { apiAdminFetchJson } from '../../lib/api';
 const ACCESS_STORAGE_KEY = 'admin_system_access_enabled';
 const STREAM_SIGNALS = ['BUY', 'SELL'];
 const INDICATOR_SIGNAL_OPTIONS = ['AUTO', 'BUY', 'SELL', 'NEUTRAL'];
-const STREAM_MARKETS = [
+const STREAM_ANALYSIS_TYPES = [
+  { key: 'forex', title: 'Forex' },
+  { key: 'binary', title: 'Binary' },
+];
+const FOREX_STREAM_MARKETS = [
+  { key: 'currencies', title: 'Валюты' },
+  { key: 'indices', title: 'Индексы' },
+  { key: 'commodities', title: 'Сырье' },
+  { key: 'stocks', title: 'Акции' },
+];
+const BINARY_STREAM_MARKETS = [
   { key: 'forex', title: 'Forex' },
   { key: 'otc', title: 'OTC' },
-  { key: 'commodities', title: 'Commodities' },
-  { key: 'stocks', title: 'Stocks' },
+  { key: 'commodities', title: 'Сырье' },
+  { key: 'stocks', title: 'Акции' },
   { key: 'crypto', title: 'Crypto' },
 ];
 
@@ -182,7 +192,8 @@ export default function SettingsPage({ adminUser }) {
   const [streamIndicatorMode, setStreamIndicatorMode] = useState('auto');
   const [streamIndicatorOverrides, setStreamIndicatorOverrides] = useState({});
   const [streamStrategies, setStreamStrategies] = useState([]);
-  const [streamMarket, setStreamMarket] = useState('forex');
+  const [streamAnalysisType, setStreamAnalysisType] = useState('forex');
+  const [streamMarket, setStreamMarket] = useState('currencies');
   const [streamSymbol, setStreamSymbol] = useState('');
   const [streamManualPrice, setStreamManualPrice] = useState('');
   const [streamMarketOptions, setStreamMarketOptions] = useState([]);
@@ -250,8 +261,13 @@ export default function SettingsPage({ adminUser }) {
         });
       }
       setStreamIndicatorOverrides(nextOverrides);
+      const emulationType = String(streams.emulation_analysis_type || 'forex').trim().toLowerCase();
+      const nextAnalysisType = STREAM_ANALYSIS_TYPES.some((item) => item.key === emulationType) ? emulationType : 'forex';
+      const marketOptions = nextAnalysisType === 'binary' ? BINARY_STREAM_MARKETS : FOREX_STREAM_MARKETS;
+      const fallbackMarket = nextAnalysisType === 'binary' ? 'forex' : 'currencies';
       const emulationMarket = String(streams.emulation_market || '').trim().toLowerCase();
-      setStreamMarket(STREAM_MARKETS.some((item) => item.key === emulationMarket) ? emulationMarket : 'forex');
+      setStreamAnalysisType(nextAnalysisType);
+      setStreamMarket(marketOptions.some((item) => item.key === emulationMarket) ? emulationMarket : fallbackMarket);
       setStreamSymbol(streams.emulation_symbol || '');
       setStreamManualPrice(streams.emulation_price !== null && streams.emulation_price !== undefined ? String(streams.emulation_price) : '');
 
@@ -277,7 +293,7 @@ export default function SettingsPage({ adminUser }) {
       }
       setStreamMarketLoading(true);
       try {
-        const res = await apiAdminFetchJson(`/api/admin/market-options?kind=${encodeURIComponent(streamMarket)}`);
+        const res = await apiAdminFetchJson(`/api/admin/stream-assets?analysis_type=${encodeURIComponent(streamAnalysisType)}&market=${encodeURIComponent(streamMarket)}`);
         if (!cancelled) {
           setStreamMarketOptions(Array.isArray(res?.pairs) ? res.pairs : []);
         }
@@ -295,11 +311,16 @@ export default function SettingsPage({ adminUser }) {
     return () => {
       cancelled = true;
     };
-  }, [activeSection, streamMarket]);
+  }, [activeSection, streamAnalysisType, streamMarket]);
+
+  const activeStreamMarkets = useMemo(
+    () => (streamAnalysisType === 'binary' ? BINARY_STREAM_MARKETS : FOREX_STREAM_MARKETS),
+    [streamAnalysisType]
+  );
 
   const selectedStreamMarketTitle = useMemo(() => {
-    return STREAM_MARKETS.find((item) => item.key === streamMarket)?.title || streamMarket || 'Market';
-  }, [streamMarket]);
+    return activeStreamMarkets.find((item) => item.key === streamMarket)?.title || streamMarket || 'Market';
+  }, [activeStreamMarkets, streamMarket]);
 
   const selectedStrategy = useMemo(
     () => streamStrategies.find((item) => String(item.id) === String(streamStrategyId)) || null,
@@ -391,6 +412,7 @@ export default function SettingsPage({ adminUser }) {
             streamScope === 'strategy' && streamIndicatorMode === 'manual'
               ? streamIndicatorOverrides
               : {},
+          emulation_analysis_type: streamAnalysisType,
           emulation_market: streamSymbol.trim() ? streamMarket : '',
           emulation_symbol: streamSymbol.trim(),
           emulation_price: emulationPrice,
@@ -659,7 +681,26 @@ export default function SettingsPage({ adminUser }) {
         <div className="admin-stream-block admin-stream-emulation-block">
           <label className="admin-label">Актив и цена для эмуляции записи</label>
           <div className="admin-stream-hint">
-            Можно оставить пустым: тогда пользовательский актив и live-цена останутся как обычно. Если указать актив, именно он попадёт в карточку и историю сигнала. Если указать текущую цену, анализ и запись возьмут её как entry price.
+            Сначала выберите тип сигнала. Для Forex подтягиваются рынки и пары из Forex-раздела: валюты, индексы, сырье и акции. Для Binary подтягиваются binary-рынки с payout.
+          </div>
+          <div className="admin-stream-type-row">
+            {STREAM_ANALYSIS_TYPES.map((type) => (
+              <button
+                key={type.key}
+                type="button"
+                className={`admin-pill-btn ${streamAnalysisType === type.key ? 'active' : ''}`}
+                onClick={() => {
+                  setStreamAnalysisType(type.key);
+                  setStreamMarket(type.key === 'binary' ? 'forex' : 'currencies');
+                  setStreamSymbol('');
+                }}
+              >
+                {type.title}
+              </button>
+            ))}
+          </div>
+          <div className="admin-stream-hint compact">
+            Можно оставить актив пустым: тогда пользовательский актив и live-цена останутся как обычно. Если указать актив, именно он попадёт в карточку и историю сигнала.
           </div>
           <div className="admin-stream-emulation-grid">
             <div className="admin-field">
@@ -672,7 +713,7 @@ export default function SettingsPage({ adminUser }) {
                   setStreamSymbol('');
                 }}
               >
-                {STREAM_MARKETS.map((market) => (
+                {activeStreamMarkets.map((market) => (
                   <option key={market.key} value={market.key}>{market.title}</option>
                 ))}
               </select>
@@ -681,15 +722,15 @@ export default function SettingsPage({ adminUser }) {
               <label className="admin-label">Актив</label>
               <input
                 className="admin-input"
-                list={`stream-asset-options-${streamMarket}`}
-                placeholder={streamMarketLoading ? 'Загружаем активы...' : 'Например AUD/CHF или Netflix OTC'}
+                list={`stream-asset-options-${streamAnalysisType}-${streamMarket}`}
+                placeholder={streamMarketLoading ? 'Загружаем активы...' : streamAnalysisType === 'binary' ? 'Например Netflix OTC' : 'Например AUD/CHF'}
                 value={streamSymbol}
                 onChange={(e) => setStreamSymbol(e.target.value)}
               />
-              <datalist id={`stream-asset-options-${streamMarket}`}>
+              <datalist id={`stream-asset-options-${streamAnalysisType}-${streamMarket}`}>
                 {streamMarketOptions.map((asset) => (
-                  <option key={`${asset.pair}-${asset.payout || 'np'}`} value={asset.pair}>
-                    {asset.payout ? `${asset.payout}%` : selectedStreamMarketTitle}
+                  <option key={`${asset.pair}-${asset.payout || asset.label || 'np'}`} value={asset.pair}>
+                    {asset.payout ? `${asset.payout}%` : asset.label || selectedStreamMarketTitle}
                   </option>
                 ))}
               </datalist>
@@ -840,7 +881,7 @@ export default function SettingsPage({ adminUser }) {
                 {previewStrategy?.allowed_timeframes ? ` | ${previewStrategy.allowed_timeframes}` : ''}
               </div>
               <div className="admin-stream-preview-note">
-                Актив: {streamSymbol.trim() ? `${selectedStreamMarketTitle} · ${streamSymbol.trim()}` : 'как выбрал пользователь'}
+                Тип: {streamAnalysisType === 'binary' ? 'Binary' : 'Forex'} · Актив: {streamSymbol.trim() ? `${selectedStreamMarketTitle} · ${streamSymbol.trim()}` : 'как выбрал пользователь'}
                 {' · '}
                 Цена: {toMaybeNumber(streamManualPrice) !== null ? formatLevel(streamManualPrice) : 'live'}
               </div>

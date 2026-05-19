@@ -190,6 +190,7 @@ async def get_stream_settings_row():
         "indicator_mode": "auto",
         "indicator_overrides": {},
         "message": "",
+        "emulation_analysis_type": "forex",
         "emulation_market": "",
         "emulation_symbol": "",
         "emulation_price": None,
@@ -214,6 +215,7 @@ async def get_stream_settings_row():
                     indicator_mode,
                     indicator_overrides,
                     message,
+                    emulation_analysis_type,
                     emulation_market,
                     emulation_symbol,
                     emulation_price,
@@ -277,7 +279,12 @@ async def get_stream_settings_row():
             normalized_overrides[key_norm] = signal
     settings["indicator_overrides"] = normalized_overrides
     settings["message"] = str(settings.get("message") or "")
-    settings["emulation_market"] = normalize_market_kind(settings.get("emulation_market") or "") if settings.get("emulation_market") else ""
+    emulation_analysis_type = str(settings.get("emulation_analysis_type") or "forex").strip().lower()
+    settings["emulation_analysis_type"] = emulation_analysis_type if emulation_analysis_type in ("forex", "binary") else "forex"
+    if settings["emulation_analysis_type"] == "binary":
+        settings["emulation_market"] = normalize_market_kind(settings.get("emulation_market") or "") if settings.get("emulation_market") else ""
+    else:
+        settings["emulation_market"] = normalize_forex_stream_market(settings.get("emulation_market") or "") if settings.get("emulation_market") else "currencies"
     settings["emulation_symbol"] = str(settings.get("emulation_symbol") or "").strip()
     try:
         settings["emulation_price"] = float(settings["emulation_price"]) if settings.get("emulation_price") is not None else None
@@ -294,9 +301,13 @@ async def get_stream_settings_row():
     return settings
 
 
-async def resolve_stream_override(strategy_id: Optional[int]):
+async def resolve_stream_override(strategy_id: Optional[int], analysis_type: str = "forex"):
     settings = await get_stream_settings_row()
     if int(settings.get("is_enabled") or 0) != 1:
+        return None
+    target_analysis_type = str(settings.get("emulation_analysis_type") or "forex").strip().lower()
+    current_analysis_type = str(analysis_type or "forex").strip().lower()
+    if target_analysis_type in ("forex", "binary") and target_analysis_type != current_analysis_type:
         return None
     scope = settings.get("scope") or "all"
     if scope == "all":
@@ -331,6 +342,113 @@ async def get_user_strategy_id(user_id: int) -> Optional[int]:
         return int(row.get("strategy_id")) if row.get("strategy_id") is not None else None
     except (TypeError, ValueError):
         return None
+
+
+FOREX_STREAM_MARKETS = {
+    "currencies": {"title": "Currencies"},
+    "indices": {"title": "Indices"},
+    "commodities": {"title": "Commodities"},
+    "stocks": {"title": "Stocks"},
+}
+
+FOREX_STREAM_MARKET_ALIASES = {
+    "currency": "currencies",
+    "currencies": "currencies",
+    "forex": "currencies",
+    "indices": "indices",
+    "index": "indices",
+    "commodity": "commodities",
+    "commodities": "commodities",
+    "metal": "commodities",
+    "metals": "commodities",
+    "stock": "stocks",
+    "stocks": "stocks",
+}
+
+
+def normalize_forex_stream_market(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    return FOREX_STREAM_MARKET_ALIASES.get(raw, "currencies")
+
+
+def normalize_forex_stream_assets(market: str, payload: Any) -> List[Dict[str, Any]]:
+    rows = extract_market_rows(payload)
+    normalized = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        pair = (
+            row.get("apiVal")
+            or row.get("symbol")
+            or row.get("asset")
+            or row.get("pair")
+            or row.get("ticker")
+            or row.get("name")
+        )
+        pair = str(pair or "").strip()
+        if not pair:
+            continue
+        key = pair.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        label = str(row.get("name") or row.get("label") or row.get("display_name") or pair).strip()
+        item = {"pair": pair, "label": label, "market": market}
+        if row.get("icon"):
+            item["icon"] = row.get("icon")
+        if row.get("country"):
+            item["country"] = row.get("country")
+        if row.get("exchange"):
+            item["exchange"] = row.get("exchange")
+        normalized.append(item)
+    return sorted(normalized, key=lambda item: item.get("label") or item.get("pair") or "")
+
+
+async def fetch_devsbite_json(path: str) -> Any:
+    token = os.getenv("DEVSBITE_TOKEN")
+    if not token:
+        return []
+    headers = {"accept": "application/json", "X-Client-Token": token, "Cache-Control": "no-cache"}
+    url = f"{DEVSBITE_API_BASE_URL}/{path.lstrip('/')}"
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, headers=headers, timeout=12.0)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Devsbite asset API Error [{path}]: {e}")
+            return []
+
+
+async def get_forex_stream_options_payload(market: str) -> Dict[str, Any]:
+    forex_market = normalize_forex_stream_market(market)
+    if forex_market == "currencies":
+        binary_payload = await get_market_options_payload("forex", DEVSBITE_MIN_PAYOUT)
+        pairs = [{"pair": item.get("pair"), "label": item.get("pair"), "market": forex_market} for item in binary_payload.get("pairs") or [] if item.get("pair")]
+    elif forex_market == "indices":
+        pairs = normalize_forex_stream_assets(forex_market, await fetch_devsbite_json("pairs/indices"))
+    elif forex_market == "commodities":
+        pairs = normalize_forex_stream_assets(forex_market, await fetch_devsbite_json("pairs/commodity"))
+    else:
+        pairs = normalize_forex_stream_assets(forex_market, await fetch_devsbite_json("pairs/otc/stocks"))
+    return {
+        "analysis_type": "forex",
+        "kind": forex_market,
+        "market_title": FOREX_STREAM_MARKETS[forex_market]["title"],
+        "available_markets": [{"key": key, "title": value["title"]} for key, value in FOREX_STREAM_MARKETS.items()],
+        "pairs": pairs,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+async def get_stream_asset_options_payload(analysis_type: str, market: str, min_payout: int) -> Dict[str, Any]:
+    normalized_type = str(analysis_type or "forex").strip().lower()
+    if normalized_type == "binary":
+        payload = await get_market_options_payload(market or "forex", min_payout)
+        payload["analysis_type"] = "binary"
+        return payload
+    return await get_forex_stream_options_payload(market or "currencies")
 
 
 async def get_admin_analysis_settings() -> dict:
@@ -524,8 +642,12 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
         analysis_data["entry_price"] = float(emulation_price)
     if emulation_symbol:
         analysis_data["symbol"] = emulation_symbol
+    emulation_analysis_type = str(stream_settings.get("emulation_analysis_type") or "forex").strip().lower()
     if emulation_market:
-        analysis_data["market_kind"] = normalize_market_kind(emulation_market)
+        if emulation_analysis_type == "binary":
+            analysis_data["market_kind"] = normalize_market_kind(emulation_market)
+        else:
+            analysis_data["market_kind"] = normalize_forex_stream_market(emulation_market)
 
     def normalize_alias(value: str) -> str:
         return str(value or "").strip().upper().replace(" ", "").replace("_", "").replace("-", "")
@@ -725,7 +847,12 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
         "indicator_mode": stream_settings.get("indicator_mode") or "auto",
         "indicator_overrides": manual_overrides if manual_overrides else {},
         "message": stream_settings.get("message") or "",
-        "emulation_market": normalize_market_kind(emulation_market) if emulation_market else "",
+        "emulation_analysis_type": emulation_analysis_type if emulation_analysis_type in ("forex", "binary") else "forex",
+        "emulation_market": (
+            normalize_market_kind(emulation_market)
+            if emulation_analysis_type == "binary" and emulation_market
+            else normalize_forex_stream_market(emulation_market) if emulation_market else ""
+        ),
         "emulation_symbol": emulation_symbol,
         "emulation_price": emulation_price if emulation_price is not None and emulation_price > 0 else None,
         "emulation_strategy_id": stream_settings.get("emulation_strategy_id"),
@@ -1184,6 +1311,16 @@ async def admin_market_options(
     return await get_market_options_payload(kind, min_payout)
 
 
+@app.get("/api/admin/stream-assets")
+async def admin_stream_assets(
+    analysis_type: str = Query(default="forex"),
+    market: str = Query(default="currencies"),
+    min_payout: int = Query(default=DEVSBITE_MIN_PAYOUT, ge=0, le=100),
+    admin=Depends(get_admin_user),
+):
+    return await get_stream_asset_options_payload(analysis_type, market, min_payout)
+
+
 @app.get("/api/admin/settings")
 async def admin_settings(admin=Depends(get_admin_user)):
     stream_settings = await get_stream_settings_row()
@@ -1284,8 +1421,14 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                 if levels_mode == "manual" and (manual_conservative_sl is None or manual_take_profit is None):
                     raise HTTPException(status_code=400, detail="manual levels require conservative_sl and take_profit")
 
+                emulation_analysis_type = str(streams_data.get("emulation_analysis_type") or "forex").strip().lower()
+                if emulation_analysis_type not in ("forex", "binary"):
+                    emulation_analysis_type = "forex"
                 emulation_market_raw = str(streams_data.get("emulation_market") or "").strip()
-                emulation_market = normalize_market_kind(emulation_market_raw) if emulation_market_raw else ""
+                if emulation_analysis_type == "binary":
+                    emulation_market = normalize_market_kind(emulation_market_raw) if emulation_market_raw else ""
+                else:
+                    emulation_market = normalize_forex_stream_market(emulation_market_raw) if emulation_market_raw else "currencies"
                 emulation_symbol = str(streams_data.get("emulation_symbol") or "").strip()[:128]
                 raw_emulation_price = streams_data.get("emulation_price")
                 try:
@@ -1341,6 +1484,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         indicator_mode,
                         indicator_overrides,
                         message,
+                        emulation_analysis_type,
                         emulation_market,
                         emulation_symbol,
                         emulation_price,
@@ -1359,6 +1503,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         indicator_mode = VALUES(indicator_mode),
                         indicator_overrides = VALUES(indicator_overrides),
                         message = VALUES(message),
+                        emulation_analysis_type = VALUES(emulation_analysis_type),
                         emulation_market = VALUES(emulation_market),
                         emulation_symbol = VALUES(emulation_symbol),
                         emulation_price = VALUES(emulation_price),
@@ -1376,6 +1521,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         indicator_mode,
                         indicator_overrides_json,
                         message,
+                        emulation_analysis_type,
                         emulation_market,
                         emulation_symbol,
                         emulation_price,
@@ -3077,7 +3223,7 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
             return {"error": str(e)}
 
     analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-    stream_override = await resolve_stream_override(strategy_id_int)
+    stream_override = await resolve_stream_override(strategy_id_int, analysis_type="binary")
     if stream_override:
         analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
     analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
@@ -3277,7 +3423,7 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
             else:
                 analysis_data = baseline_analysis_data
             analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-            stream_override = await resolve_stream_override(strategy_id_int)
+            stream_override = await resolve_stream_override(strategy_id_int, analysis_type="forex")
             if stream_override:
                 analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
             analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
