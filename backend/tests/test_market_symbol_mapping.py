@@ -1,6 +1,6 @@
 import unittest
 
-from market_symbol_mapping import get_twelvedata_symbol_candidates, has_explicit_twelvedata_mapping
+from market_symbol_mapping import get_forex_stock_assets, get_twelvedata_symbol_candidates, has_explicit_twelvedata_mapping
 
 
 class MarketSymbolMappingTest(unittest.TestCase):
@@ -23,7 +23,13 @@ class MarketSymbolMappingTest(unittest.TestCase):
 
     def test_explicit_mapping_does_not_treat_plain_forex_pairs_as_mapped(self):
         self.assertTrue(has_explicit_twelvedata_mapping("Apple OTC"))
+        self.assertTrue(has_explicit_twelvedata_mapping("AAPL"))
         self.assertFalse(has_explicit_twelvedata_mapping("EUR/USD"))
+
+    def test_forex_stock_assets_use_real_tickers_not_otc_names(self):
+        assets = get_forex_stock_assets()
+        self.assertIn({"pair": "AAPL", "asset": "AAPL", "symbol": "AAPL", "name": "Apple", "label": "Apple", "market": "stocks"}, assets)
+        self.assertTrue(all("OTC" not in item["pair"] for item in assets))
 
 
 if __name__ == "__main__":
