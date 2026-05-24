@@ -30,6 +30,10 @@ try:
     from backend.stream_matching import stream_requested_asset_matches
 except ModuleNotFoundError:
     from stream_matching import stream_requested_asset_matches
+try:
+    from backend.binary_signal import enforce_binary_signal as normalize_binary_signal
+except ModuleNotFoundError:
+    from binary_signal import enforce_binary_signal as normalize_binary_signal
 
 load_dotenv()
 
@@ -2333,24 +2337,7 @@ async def build_quote_based_binary_analysis(
     return analysis_data
 
 def enforce_binary_signal(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
-    indicators = analysis_data.get("indicators")
-    if not isinstance(indicators, dict):
-        return analysis_data
-    recommendation = str(analysis_data.get("recommendation") or "").strip().upper()
-    if recommendation in ("BUY", "SELL"):
-        return analysis_data
-    votes = {"BUY": 0, "SELL": 0}
-    for item in indicators.values():
-        if not isinstance(item, dict):
-            continue
-        signal = str(item.get("signal") or "").strip().upper()
-        if signal in votes:
-            votes[signal] += 1
-    if votes["BUY"] > votes["SELL"]:
-        analysis_data["recommendation"] = "BUY"
-    elif votes["SELL"] > votes["BUY"]:
-        analysis_data["recommendation"] = "SELL"
-    return analysis_data
+    return normalize_binary_signal(analysis_data)
 
 def get_analysis_remaining_seconds(row: Dict[str, Any]) -> int:
     created_at = row.get("created_at")
