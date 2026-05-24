@@ -34,6 +34,10 @@ try:
     from backend.binary_signal import enforce_binary_signal as normalize_binary_signal
 except ModuleNotFoundError:
     from binary_signal import enforce_binary_signal as normalize_binary_signal
+try:
+    from backend.market_symbol_mapping import get_twelvedata_symbol_candidates, has_explicit_twelvedata_mapping
+except ModuleNotFoundError:
+    from market_symbol_mapping import get_twelvedata_symbol_candidates, has_explicit_twelvedata_mapping
 
 load_dotenv()
 
@@ -1976,6 +1980,75 @@ def build_binary_quote_category_candidates(category: str) -> List[str]:
             unique.append(item)
     return unique
 
+def normalize_twelvedata_interval(interval: str) -> str:
+    raw = str(interval or "").strip().lower()
+    mapping = {
+        "5m": "5min",
+        "15m": "15min",
+        "30m": "30min",
+        "1d": "1day",
+    }
+    if raw in mapping:
+        return mapping[raw]
+    if raw in ("1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day", "1week", "1month"):
+        return raw
+    if raw.endswith("s"):
+        return "1min"
+    return "5min"
+
+async def fetch_twelvedata_payload(symbol: str, interval: str, outputsize: int = 120) -> Dict[str, Any]:
+    api_key = (os.getenv("TD_API_KEY") or os.getenv("TWELVEDATA_API_KEY") or "").strip()
+    if not api_key:
+        return {}
+    candidates = get_twelvedata_symbol_candidates(symbol)
+    if not candidates:
+        return {}
+    headers = {"accept": "application/json", "Cache-Control": "no-cache"}
+    td_interval = normalize_twelvedata_interval(interval)
+    async with httpx.AsyncClient() as client:
+        last_payload: Dict[str, Any] = {}
+        for td_symbol, exchange in candidates:
+            params = {
+                "symbol": td_symbol,
+                "interval": td_interval,
+                "outputsize": max(2, int(outputsize or 120)),
+                "apikey": api_key,
+            }
+            if exchange:
+                params["exchange"] = exchange
+            try:
+                response = await client.get("https://api.twelvedata.com/time_series", headers=headers, params=params, timeout=15.0)
+                payload = response.json()
+                if isinstance(payload, dict):
+                    last_payload = payload
+                values = payload.get("values") if isinstance(payload, dict) else None
+                if response.status_code == 200 and isinstance(values, list) and values:
+                    payload["values"] = list(reversed(values))
+                    payload["_resolved_quote_symbol"] = td_symbol
+                    payload["_resolved_quote_exchange"] = exchange or ""
+                    payload["_quote_source"] = "twelvedata_time_series"
+                    return payload
+            except Exception:
+                pass
+
+            params = {"symbol": td_symbol, "apikey": api_key}
+            if exchange:
+                params["exchange"] = exchange
+            try:
+                response = await client.get("https://api.twelvedata.com/price", headers=headers, params=params, timeout=12.0)
+                payload = response.json()
+                if isinstance(payload, dict):
+                    last_payload = payload
+                price = extract_price_from_payload(payload)
+                if response.status_code == 200 and price:
+                    payload["_resolved_quote_symbol"] = td_symbol
+                    payload["_resolved_quote_exchange"] = exchange or ""
+                    payload["_quote_source"] = "twelvedata_price"
+                    return payload
+            except Exception:
+                pass
+        return last_payload if isinstance(last_payload, dict) else {}
+
 def extract_quote_ohlc_rows(payload: Any) -> List[Dict[str, float]]:
     rows: List[Dict[str, float]] = []
 
@@ -2265,6 +2338,9 @@ async def fetch_binary_quote_payload(
                         "_resolved_quote_symbol": quote_symbol,
                         "_quote_source": "devsbite_price",
                     }
+        td_payload = await fetch_twelvedata_payload(symbol, "1min", outputsize=160)
+        if td_payload and (extract_price_from_payload(td_payload) or extract_quote_ohlc_rows(td_payload)):
+            return td_payload
         return last_payload if isinstance(last_payload, dict) else {}
 
 async def fetch_binary_quote_price(category: str, symbol: str) -> Optional[float]:
@@ -2335,6 +2411,49 @@ async def build_quote_based_binary_analysis(
         )
     analysis_data["quote_source"] = "devsbite_quotes"
     return analysis_data
+
+async def build_twelvedata_based_analysis(
+    pair: str,
+    interval: str,
+    allowed_indicators: List[str],
+) -> Optional[tuple]:
+    td_payload = await fetch_twelvedata_payload(pair, interval, outputsize=160)
+    price = extract_price_from_payload(td_payload)
+    if not price:
+        return None
+    candles = build_binary_quote_candles(td_payload, float(price), pair, interval)
+    indicators = calculate_binary_quote_indicators(candles, float(price))
+    raw_payload = {
+        "ok": True,
+        "symbol": pair,
+        "interval": normalize_twelvedata_interval(interval),
+        "price": float(price),
+        "indicators": indicators,
+        "candles": candles,
+        "session": {"multiplier": 1.0, "reason": "twelvedata_fallback"},
+        "quote_payload": td_payload,
+    }
+    analysis_data = compute_analysis_decision(
+        raw_payload,
+        symbol=pair,
+        interval=normalize_twelvedata_interval(interval),
+        allowed_indicators=allowed_indicators,
+    )
+    if (
+        str(analysis_data.get("recommendation") or "").upper() == "NEUTRAL"
+        and allowed_indicators
+        and not analysis_data.get("indicators")
+    ):
+        analysis_data = compute_analysis_decision(
+            raw_payload,
+            symbol=pair,
+            interval=normalize_twelvedata_interval(interval),
+            allowed_indicators=[],
+        )
+    analysis_data["quote_source"] = "twelvedata"
+    analysis_data["resolved_symbol"] = td_payload.get("_resolved_quote_symbol")
+    analysis_data["resolved_exchange"] = td_payload.get("_resolved_quote_exchange")
+    return raw_payload, analysis_data
 
 def enforce_binary_signal(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     return normalize_binary_signal(analysis_data)
@@ -2886,6 +3005,18 @@ async def get_otc_pairs(user=Depends(get_telegram_user)):
     payload = await get_market_options_payload("otc", DEVSBITE_MIN_PAYOUT)
     return {"pairs": payload["pairs"]}
 
+@app.get("/api/pairs/otc/stocks")
+async def get_otc_stock_pairs(user=Depends(get_telegram_user)):
+    payload = await get_market_options_payload("stocks", DEVSBITE_MIN_PAYOUT)
+    assets = []
+    for item in payload["pairs"]:
+        asset = item.get("pair") or item.get("asset") or item.get("symbol") or item.get("name")
+        if asset:
+            next_item = dict(item)
+            next_item["asset"] = asset
+            assets.append(next_item)
+    return {"assets": assets, "pairs": payload["pairs"]}
+
 
 @app.get("/api/pairs")
 async def get_pairs_by_kind(kind: str = Query(default="forex"), user=Depends(get_telegram_user)):
@@ -3384,16 +3515,38 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
 
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(url, headers=headers, json=payload, timeout=20.0)
-            resp.raise_for_status()
-            upstream_data = resp.json()
+            upstream_data = None
+            baseline_analysis_data = None
+            gateway_error_text = ""
+            try:
+                resp = await client.post(url, headers=headers, json=payload, timeout=20.0)
+                resp.raise_for_status()
+                upstream_data = resp.json()
+                baseline_analysis_data = compute_analysis_decision(
+                    upstream_data,
+                    symbol=formatted_pair,
+                    interval=interval,
+                    allowed_indicators=allowed_indicators,
+                )
+            except httpx.HTTPStatusError as e:
+                gateway_error_text = e.response.text
+                print(f"ANALYSIS GATEWAY ERROR [{e.response.status_code}]: {gateway_error_text} (Payload: {payload})")
 
-            baseline_analysis_data = compute_analysis_decision(
-                upstream_data,
-                symbol=formatted_pair,
-                interval=interval,
-                allowed_indicators=allowed_indicators,
+            fallback_needed = (
+                has_explicit_twelvedata_mapping(pair)
+                or upstream_data is None
+                or not isinstance(baseline_analysis_data, dict)
+                or not isinstance(baseline_analysis_data.get("indicators"), dict)
+                or len(baseline_analysis_data.get("indicators") or {}) == 0
             )
+            if fallback_needed:
+                fallback = await build_twelvedata_based_analysis(pair, interval, allowed_indicators)
+                if fallback:
+                    upstream_data, baseline_analysis_data = fallback
+                    formatted_pair = str(pair or "").strip()
+                elif upstream_data is None:
+                    return {"error": f"API Error: {gateway_error_text or 'Price not found'}"}
+
             analysis_settings = await get_admin_analysis_settings()
             if analysis_settings.get("engine") == "gpt":
                 if not analysis_settings.get("gpt_api_key"):
@@ -3429,10 +3582,6 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
             analysis_pair = str(pair).strip() or pair
             analysis_data["symbol"] = analysis_pair
             news_data = await fetch_news_data()
-        except httpx.HTTPStatusError as e:
-            error_text = e.response.text
-            print(f"ANALYSIS GATEWAY ERROR [{e.response.status_code}]: {error_text} (Payload: {payload})")
-            return {"error": f"API Error: {error_text}"}
         except ValueError as e:
             return {"error": f"Analysis parse error: {str(e)}"}
         except Exception as e:
