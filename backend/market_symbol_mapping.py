@@ -4,6 +4,35 @@ from typing import Dict, List, Optional, Tuple
 TwelveSymbol = Tuple[str, Optional[str]]
 
 
+FOREX_STOCK_SYMBOLS: List[Tuple[str, str]] = [
+    ("Advanced Micro Devices", "AMD"),
+    ("Alibaba", "BABA"),
+    ("Amazon", "AMZN"),
+    ("American Express", "AXP"),
+    ("Apple", "AAPL"),
+    ("Boeing Company", "BA"),
+    ("Cisco", "CSCO"),
+    ("Citigroup Inc", "C"),
+    ("Coinbase Global", "COIN"),
+    ("Exxon Mobil", "XOM"),
+    ("Facebook Inc", "META"),
+    ("FedEx", "FDX"),
+    ("GameStop Corp", "GME"),
+    ("Intel", "INTC"),
+    ("Johnson & Johnson", "JNJ"),
+    ("Marathon Digital Holdings", "MARA"),
+    ("McDonald's", "MCD"),
+    ("Microsoft", "MSFT"),
+    ("Netflix", "NFLX"),
+    ("NVIDIA", "NVDA"),
+    ("Palantir Technologies", "PLTR"),
+    ("Pfizer Inc", "PFE"),
+    ("Tesla", "TSLA"),
+    ("Visa", "V"),
+    ("VIX", "VIXY"),
+]
+
+
 def normalize_asset_key(value: str) -> str:
     return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
 
@@ -64,6 +93,10 @@ TWELVEDATA_SYMBOL_MAP: Dict[str, List[TwelveSymbol]] = {
     "cc1": [("CC1", None)],
 }
 
+for stock_name, stock_symbol in FOREX_STOCK_SYMBOLS:
+    for alias in (stock_name, f"{stock_name} OTC", stock_symbol):
+        TWELVEDATA_SYMBOL_MAP.setdefault(normalize_asset_key(alias), [(stock_symbol, None)])
+
 
 def get_twelvedata_symbol_candidates(asset: str) -> List[TwelveSymbol]:
     key = normalize_asset_key(asset)
@@ -84,3 +117,17 @@ def get_twelvedata_symbol_candidates(asset: str) -> List[TwelveSymbol]:
 
 def has_explicit_twelvedata_mapping(asset: str) -> bool:
     return normalize_asset_key(asset) in TWELVEDATA_SYMBOL_MAP
+
+
+def get_forex_stock_assets() -> List[Dict[str, str]]:
+    return [
+        {
+            "pair": symbol,
+            "asset": symbol,
+            "symbol": symbol,
+            "name": name,
+            "label": name,
+            "market": "stocks",
+        }
+        for name, symbol in FOREX_STOCK_SYMBOLS
+    ]

@@ -131,14 +131,14 @@ export default function ForexAnalysisSettings({
       apiFetchJson('/api/pairs/forex').catch(() => ({ pairs: [] })),
       apiFetchJson('/api/pairs/indices').catch(() => []),
       apiFetchJson('/api/pairs/commodity').catch(() => []),
-      apiFetchJson('/api/pairs/otc/stocks').catch(() => ({ assets: [] }))
+      apiFetchJson('/api/pairs/forex/stocks').catch(() => ({ assets: [] }))
     ])
     .then(([forexData, indicesData, commData, stocksData]) => {
       const formatted = {
         Currencies: (forexData?.pairs || []).map(p => ({ apiVal: p.pair, name: p.pair })),
         Indices: (Array.isArray(indicesData) ? indicesData : []).map(p => ({ apiVal: p.apiVal || p.symbol, name: p.name, icon: p.icon, country: p.country, exchange: p.exchange })),
         Commodities: (Array.isArray(commData) ? commData : []).map(p => ({ apiVal: p.symbol || p.apiVal, name: p.name, icon: p.icon, exchange: p.exchange })),
-        Stocks: (stocksData?.assets || []).map(p => ({ apiVal: p.asset, name: p.asset }))
+        Stocks: (stocksData?.assets || []).map(p => ({ apiVal: p.pair || p.asset || p.symbol, name: p.name || p.label || p.asset || p.symbol }))
       };
       setAssetsData(formatted);
       setLoadingAssets(false);
