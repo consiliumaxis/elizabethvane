@@ -19,6 +19,10 @@ from pydantic import BaseModel
 from typing import Optional, Any, Dict, List
 from analysis_engine import compute_analysis_decision
 try:
+    from backend.analysis_runtime import fallback_to_baseline_analysis
+except ModuleNotFoundError:
+    from analysis_runtime import fallback_to_baseline_analysis
+try:
     from backend.telegram_auth import get_telegram_user
 except ModuleNotFoundError:
     from telegram_auth import get_telegram_user
@@ -3247,25 +3251,27 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
                 analysis_settings = await get_admin_analysis_settings()
                 if analysis_settings.get("engine") == "gpt":
                     if not analysis_settings.get("gpt_api_key"):
-                        return {"error": "Analysis is temporarily unavailable. Please try again later."}
-                    strategy_context = await get_strategy_context(strategy_id_int)
-                    try:
-                        analysis_data = await analysis_ai_service.generate_gpt_analysis(
-                            api_key=analysis_settings.get("gpt_api_key") or "",
-                            model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
-                            prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
-                            raw_payload=upstream_data,
-                            symbol=formatted_pair,
-                            interval=analysis_interval,
-                            allowed_indicators=allowed_indicators,
-                            strategy=strategy_context,
-                            baseline_analysis=baseline_analysis_data,
-                        )
-                    except Exception as e:
-                        print(f"GPT binary analysis error: {e}")
-                        return {"error": "Analysis is temporarily unavailable. Please try again later."}
+                        print("GPT binary analysis is not configured; using baseline analysis")
+                        analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
+                    else:
+                        strategy_context = await get_strategy_context(strategy_id_int)
+                        try:
+                            analysis_data = await analysis_ai_service.generate_gpt_analysis(
+                                api_key=analysis_settings.get("gpt_api_key") or "",
+                                model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
+                                prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
+                                raw_payload=upstream_data,
+                                symbol=formatted_pair,
+                                interval=analysis_interval,
+                                allowed_indicators=allowed_indicators,
+                                strategy=strategy_context,
+                                baseline_analysis=baseline_analysis_data,
+                            )
+                        except Exception as e:
+                            print(f"GPT binary analysis error: {e}; using baseline analysis")
+                            analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
                 else:
-                    analysis_data = baseline_analysis_data
+                    analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
             except httpx.HTTPStatusError as e:
                 error_text = e.response.text
                 print(f"BINARY ANALYSIS GATEWAY ERROR [{e.response.status_code}]: {error_text} (Payload: {payload})")
@@ -3325,25 +3331,27 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
             analysis_settings = await get_admin_analysis_settings()
             if analysis_settings.get("engine") == "gpt":
                 if not analysis_settings.get("gpt_api_key"):
-                    return {"error": "Analysis is temporarily unavailable. Please try again later."}
-                strategy_context = await get_strategy_context(strategy_id_int)
-                try:
-                    analysis_data = await analysis_ai_service.generate_gpt_analysis(
-                        api_key=analysis_settings.get("gpt_api_key") or "",
-                        model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
-                        prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
-                        raw_payload=upstream_data,
-                        symbol=pair,
-                        interval=analysis_interval,
-                        allowed_indicators=allowed_indicators,
-                        strategy=strategy_context,
-                        baseline_analysis=baseline_analysis_data,
-                    )
-                except Exception as e:
-                    print(f"GPT binary analysis error: {e}")
-                    return {"error": "Analysis is temporarily unavailable. Please try again later."}
+                    print("GPT binary analysis is not configured; using baseline analysis")
+                    analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
+                else:
+                    strategy_context = await get_strategy_context(strategy_id_int)
+                    try:
+                        analysis_data = await analysis_ai_service.generate_gpt_analysis(
+                            api_key=analysis_settings.get("gpt_api_key") or "",
+                            model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
+                            prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
+                            raw_payload=upstream_data,
+                            symbol=pair,
+                            interval=analysis_interval,
+                            allowed_indicators=allowed_indicators,
+                            strategy=strategy_context,
+                            baseline_analysis=baseline_analysis_data,
+                        )
+                    except Exception as e:
+                        print(f"GPT binary analysis error: {e}; using baseline analysis")
+                        analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
             else:
-                analysis_data = baseline_analysis_data
+                analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
         except ValueError as e:
             return {"error": f"Analysis parse error: {str(e)}"}
         except Exception as e:
@@ -3555,26 +3563,27 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
             analysis_settings = await get_admin_analysis_settings()
             if analysis_settings.get("engine") == "gpt":
                 if not analysis_settings.get("gpt_api_key"):
-                    print("GPT analysis is not configured")
-                    return {"error": "Analysis is temporarily unavailable. Please try again later."}
-                strategy_context = await get_strategy_context(strategy_id_int)
-                try:
-                    analysis_data = await analysis_ai_service.generate_gpt_analysis(
-                        api_key=analysis_settings.get("gpt_api_key") or "",
-                        model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
-                        prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
-                        raw_payload=upstream_data,
-                        symbol=formatted_pair,
-                        interval=interval,
-                        allowed_indicators=allowed_indicators,
-                        strategy=strategy_context,
-                        baseline_analysis=baseline_analysis_data,
-                    )
-                except Exception as e:
-                    print(f"GPT analysis error: {e}")
-                    return {"error": "Analysis is temporarily unavailable. Please try again later."}
+                    print("GPT analysis is not configured; using baseline analysis")
+                    analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
+                else:
+                    strategy_context = await get_strategy_context(strategy_id_int)
+                    try:
+                        analysis_data = await analysis_ai_service.generate_gpt_analysis(
+                            api_key=analysis_settings.get("gpt_api_key") or "",
+                            model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
+                            prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
+                            raw_payload=upstream_data,
+                            symbol=formatted_pair,
+                            interval=interval,
+                            allowed_indicators=allowed_indicators,
+                            strategy=strategy_context,
+                            baseline_analysis=baseline_analysis_data,
+                        )
+                    except Exception as e:
+                        print(f"GPT analysis error: {e}; using baseline analysis")
+                        analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
             else:
-                analysis_data = baseline_analysis_data
+                analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
             analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
             stream_override = await resolve_stream_override(
                 strategy_id_int,
