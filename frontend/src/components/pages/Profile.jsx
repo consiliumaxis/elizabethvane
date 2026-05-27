@@ -38,6 +38,8 @@ export default function Profile({
 
   const currentMode = (user.mode || 'binary').toLowerCase();
   const isDemo = currentMode === 'demo';
+  const forexAvailable = Number(user.forex_access ?? 1) === 1;
+  const binaryAvailable = Number(user.binary_access ?? 1) === 1;
   const selectedStrategy = strategies.find(s => s.id === user.strategy_id) || {};
 
   const systemStrategies = strategies.filter(s => s.is_system === 1);
@@ -54,6 +56,12 @@ export default function Profile({
     formatWinrate(strategy?.actual_winrate) ||
     formatWinrate(strategy?.public_winrate)
   );
+
+  const formatBalance = (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return '$0.00';
+    return `$${parsed.toFixed(2)}`;
+  };
 
   const openCreateModal = () => {
     setEditPresetId(null);
@@ -164,11 +172,11 @@ export default function Profile({
                 <div className="stats-row">
                   <div className="stat-box">
                     <span className="stat-label">{t.profile.idLabel}</span>
-                    <span className="stat-value">*****</span>
+                    <span className="stat-value">{user.trader_id || t.profile.notSpecified || 'Not specified'}</span>
                   </div>
                   <div className="stat-box right">
                     <span className="stat-label">{t.profile.balanceLabel}</span>
-                    <span className="stat-value gold">*****</span>
+                    <span className="stat-value gold">{formatBalance(user.balance)}</span>
                   </div>
                 </div>
 
@@ -202,15 +210,17 @@ export default function Profile({
             <div className="mode-toggle-label">{t.profile.chooseMode}</div>
             <div className="mode-toggle-container">
               <div className={`mode-slider ${currentMode === 'forex' ? 'right' : ''}`}></div>
-              <div 
-                className={`mode-toggle-btn ${currentMode === 'binary' ? 'active' : ''}`} 
-                onClick={() => onToggleMode('binary')}
+              <div
+                className={`mode-toggle-btn ${currentMode === 'binary' ? 'active' : ''}`}
+                onClick={() => binaryAvailable && onToggleMode('binary')}
+                style={!binaryAvailable ? { opacity: 0.45, pointerEvents: 'none' } : undefined}
               >
                 {t.profile.binaryMode}
               </div>
-              <div 
-                className={`mode-toggle-btn ${currentMode === 'forex' ? 'active' : ''}`} 
-                onClick={() => onToggleMode('forex')}
+              <div
+                className={`mode-toggle-btn ${currentMode === 'forex' ? 'active' : ''}`}
+                onClick={() => forexAvailable && onToggleMode('forex')}
+                style={!forexAvailable ? { opacity: 0.45, pointerEvents: 'none' } : undefined}
               >
                 {t.profile.forexMode}
               </div>

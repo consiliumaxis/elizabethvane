@@ -42,6 +42,10 @@ try:
     from backend.market_symbol_mapping import get_forex_stock_assets, get_twelvedata_symbol_candidates, has_explicit_twelvedata_mapping
 except ModuleNotFoundError:
     from market_symbol_mapping import get_forex_stock_assets, get_twelvedata_symbol_candidates, has_explicit_twelvedata_mapping
+try:
+    from backend.pocket_api import POCKET_USER_INFO_ENDPOINT_TEMPLATE, build_pocket_user_info_url, mask_secret
+except ModuleNotFoundError:
+    from pocket_api import POCKET_USER_INFO_ENDPOINT_TEMPLATE, build_pocket_user_info_url, mask_secret
 
 load_dotenv()
 
@@ -905,6 +909,177 @@ async def get_support_links_row():
     }
 
 
+async def get_pocket_api_settings_row(include_token: bool = False):
+    fallback = {
+        "partner_id": "",
+        "api_token": "" if include_token else None,
+        "api_token_masked": "",
+        "api_token_configured": 0,
+        "endpoint_template": POCKET_USER_INFO_ENDPOINT_TEMPLATE,
+        "updated_at": None,
+        "updated_by": None,
+    }
+    if not db_pool:
+        return fallback
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT partner_id, api_token, updated_at, updated_by
+                    FROM admin_pocket_api_settings
+                    WHERE id = 1
+                    LIMIT 1
+                    """
+                )
+                row = await cur.fetchone()
+    except Exception as e:
+        print(f"Pocket API settings fallback: {e}")
+        return fallback
+    if not row:
+        return fallback
+    token = str(row.get("api_token") or "").strip()
+    settings = {
+        "partner_id": str(row.get("partner_id") or "").strip(),
+        "api_token_masked": mask_secret(token),
+        "api_token_configured": 1 if token else 0,
+        "endpoint_template": fallback["endpoint_template"],
+        "updated_at": row.get("updated_at"),
+        "updated_by": row.get("updated_by"),
+    }
+    if include_token:
+        settings["api_token"] = token
+    return settings
+
+
+def truthy_db(value) -> int:
+    try:
+        return 1 if int(value or 0) == 1 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def extract_pocket_balance(payload: Any) -> Optional[float]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("real_balance", "balance", "total_balance"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return round(float(value), 2)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+async def fetch_pocket_user_info(trader_id: str, partner_id: str, api_token: str) -> Dict[str, Any]:
+    url = build_pocket_user_info_url(trader_id, partner_id, api_token)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, timeout=12.0)
+        response.raise_for_status()
+        return response.json()
+
+
+async def sync_pocket_balance_for_user(user_row: Dict[str, Any], pocket_settings: Dict[str, Any]) -> bool:
+    user_id = int(user_row.get("user_id") or 0)
+    trader_id = str(user_row.get("trader_id") or "").strip()
+    partner_id = str(pocket_settings.get("partner_id") or "").strip()
+    api_token = str(pocket_settings.get("api_token") or "").strip()
+    if not user_id or not trader_id or not partner_id or not api_token:
+        return False
+    try:
+        payload = await fetch_pocket_user_info(trader_id, partner_id, api_token)
+        balance = extract_pocket_balance(payload)
+        if balance is None:
+            raise ValueError("Pocket response does not contain balance")
+        async with db_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE users
+                    SET balance = %s,
+                        balance_synced_at = NOW(),
+                        balance_sync_error = NULL
+                    WHERE user_id = %s
+                    """,
+                    (balance, user_id),
+                )
+        return True
+    except Exception as e:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE users
+                    SET balance_synced_at = NOW(),
+                        balance_sync_error = %s
+                    WHERE user_id = %s
+                    """,
+                    (str(e)[:1000], user_id),
+                )
+        return False
+
+
+async def pocket_balance_sync_worker():
+    while True:
+        try:
+            await asyncio.sleep(300)
+            if not db_pool:
+                continue
+            pocket_settings = await get_pocket_api_settings_row(include_token=True)
+            if not pocket_settings.get("partner_id") or not pocket_settings.get("api_token"):
+                continue
+            async with db_pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute(
+                        """
+                        SELECT user_id, trader_id
+                        FROM users
+                        WHERE balance_sync_enabled = 1
+                          AND trader_id IS NOT NULL
+                          AND TRIM(trader_id) != ''
+                        ORDER BY COALESCE(balance_synced_at, '1970-01-01') ASC, user_id ASC
+                        """
+                    )
+                    users_rows = await cur.fetchall()
+            for user_row in users_rows or []:
+                await sync_pocket_balance_for_user(user_row, pocket_settings)
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"[PocketSync] Worker error: {e}")
+
+
+def normalize_access_payload(value) -> int:
+    return 1 if bool(value) else 0
+
+
+async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
+    await cur.execute(
+        """
+        SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
+               u.trader_id, COALESCE(u.balance, 0) AS balance,
+               COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
+               u.balance_synced_at, u.balance_sync_error,
+               COALESCE(fx.is_enabled, 1) AS forex_access,
+               COALESCE(bin.is_enabled, 1) AS binary_access,
+               COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at, u.blocked_by, u.created_at,
+               p.name AS strategy_name,
+               CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
+               a.granted_at
+        FROM users u
+        LEFT JOIN presets p ON p.id = u.strategy_id
+        LEFT JOIN admin_users a ON a.user_id = u.user_id
+        LEFT JOIN user_mode_access fx ON fx.user_id = u.user_id AND fx.mode = 'forex'
+        LEFT JOIN user_mode_access bin ON bin.user_id = u.user_id AND bin.mode = 'binary'
+        WHERE u.user_id = %s
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    return await cur.fetchone()
+
+
 @app.get("/api/support/links")
 async def get_support_links():
     links = await get_support_links_row()
@@ -1086,6 +1261,11 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
                 await cur.execute(
                     """
                     SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
+                           u.trader_id, COALESCE(u.balance, 0) AS balance,
+                           COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
+                           u.balance_synced_at, u.balance_sync_error,
+                           COALESCE(fx.is_enabled, 1) AS forex_access,
+                           COALESCE(bin.is_enabled, 1) AS binary_access,
                            COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at, u.blocked_by, u.created_at,
                            p.name AS strategy_name,
                            CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
@@ -1093,6 +1273,8 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
                     FROM users u
                     LEFT JOIN presets p ON p.id = u.strategy_id
                     LEFT JOIN admin_users a ON a.user_id = u.user_id
+                    LEFT JOIN user_mode_access fx ON fx.user_id = u.user_id AND fx.mode = 'forex'
+                    LEFT JOIN user_mode_access bin ON bin.user_id = u.user_id AND bin.mode = 'binary'
                     WHERE (%s = '' OR CAST(u.user_id AS CHAR) LIKE %s OR COALESCE(u.username, '') LIKE %s OR COALESCE(u.first_name, '') LIKE %s)
                     ORDER BY u.created_at DESC
                     LIMIT %s OFFSET %s
@@ -1104,6 +1286,9 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
                 await cur.execute(
                     """
                     SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
+                           NULL AS trader_id, 0 AS balance,
+                           0 AS balance_sync_enabled, NULL AS balance_synced_at, NULL AS balance_sync_error,
+                           1 AS forex_access, 1 AS binary_access,
                            0 AS is_blocked, NULL AS blocked_at, NULL AS blocked_by, NULL AS created_at,
                            p.name AS strategy_name,
                            CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
@@ -1160,23 +1345,143 @@ async def admin_block_user(request: Request, admin=Depends(get_admin_user)):
                 """,
                 (is_blocked, is_blocked, int(admin.get("user_id") or 0), is_blocked, target_user_id),
             )
+            row = await fetch_admin_user_row(cur, target_user_id)
+    return {"status": "success", "user": row}
+
+
+@app.post("/api/admin/users/access")
+async def admin_update_user_access(request: Request, admin=Depends(get_admin_user)):
+    data = await request.json()
+    try:
+        target_user_id = int(data.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target_user_id = 0
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="User id is required")
+
+    forex_access = normalize_access_payload(data.get("forex_access"))
+    binary_access = normalize_access_payload(data.get("binary_access"))
+    updated_by = int(admin.get("user_id") or 0)
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT user_id, mode FROM users WHERE user_id = %s LIMIT 1", (target_user_id,))
+            user_row = await cur.fetchone()
+            if not user_row:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            await cur.executemany(
+                """
+                INSERT INTO user_mode_access (user_id, mode, is_enabled, updated_by)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    is_enabled = VALUES(is_enabled),
+                    updated_by = VALUES(updated_by)
+                """,
+                [
+                    (target_user_id, "forex", forex_access, updated_by),
+                    (target_user_id, "binary", binary_access, updated_by),
+                ],
+            )
+
+            current_mode = str(user_row.get("mode") or "forex").lower()
+            if current_mode == "forex" and forex_access != 1 and binary_access == 1:
+                await cur.execute("UPDATE users SET mode = 'binary' WHERE user_id = %s", (target_user_id,))
+            elif current_mode == "binary" and binary_access != 1 and forex_access == 1:
+                await cur.execute("UPDATE users SET mode = 'forex' WHERE user_id = %s", (target_user_id,))
+
+            row = await fetch_admin_user_row(cur, target_user_id)
+    return {"status": "success", "user": row}
+
+
+@app.post("/api/admin/users/balance")
+async def admin_update_user_balance(request: Request, admin=Depends(get_admin_user)):
+    data = await request.json()
+    try:
+        target_user_id = int(data.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target_user_id = 0
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="User id is required")
+    try:
+        balance = round(float(data.get("balance")), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Balance must be a number")
+    if balance < 0:
+        raise HTTPException(status_code=400, detail="Balance cannot be negative")
+
+    sync_enabled = 1 if bool(data.get("balance_sync_enabled")) else 0
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT user_id, trader_id FROM users WHERE user_id = %s LIMIT 1", (target_user_id,))
+            user_row = await cur.fetchone()
+            if not user_row:
+                raise HTTPException(status_code=404, detail="User not found")
+            if sync_enabled == 1 and not str(user_row.get("trader_id") or "").strip():
+                raise HTTPException(status_code=400, detail="Trader ID is required for balance sync")
             await cur.execute(
                 """
-                SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
-                       COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at, u.blocked_by, u.created_at,
-                       p.name AS strategy_name,
-                       CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
-                       a.granted_at
-                FROM users u
-                LEFT JOIN presets p ON p.id = u.strategy_id
-                LEFT JOIN admin_users a ON a.user_id = u.user_id
-                WHERE u.user_id = %s
-                LIMIT 1
+                UPDATE users
+                SET balance = %s,
+                    balance_sync_enabled = %s,
+                    balance_sync_error = CASE WHEN %s = 0 THEN NULL ELSE balance_sync_error END
+                WHERE user_id = %s
+                """,
+                (balance, sync_enabled, sync_enabled, target_user_id),
+            )
+            row = await fetch_admin_user_row(cur, target_user_id)
+    return {"status": "success", "user": row}
+
+
+@app.delete("/api/admin/users/{target_user_id}")
+async def admin_delete_user(target_user_id: int, admin=Depends(get_admin_user)):
+    target_user_id = int(target_user_id or 0)
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="User id is required")
+    if target_user_id == int(admin.get("user_id") or 0):
+        raise HTTPException(status_code=400, detail="You cannot delete yourself")
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT user_id FROM users WHERE user_id = %s LIMIT 1", (target_user_id,))
+            if not await cur.fetchone():
+                raise HTTPException(status_code=404, detail="User not found")
+
+            await cur.execute(
+                """
+                SELECT up.preset_id
+                FROM user_presets up
+                JOIN presets p ON p.id = up.preset_id
+                WHERE up.user_id = %s AND p.is_system = 0
                 """,
                 (target_user_id,),
             )
-            row = await cur.fetchone()
-    return {"status": "success", "user": row}
+            custom_preset_ids = [int(row["preset_id"]) for row in (await cur.fetchall() or [])]
+
+            await cur.execute(
+                "SELECT id FROM ai_chats WHERE user_id = %s",
+                (target_user_id,),
+            )
+            chat_ids = [int(row["id"]) for row in (await cur.fetchall() or [])]
+
+        async with conn.cursor() as cur:
+            if chat_ids:
+                placeholders = ",".join(["%s"] * len(chat_ids))
+                await cur.execute(f"DELETE FROM ai_messages WHERE chat_id IN ({placeholders})", tuple(chat_ids))
+            await cur.execute("DELETE FROM ai_chats WHERE user_id = %s", (target_user_id,))
+            await cur.execute("DELETE FROM user_analyses WHERE user_id = %s", (target_user_id,))
+            await cur.execute("DELETE FROM user_mode_access WHERE user_id = %s", (target_user_id,))
+            await cur.execute("DELETE FROM admin_users WHERE user_id = %s", (target_user_id,))
+            await cur.execute("DELETE FROM user_presets WHERE user_id = %s", (target_user_id,))
+            if custom_preset_ids:
+                placeholders = ",".join(["%s"] * len(custom_preset_ids))
+                await cur.execute(f"DELETE FROM preset_indicators WHERE preset_id IN ({placeholders})", tuple(custom_preset_ids))
+                await cur.execute(
+                    f"DELETE FROM presets WHERE is_system = 0 AND id IN ({placeholders})",
+                    tuple(custom_preset_ids),
+                )
+            await cur.execute("DELETE FROM users WHERE user_id = %s", (target_user_id,))
+    return {"status": "success", "user_id": target_user_id}
 
 
 @app.get("/api/admin/admins")
@@ -1341,6 +1646,7 @@ async def admin_stream_assets(
 async def admin_settings(admin=Depends(get_admin_user)):
     stream_settings = await get_stream_settings_row()
     support_links = await get_support_links_row()
+    pocket_settings = await get_pocket_api_settings_row()
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("SELECT id, system_prompt, model, updated_at FROM ai_settings WHERE id = 1")
@@ -1372,6 +1678,7 @@ async def admin_settings(admin=Depends(get_admin_user)):
             "streams": stream_settings,
             "stream_strategies": stream_strategies or [],
             "support": support_links,
+            "pocket_api": pocket_settings,
         },
     }
 
@@ -1382,6 +1689,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
     ai_data = data.get("ai") or {}
     streams_data = data.get("streams") or {}
     support_data = data.get("support") or {}
+    pocket_data = data.get("pocket_api") or {}
     system_prompt = (ai_data.get("system_prompt") or "").strip()
     model = (ai_data.get("model") or "").strip()
 
@@ -1559,6 +1867,34 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                     """,
                     (channel_url, support_url, int(admin["user_id"])),
                 )
+            if isinstance(pocket_data, dict) and pocket_data:
+                partner_id = str(pocket_data.get("partner_id") or "").strip()[:64]
+                api_token = str(pocket_data.get("api_token") or "").strip()
+                clear_token = bool(pocket_data.get("clear_api_token"))
+                if api_token:
+                    await cur.execute(
+                        """
+                        INSERT INTO admin_pocket_api_settings (id, partner_id, api_token, updated_by)
+                        VALUES (1, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            partner_id = VALUES(partner_id),
+                            api_token = VALUES(api_token),
+                            updated_by = VALUES(updated_by)
+                        """,
+                        (partner_id, api_token, int(admin["user_id"])),
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        INSERT INTO admin_pocket_api_settings (id, partner_id, api_token, updated_by)
+                        VALUES (1, %s, NULL, %s)
+                        ON DUPLICATE KEY UPDATE
+                            partner_id = VALUES(partner_id),
+                            api_token = CASE WHEN %s = 1 THEN NULL ELSE api_token END,
+                            updated_by = VALUES(updated_by)
+                        """,
+                        (partner_id, int(admin["user_id"]), 1 if clear_token else 0),
+                    )
     return {"status": "success"}
 
 
@@ -2652,10 +2988,17 @@ async def get_profile(user=Depends(get_telegram_user)):
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("""
                 SELECT u.user_id, u.lang, u.mode, u.username, u.first_name, u.avatar_url,
-                       u.strategy_id, COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at,
+                       u.strategy_id, u.trader_id, COALESCE(u.balance, 0) AS balance,
+                       COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
+                       u.balance_synced_at,
+                       COALESCE(fx.is_enabled, 1) AS forex_access,
+                       COALESCE(bin.is_enabled, 1) AS binary_access,
+                       COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at,
                        p.name as strategy_name
                 FROM users u
                 LEFT JOIN presets p ON u.strategy_id = p.id
+                LEFT JOIN user_mode_access fx ON fx.user_id = u.user_id AND fx.mode = 'forex'
+                LEFT JOIN user_mode_access bin ON bin.user_id = u.user_id AND bin.mode = 'binary'
                 WHERE u.user_id = %s
             """, (user_id,))
             user = await cur.fetchone()
@@ -2793,6 +3136,13 @@ async def sync_user(user=Depends(get_telegram_user)):
                     first_name = VALUES(first_name),
                     avatar_url = VALUES(avatar_url)
             """, (user_id, username, first_name, avatar_url))
+            await cur.executemany(
+                """
+                INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
+                VALUES (%s, %s, 1, NULL)
+                """,
+                [(user_id, "forex"), (user_id, "binary")],
+            )
     return {"status": "success"}
     
 @app.post("/api/user/mode")
@@ -2803,7 +3153,20 @@ async def update_mode(request: Request, user=Depends(get_telegram_user)):
     
     if user_id and new_mode:
         async with db_pool.acquire() as conn:
-            async with conn.cursor() as cur:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                if str(new_mode).lower() in ("forex", "binary"):
+                    await cur.execute(
+                        """
+                        SELECT COALESCE(is_enabled, 1) AS is_enabled
+                        FROM user_mode_access
+                        WHERE user_id = %s AND mode = %s
+                        LIMIT 1
+                        """,
+                        (user_id, str(new_mode).lower()),
+                    )
+                    access_row = await cur.fetchone()
+                    if access_row and truthy_db(access_row.get("is_enabled")) != 1:
+                        raise HTTPException(status_code=403, detail=f"{new_mode} access is disabled")
                 await cur.execute("UPDATE users SET mode = %s WHERE user_id = %s", (new_mode, user_id))
         return {"status": "success", "mode": new_mode}
     return {"error": "Invalid data"}
@@ -3811,7 +4174,8 @@ async def main():
         start_bot(), 
         start_api(),
         analysis_producer(),
-        analysis_consumer()
+        analysis_consumer(),
+        pocket_balance_sync_worker()
     )
 
 if __name__ == "__main__":
