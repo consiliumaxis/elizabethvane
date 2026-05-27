@@ -202,6 +202,10 @@ export default function SettingsPage({ adminUser }) {
   const [systemAccessEnabled, setSystemAccessEnabled] = useState(true);
   const [channelUrl, setChannelUrl] = useState('');
   const [supportUrl, setSupportUrl] = useState('');
+  const [pocketPartnerId, setPocketPartnerId] = useState('');
+  const [pocketApiToken, setPocketApiToken] = useState('');
+  const [pocketApiTokenMasked, setPocketApiTokenMasked] = useState('');
+  const [pocketApiTokenConfigured, setPocketApiTokenConfigured] = useState(false);
 
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
@@ -276,6 +280,12 @@ export default function SettingsPage({ adminUser }) {
       const support = settingsRes?.settings?.support || {};
       setChannelUrl(support.channel_url || '');
       setSupportUrl(support.support_url || '');
+
+      const pocket = settingsRes?.settings?.pocket_api || {};
+      setPocketPartnerId(pocket.partner_id || '');
+      setPocketApiToken('');
+      setPocketApiTokenMasked(pocket.api_token_masked || '');
+      setPocketApiTokenConfigured(Boolean(Number(pocket.api_token_configured || 0)));
     } catch (e) {
       setError(e.message || 'Не удалось загрузить настройки');
     }
@@ -368,6 +378,7 @@ export default function SettingsPage({ adminUser }) {
   const saveSettings = async (source = 'all') => {
     const shouldSaveStreams = source === 'streams' || source === 'all';
     const shouldSaveSupport = source === 'support' || source === 'all';
+    const shouldSavePocket = source === 'pocket' || source === 'all';
 
     if (shouldSaveStreams && streamEnabled && streamScope === 'strategy' && !streamStrategyId) {
       setError('Выберите стратегию для стрима');
@@ -427,6 +438,13 @@ export default function SettingsPage({ adminUser }) {
         };
       }
 
+      if (shouldSavePocket) {
+        payload.pocket_api = {
+          partner_id: pocketPartnerId.trim(),
+          api_token: pocketApiToken.trim(),
+        };
+      }
+
       await apiAdminFetchJson('/api/admin/settings', {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -438,6 +456,10 @@ export default function SettingsPage({ adminUser }) {
         setStatus('Настройки стримов сохранены');
       } else if (source === 'support') {
         setStatus('Ссылки поддержки сохранены');
+      } else if (source === 'pocket') {
+        setStatus('Pocket API сохранен');
+        setPocketApiToken('');
+        await loadAll();
       } else {
         setStatus('Настройки сохранены');
       }
@@ -531,13 +553,19 @@ export default function SettingsPage({ adminUser }) {
         subtitle: channelUrl || supportUrl ? 'Ссылки настроены' : 'Ссылки не заданы',
       },
       {
+        key: 'pocket',
+        icon: '🔑',
+        title: 'API',
+        subtitle: pocketPartnerId || pocketApiTokenConfigured ? `Pocket: ${pocketPartnerId || '-'} ${pocketApiTokenMasked || ''}` : 'Pocket API не настроен',
+      },
+      {
         key: 'admins',
         icon: '🛡️',
         title: 'Выдать админку',
         subtitle: `Текущих админов: ${admins.length}`,
       },
     ],
-    [admins.length, channelUrl, model, streamEnabled, supportUrl, systemAccessEnabled]
+    [admins.length, channelUrl, model, pocketApiTokenConfigured, pocketApiTokenMasked, pocketPartnerId, streamEnabled, supportUrl, systemAccessEnabled]
   );
 
   const goMenu = () => {
@@ -1004,6 +1032,52 @@ export default function SettingsPage({ adminUser }) {
         <div className="admin-row-actions">
           <button className="admin-btn" onClick={() => saveSettings('support')} disabled={saving}>
             {saving ? 'Сохранение...' : 'Сохранить ссылки'}
+          </button>
+        </div>
+
+        {error ? <div className="admin-error">{error}</div> : null}
+        {status ? <div className="admin-success">{status}</div> : null}
+      </div>
+    );
+  }
+
+  if (activeSection === 'pocket') {
+    return (
+      <div className="admin-card admin-settings-detail">
+        <div className="admin-row-between">
+          <h3 className="admin-section-title">API</h3>
+          <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
+        </div>
+
+        <div className="admin-muted">
+          Настройки Pocket Partners. Токен хранится на backend и показывается только маской: первые 2 и последние 2 символа.
+        </div>
+
+        <div className="admin-field">
+          <label className="admin-label">ID кабинета / Partner ID</label>
+          <input
+            className="admin-input"
+            placeholder="Например 123456"
+            value={pocketPartnerId}
+            onChange={(e) => setPocketPartnerId(e.target.value.replace(/[^\w.-]/g, '').slice(0, 64))}
+          />
+        </div>
+
+        <div className="admin-field">
+          <label className="admin-label">API token</label>
+          <input
+            className="admin-input"
+            type="password"
+            placeholder={pocketApiTokenConfigured ? `Текущий: ${pocketApiTokenMasked}. Введите новый для замены` : 'Введите API token'}
+            value={pocketApiToken}
+            onChange={(e) => setPocketApiToken(e.target.value)}
+            autoComplete="new-password"
+          />
+        </div>
+
+        <div className="admin-row-actions">
+          <button className="admin-btn" onClick={() => saveSettings('pocket')} disabled={saving}>
+            {saving ? 'Сохранение...' : 'Сохранить API'}
           </button>
         </div>
 

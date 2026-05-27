@@ -44,6 +44,7 @@ export const texts = {
       defaultName: "Trader",
       idLabel: "ID",
       balanceLabel: "Balance",
+      notSpecified: "Not specified",
       changeModeLabel: "Change mode",
       noData: "No data",
       strategyNamePlaceholder: "Example: Golden Scalping",
