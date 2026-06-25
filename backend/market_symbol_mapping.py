@@ -37,8 +37,8 @@ CUSTOM_FOREX_CURRENCY_ASSETS: List[Dict[str, str]] = [
         "pair": "AUDUSD",
         "asset": "AUDUSD",
         "symbol": "AUDUSD",
-        "name": "AUDUSD",
-        "label": "AUDUSD",
+        "name": "AUD/USD",
+        "label": "AUD/USD",
         "market": "currencies",
     },
 ]

@@ -45,7 +45,9 @@ class MarketSymbolMappingTest(unittest.TestCase):
         self.assertTrue(all("OTC" not in item["pair"] for item in assets))
 
     def test_custom_assets_are_available_for_admin_lists(self):
-        self.assertIn("AUDUSD", [item["pair"] for item in get_custom_forex_currency_assets()])
+        audusd = get_custom_forex_currency_assets()[0]
+        self.assertEqual("AUDUSD", audusd["pair"])
+        self.assertEqual("AUD/USD", audusd["label"])
         self.assertEqual(["SP500", "DAX", "NIKKEI"], [item["pair"] for item in get_custom_forex_index_assets()])
 
     def test_custom_asset_merge_does_not_duplicate_existing_rows(self):
@@ -60,6 +62,7 @@ class MarketSymbolMappingTest(unittest.TestCase):
         merged = merge_custom_market_assets([{"pair": "AUD/USD", "label": "AUD/USD"}], get_custom_forex_currency_assets())
         self.assertEqual(1, sum(1 for item in merged if item["pair"] == "AUDUSD"))
         self.assertEqual("AUDUSD", merged[0]["symbol"])
+        self.assertEqual("AUD/USD", merged[0]["label"])
 
 
 if __name__ == "__main__":
