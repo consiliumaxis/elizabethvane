@@ -72,8 +72,8 @@ export default function DemoAnalysisSettings({
     ])
     .then(([commData, indicesData]) => {
       const formatted = {
-        Commodities: (Array.isArray(commData) ? commData : []).map(p => ({ apiVal: p.symbol || p.apiVal, name: p.name, icon: p.icon, exchange: p.exchange })),
-        Indices: (Array.isArray(indicesData) ? indicesData : []).map(p => ({ apiVal: p.apiVal || p.symbol, name: p.name, icon: p.icon, country: p.country, exchange: p.exchange }))
+        Commodities: (Array.isArray(commData) ? commData : []).map(p => ({ apiVal: p.symbol || p.apiVal || p.pair || p.asset || p.label, name: p.name || p.label || p.pair || p.symbol, icon: p.icon, exchange: p.exchange })),
+        Indices: (Array.isArray(indicesData) ? indicesData : []).map(p => ({ apiVal: p.apiVal || p.symbol || p.pair || p.asset || p.label, name: p.name || p.label || p.pair || p.symbol, icon: p.icon, country: p.country, exchange: p.exchange }))
       };
       setAssetsData(formatted);
       setLoadingAssets(false);

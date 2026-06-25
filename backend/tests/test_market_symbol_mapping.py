@@ -52,6 +52,8 @@ class MarketSymbolMappingTest(unittest.TestCase):
         merged = merge_custom_market_assets([{"pair": "SP500", "label": "S&P 500"}], get_custom_forex_index_assets())
         self.assertEqual(1, sum(1 for item in merged if item["pair"] == "SP500"))
         self.assertIn("NIKKEI", [item["pair"] for item in merged])
+        sp500 = next(item for item in merged if item["pair"] == "SP500")
+        self.assertEqual("S&P 500", sp500["label"])
 
 
 if __name__ == "__main__":

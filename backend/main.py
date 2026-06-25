@@ -435,7 +435,7 @@ def normalize_forex_stream_assets(market: str, payload: Any) -> List[Dict[str, A
             continue
         seen.add(key)
         label = str(row.get("name") or row.get("label") or row.get("display_name") or pair).strip()
-        item = {"pair": pair, "label": label, "market": market}
+        item = {"pair": pair, "apiVal": pair, "symbol": pair, "name": label, "label": label, "market": market}
         if row.get("icon"):
             item["icon"] = row.get("icon")
         if row.get("country"):
