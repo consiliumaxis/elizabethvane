@@ -709,11 +709,24 @@
   font-weight: 600;
 }
 
+.admin-stream-indicator-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, 120px);
+  gap: 8px;
+  align-items: center;
+}
+
 .admin-stream-mini-toggle {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.admin-stream-value-input {
+  min-height: 30px;
+  padding: 6px 8px;
+  font-size: 0.78rem;
 }
 
 .admin-stream-mini-btn {
@@ -1284,6 +1297,11 @@
   .admin-stream-indicator-row {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .admin-stream-indicator-controls {
+    width: 100%;
+    grid-template-columns: 1fr;
   }
 
   .admin-stream-mini-toggle {

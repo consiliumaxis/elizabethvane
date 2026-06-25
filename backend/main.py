@@ -304,13 +304,23 @@ async def get_stream_settings_row():
     if not isinstance(parsed_overrides, dict):
         parsed_overrides = {}
     normalized_overrides = {}
-    for raw_key, raw_signal in parsed_overrides.items():
+    for raw_key, raw_entry in parsed_overrides.items():
         key_norm = str(raw_key or "").strip().upper().replace(" ", "").replace("_", "").replace("-", "")
         if not key_norm:
             continue
-        signal = str(raw_signal or "").strip().upper()
+        if isinstance(raw_entry, dict):
+            signal = str(raw_entry.get("signal") or "AUTO").strip().upper()
+            value = str(raw_entry.get("value") or "").strip()
+        else:
+            signal = str(raw_entry or "").strip().upper()
+            value = ""
+        entry = {}
         if signal in ("BUY", "SELL", "NEUTRAL"):
-            normalized_overrides[key_norm] = signal
+            entry["signal"] = signal
+        if value:
+            entry["value"] = value[:64]
+        if entry:
+            normalized_overrides[key_norm] = entry
     settings["indicator_overrides"] = normalized_overrides
     settings["message"] = str(settings.get("message") or "")
     emulation_analysis_type = str(settings.get("emulation_analysis_type") or "forex").strip().lower()
@@ -735,7 +745,12 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
         locked_signals = {}
         for indicator_key in indicator_keys:
             for alias in aliases_for_indicator(indicator_key):
-                manual_signal = str(manual_overrides.get(alias) or "").strip().upper()
+                raw_override = manual_overrides.get(alias)
+                manual_signal = (
+                    str(raw_override.get("signal") or "").strip().upper()
+                    if isinstance(raw_override, dict)
+                    else str(raw_override or "").strip().upper()
+                )
                 if manual_signal in ("BUY", "SELL", "NEUTRAL"):
                     locked_signals[indicator_key] = manual_signal
                     break
@@ -785,6 +800,13 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
             if isinstance(indicator_data, dict):
                 signal = locked_signals.get(indicator_key) or generated_by_key.get(indicator_key) or forced_signal
                 indicator_data["signal"] = signal
+                for alias in aliases_for_indicator(indicator_key):
+                    raw_override = manual_overrides.get(alias)
+                    if isinstance(raw_override, dict):
+                        manual_value = str(raw_override.get("value") or "").strip()
+                        if manual_value:
+                            indicator_data["value"] = manual_value
+                            break
                 votes[signal] = votes.get(signal, 0) + 1
     else:
         indicator_count = 0
@@ -1913,13 +1935,23 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                 raw_indicator_overrides = streams_data.get("indicator_overrides")
                 indicator_overrides = {}
                 if isinstance(raw_indicator_overrides, dict):
-                    for raw_key, raw_signal in raw_indicator_overrides.items():
+                    for raw_key, raw_entry in raw_indicator_overrides.items():
                         key_norm = str(raw_key or "").strip().upper().replace(" ", "").replace("_", "").replace("-", "")
                         if not key_norm:
                             continue
-                        signal = str(raw_signal or "").strip().upper()
+                        if isinstance(raw_entry, dict):
+                            signal = str(raw_entry.get("signal") or "AUTO").strip().upper()
+                            value = str(raw_entry.get("value") or "").strip()
+                        else:
+                            signal = str(raw_entry or "").strip().upper()
+                            value = ""
+                        entry = {}
                         if signal in ("BUY", "SELL", "NEUTRAL"):
-                            indicator_overrides[key_norm] = signal
+                            entry["signal"] = signal
+                        if value:
+                            entry["value"] = value[:64]
+                        if entry:
+                            indicator_overrides[key_norm] = entry
                 if scope != "strategy" or indicator_mode != "manual":
                     indicator_overrides = {}
                 indicator_overrides_json = json.dumps(indicator_overrides, ensure_ascii=False)

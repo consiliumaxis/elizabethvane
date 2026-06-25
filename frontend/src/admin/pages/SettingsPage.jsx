@@ -79,6 +79,21 @@ const formatLevel = (value) => {
   return numeric.toFixed(5);
 };
 
+const normalizeIndicatorOverride = (entry) => {
+  if (entry && typeof entry === 'object') {
+    const signal = String(entry.signal || 'AUTO').toUpperCase();
+    return {
+      signal: INDICATOR_SIGNAL_OPTIONS.includes(signal) ? signal : 'AUTO',
+      value: entry.value === null || entry.value === undefined ? '' : String(entry.value),
+    };
+  }
+  const signal = String(entry || 'AUTO').toUpperCase();
+  return {
+    signal: INDICATOR_SIGNAL_OPTIONS.includes(signal) ? signal : 'AUTO',
+    value: '',
+  };
+};
+
 const hashString = (input) => {
   const str = String(input || '');
   let hash = 0;
@@ -115,7 +130,7 @@ const buildPreviewSignals = ({
 
   const autoIndexes = [];
   prepared.forEach((item) => {
-    const overridden = manualMode ? indicatorOverrides[item.norm] : null;
+    const overridden = manualMode ? normalizeIndicatorOverride(indicatorOverrides[item.norm]).signal : null;
     if (overridden && overridden !== 'AUTO') {
       item.signal = overridden;
     } else {
@@ -255,12 +270,12 @@ export default function SettingsPage({ adminUser }) {
       const overridesRaw = streams.indicator_overrides;
       const nextOverrides = {};
       if (overridesRaw && typeof overridesRaw === 'object') {
-        Object.entries(overridesRaw).forEach(([rawKey, rawSignal]) => {
+        Object.entries(overridesRaw).forEach(([rawKey, rawEntry]) => {
           const norm = normalizeIndicatorKey(rawKey);
-          const signal = String(rawSignal || '').toUpperCase();
+          const entry = normalizeIndicatorOverride(rawEntry);
           if (!norm) return;
-          if (signal === 'BUY' || signal === 'SELL' || signal === 'NEUTRAL') {
-            nextOverrides[norm] = signal;
+          if (entry.signal !== 'AUTO' || entry.value.trim()) {
+            nextOverrides[norm] = entry;
           }
         });
       }
@@ -517,10 +532,25 @@ export default function SettingsPage({ adminUser }) {
   const setIndicatorSignal = (indicatorNorm, signal) => {
     setStreamIndicatorOverrides((prev) => {
       const next = { ...prev };
-      if (signal === 'AUTO') {
+      const previous = normalizeIndicatorOverride(next[indicatorNorm]);
+      const value = previous.value;
+      if (signal === 'AUTO' && !value.trim()) {
         delete next[indicatorNorm];
       } else {
-        next[indicatorNorm] = signal;
+        next[indicatorNorm] = { ...previous, signal };
+      }
+      return next;
+    });
+  };
+
+  const setIndicatorValue = (indicatorNorm, value) => {
+    setStreamIndicatorOverrides((prev) => {
+      const next = { ...prev };
+      const previous = normalizeIndicatorOverride(next[indicatorNorm]);
+      if (!String(value || '').trim() && previous.signal === 'AUTO') {
+        delete next[indicatorNorm];
+      } else {
+        next[indicatorNorm] = { ...previous, value };
       }
       return next;
     });
@@ -867,21 +897,29 @@ export default function SettingsPage({ adminUser }) {
                   strategyIndicators.length ? (
                     <div className="admin-stream-indicators-list">
                       {strategyIndicators.map((indicator) => {
-                        const current = streamIndicatorOverrides[indicator.norm] || 'AUTO';
+                        const current = normalizeIndicatorOverride(streamIndicatorOverrides[indicator.norm]);
                         return (
                           <div key={indicator.norm} className="admin-stream-indicator-row">
                             <div className="admin-stream-indicator-name">{indicator.name}</div>
-                            <div className="admin-stream-mini-toggle">
-                              {INDICATOR_SIGNAL_OPTIONS.map((option) => (
-                                <button
-                                  key={option}
-                                  type="button"
-                                  className={`admin-stream-mini-btn ${current === option ? 'active' : ''}`}
-                                  onClick={() => setIndicatorSignal(indicator.norm, option)}
-                                >
-                                  {option}
-                                </button>
-                              ))}
+                            <div className="admin-stream-indicator-controls">
+                              <div className="admin-stream-mini-toggle">
+                                {INDICATOR_SIGNAL_OPTIONS.map((option) => (
+                                  <button
+                                    key={option}
+                                    type="button"
+                                    className={`admin-stream-mini-btn ${current.signal === option ? 'active' : ''}`}
+                                    onClick={() => setIndicatorSignal(indicator.norm, option)}
+                                  >
+                                    {option}
+                                  </button>
+                                ))}
+                              </div>
+                              <input
+                                className="admin-input admin-stream-value-input"
+                                value={current.value}
+                                onChange={(e) => setIndicatorValue(indicator.norm, e.target.value)}
+                                placeholder="Value"
+                              />
                             </div>
                           </div>
                         );
@@ -923,7 +961,7 @@ export default function SettingsPage({ adminUser }) {
             {previewData.indicators.map((indicator) => (
               <div key={`${indicator.norm}-${indicator.idx}`} className="admin-stream-preview-item">
                 <div className="admin-stream-preview-name">{indicator.name}</div>
-                <div className="admin-stream-preview-value">---</div>
+                <div className="admin-stream-preview-value">{normalizeIndicatorOverride(streamIndicatorOverrides[indicator.norm]).value || '---'}</div>
                 <div className={`admin-stream-preview-signal sig-${indicator.signal.toLowerCase()}`}>
                   {indicator.signal}
                 </div>
