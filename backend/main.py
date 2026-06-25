@@ -895,6 +895,94 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
     }
     return ensure_analysis_key_levels(analysis_data, preferred_signal=forced_signal)
 
+
+def get_stream_fallback_price(symbol: str, stream_settings: dict) -> float:
+    try:
+        price = float(stream_settings.get("emulation_price"))
+        if price > 0:
+            return price
+    except (TypeError, ValueError):
+        pass
+
+    key = "".join(ch for ch in str(symbol or "").upper() if ch.isalnum())
+    defaults = {
+        "AUDUSD": 0.65,
+        "SP500": 5500.0,
+        "SPX": 5500.0,
+        "US500": 5500.0,
+        "DAX": 18000.0,
+        "GER40": 18000.0,
+        "NIKKEI": 39000.0,
+        "NIKKEI225": 39000.0,
+        "NI225": 39000.0,
+    }
+    return defaults.get(key, 100.0)
+
+
+def build_stream_local_analysis(
+    symbol: str,
+    interval: str,
+    allowed_indicators: List[Any],
+    stream_settings: dict,
+    analysis_type: str = "forex",
+    market_kind: str = "",
+) -> dict:
+    price = get_stream_fallback_price(symbol, stream_settings)
+    indicator_keys: List[str] = []
+    for item in allowed_indicators if isinstance(allowed_indicators, list) else []:
+        if isinstance(item, dict):
+            key = str(item.get("key") or item.get("name") or "").strip()
+        else:
+            key = str(item or "").strip()
+        if key and key not in indicator_keys:
+            indicator_keys.append(key)
+    if not indicator_keys:
+        indicator_keys = ["RSI", "MACD", "EMA50", "EMA200", "ADX", "DMI", "ATR", "ICHIMOKU"]
+
+    def indicator_value(key: str):
+        normalized = str(key or "").upper().replace(" ", "").replace("-", "").replace("_", "")
+        if normalized == "RSI":
+            return 52.0
+        if normalized == "MACD":
+            return 0.0
+        if normalized in ("ATR",):
+            return round(max(abs(price) * 0.002, 0.0001), 5)
+        if normalized in ("EMA921", "EMA9", "EMA21"):
+            return {"e9": round(price * 1.0003, 5), "e21": round(price * 0.9997, 5)}
+        if normalized.startswith("EMA"):
+            return round(price, 5)
+        if normalized == "ADX":
+            return 24.0
+        return "Configured"
+
+    indicators = {
+        key: {"value": indicator_value(key), "signal": "NEUTRAL"}
+        for key in indicator_keys
+    }
+    step = max(abs(price) * 0.005, 0.0005)
+    analysis_data = {
+        "symbol": str(symbol or "").strip(),
+        "interval": interval,
+        "analysis_type": analysis_type,
+        "market_kind": market_kind,
+        "price": float(price),
+        "entry_price": float(price),
+        "recommendation": "NEUTRAL",
+        "signal": "NEUTRAL",
+        "confidence": 60,
+        "indicators": indicators,
+        "votes": {"BUY": 0, "SELL": 0, "NEUTRAL": len(indicators) or 1},
+        "weighted_scores": {"buy": 0.0, "sell": 0.0, "neutral": float(len(indicators) or 1)},
+        "key_levels": {
+            "current_price": round(price, 5),
+            "nearest_support": round(price - step, 5),
+            "nearest_resistance": round(price + step, 5),
+        },
+        "source": "admin_stream_local",
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+    }
+    return apply_stream_override_to_analysis(analysis_data, stream_settings)
+
 async def get_support_links_row():
     fallback = {
         "channel_url": (os.getenv("CHANNEL_URL") or "").strip(),
@@ -3618,7 +3706,22 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
         "exchange": data.get("exchange"),
     }
 
-    if market_kind == "forex":
+    stream_override = await resolve_stream_override(
+        strategy_id_int,
+        analysis_type="binary",
+        requested_symbol=pair,
+        requested_market=market_kind,
+    )
+    if stream_override:
+        analysis_data = build_stream_local_analysis(
+            pair,
+            analysis_interval,
+            allowed_indicators,
+            stream_override,
+            analysis_type="binary",
+            market_kind=market_kind,
+        )
+    elif market_kind == "forex":
         async with httpx.AsyncClient() as client:
             try:
                 resp = await client.post(url, headers=headers, json=payload, timeout=20.0)
@@ -3740,14 +3843,6 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
             return {"error": str(e)}
 
     analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-    stream_override = await resolve_stream_override(
-        strategy_id_int,
-        analysis_type="binary",
-        requested_symbol=pair,
-        requested_market=market_kind,
-    )
-    if stream_override:
-        analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
     analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
     analysis_data = enforce_binary_signal(analysis_data)
     recommendation = str(analysis_data.get("recommendation") or analysis_data.get("signal") or "").strip().upper()
@@ -3908,80 +4003,90 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
         "exchange": exchange,
     }
 
-    async with httpx.AsyncClient() as client:
-        try:
-            upstream_data = None
-            baseline_analysis_data = None
-            gateway_error_text = ""
+    stream_override = await resolve_stream_override(
+        strategy_id_int,
+        analysis_type="forex",
+        requested_symbol=pair,
+    )
+    if stream_override:
+        analysis_data = build_stream_local_analysis(
+            str(pair or "").strip(),
+            interval,
+            allowed_indicators,
+            stream_override,
+            analysis_type="forex",
+            market_kind=normalize_forex_stream_market(stream_override.get("emulation_market") or ""),
+        )
+        analysis_pair = str(pair).strip() or pair
+        analysis_data["symbol"] = analysis_pair
+        news_data = await fetch_news_data()
+    else:
+        async with httpx.AsyncClient() as client:
             try:
-                resp = await client.post(url, headers=headers, json=payload, timeout=20.0)
-                resp.raise_for_status()
-                upstream_data = resp.json()
-                baseline_analysis_data = compute_analysis_decision(
-                    upstream_data,
-                    symbol=formatted_pair,
-                    interval=interval,
-                    allowed_indicators=allowed_indicators,
+                upstream_data = None
+                baseline_analysis_data = None
+                gateway_error_text = ""
+                try:
+                    resp = await client.post(url, headers=headers, json=payload, timeout=20.0)
+                    resp.raise_for_status()
+                    upstream_data = resp.json()
+                    baseline_analysis_data = compute_analysis_decision(
+                        upstream_data,
+                        symbol=formatted_pair,
+                        interval=interval,
+                        allowed_indicators=allowed_indicators,
+                    )
+                except httpx.HTTPStatusError as e:
+                    gateway_error_text = e.response.text
+                    print(f"ANALYSIS GATEWAY ERROR [{e.response.status_code}]: {gateway_error_text} (Payload: {payload})")
+
+                fallback_needed = (
+                    has_explicit_twelvedata_mapping(pair)
+                    or upstream_data is None
+                    or not isinstance(baseline_analysis_data, dict)
+                    or not isinstance(baseline_analysis_data.get("indicators"), dict)
+                    or len(baseline_analysis_data.get("indicators") or {}) == 0
                 )
-            except httpx.HTTPStatusError as e:
-                gateway_error_text = e.response.text
-                print(f"ANALYSIS GATEWAY ERROR [{e.response.status_code}]: {gateway_error_text} (Payload: {payload})")
+                if fallback_needed:
+                    fallback = await build_twelvedata_based_analysis(pair, interval, allowed_indicators)
+                    if fallback:
+                        upstream_data, baseline_analysis_data = fallback
+                        formatted_pair = str(pair or "").strip()
+                    elif upstream_data is None:
+                        return {"error": f"API Error: {gateway_error_text or 'Price not found'}"}
 
-            fallback_needed = (
-                has_explicit_twelvedata_mapping(pair)
-                or upstream_data is None
-                or not isinstance(baseline_analysis_data, dict)
-                or not isinstance(baseline_analysis_data.get("indicators"), dict)
-                or len(baseline_analysis_data.get("indicators") or {}) == 0
-            )
-            if fallback_needed:
-                fallback = await build_twelvedata_based_analysis(pair, interval, allowed_indicators)
-                if fallback:
-                    upstream_data, baseline_analysis_data = fallback
-                    formatted_pair = str(pair or "").strip()
-                elif upstream_data is None:
-                    return {"error": f"API Error: {gateway_error_text or 'Price not found'}"}
-
-            analysis_settings = await get_admin_analysis_settings()
-            if analysis_settings.get("engine") == "gpt":
-                if not analysis_settings.get("gpt_api_key"):
-                    print("GPT analysis is not configured; using baseline analysis")
-                    analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
-                else:
-                    strategy_context = await get_strategy_context(strategy_id_int)
-                    try:
-                        analysis_data = await analysis_ai_service.generate_gpt_analysis(
-                            api_key=analysis_settings.get("gpt_api_key") or "",
-                            model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
-                            prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
-                            raw_payload=upstream_data,
-                            symbol=formatted_pair,
-                            interval=interval,
-                            allowed_indicators=allowed_indicators,
-                            strategy=strategy_context,
-                            baseline_analysis=baseline_analysis_data,
-                        )
-                    except Exception as e:
-                        print(f"GPT analysis error: {e}; using baseline analysis")
+                analysis_settings = await get_admin_analysis_settings()
+                if analysis_settings.get("engine") == "gpt":
+                    if not analysis_settings.get("gpt_api_key"):
+                        print("GPT analysis is not configured; using baseline analysis")
                         analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
-            else:
-                analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
-            analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-            stream_override = await resolve_stream_override(
-                strategy_id_int,
-                analysis_type="forex",
-                requested_symbol=formatted_pair or pair,
-            )
-            if stream_override:
-                analysis_data = apply_stream_override_to_analysis(analysis_data, stream_override)
-            analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-            analysis_pair = str(pair).strip() or pair
-            analysis_data["symbol"] = analysis_pair
-            news_data = await fetch_news_data()
-        except ValueError as e:
-            return {"error": f"Analysis parse error: {str(e)}"}
-        except Exception as e:
-            return {"error": str(e)}
+                    else:
+                        strategy_context = await get_strategy_context(strategy_id_int)
+                        try:
+                            analysis_data = await analysis_ai_service.generate_gpt_analysis(
+                                api_key=analysis_settings.get("gpt_api_key") or "",
+                                model=analysis_settings.get("gpt_model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL,
+                                prompt=analysis_settings.get("gpt_prompt") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_PROMPT,
+                                raw_payload=upstream_data,
+                                symbol=formatted_pair,
+                                interval=interval,
+                                allowed_indicators=allowed_indicators,
+                                strategy=strategy_context,
+                                baseline_analysis=baseline_analysis_data,
+                            )
+                        except Exception as e:
+                            print(f"GPT analysis error: {e}; using baseline analysis")
+                            analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
+                else:
+                    analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
+                analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
+                analysis_pair = str(pair).strip() or pair
+                analysis_data["symbol"] = analysis_pair
+                news_data = await fetch_news_data()
+            except ValueError as e:
+                return {"error": f"Analysis parse error: {str(e)}"}
+            except Exception as e:
+                return {"error": str(e)}
 
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
