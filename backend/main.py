@@ -941,6 +941,13 @@ def build_stream_local_analysis(
 
     def indicator_value(key: str):
         normalized = str(key or "").upper().replace(" ", "").replace("-", "").replace("_", "")
+        direction = str(stream_settings.get("forced_signal") or "BUY").upper()
+        bullish = direction != "SELL"
+        price_step = max(abs(price) * 0.0015, 0.0001)
+
+        def fmt(value: float, digits: int = 3) -> str:
+            return f"{float(value):.{digits}f}"
+
         if normalized == "RSI":
             return 52.0
         if normalized == "MACD":
@@ -953,7 +960,27 @@ def build_stream_local_analysis(
             return round(price, 5)
         if normalized == "ADX":
             return 24.0
-        return "Configured"
+        if normalized in ("PSAR", "PARABOLICSAR"):
+            return round(price - price_step if bullish else price + price_step, 5)
+        if normalized in ("PIVOTPOINTS", "PIVOTPOINTSHL", "PIVOTPOINT"):
+            return f"P {fmt(price)}"
+        if normalized == "SUPERTREND":
+            return fmt(price - price_step * 1.8 if bullish else price + price_step * 1.8)
+        if normalized == "OBV":
+            return "1.24M" if bullish else "-1.24M"
+        if normalized == "DMI":
+            return "+DI 26 / -DI 18" if bullish else "+DI 18 / -DI 26"
+        if normalized == "ICHIMOKU":
+            return "Above cloud" if bullish else "Below cloud"
+        if normalized in ("STOCH", "STOCHASTIC"):
+            return 58.0 if bullish else 42.0
+        if normalized in ("BB", "BOLLINGERBANDS", "BOLLINGERBAND"):
+            return "Mid band"
+        if normalized == "CCI":
+            return 74.0 if bullish else -74.0
+        if normalized == "FIBONACCI":
+            return "61.8%"
+        return "Neutral"
 
     indicators = {
         key: {"value": indicator_value(key), "signal": "NEUTRAL"}
