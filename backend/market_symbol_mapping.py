@@ -183,19 +183,23 @@ def get_custom_forex_index_assets() -> List[Dict[str, str]]:
 
 def merge_custom_market_assets(rows: List[Dict[str, Any]], additions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     merged = [dict(item) for item in rows if isinstance(item, dict)]
-    seen = set()
-    for item in merged:
+    seen = {}
+    for index, item in enumerate(merged):
         key_source = item.get("pair") or item.get("symbol") or item.get("asset") or item.get("name") or item.get("label")
         key = normalize_asset_key(key_source)
         if key:
-            seen.add(key)
+            seen[key] = index
     for item in additions:
         if not isinstance(item, dict):
             continue
         key_source = item.get("pair") or item.get("symbol") or item.get("asset") or item.get("name") or item.get("label")
         key = normalize_asset_key(key_source)
-        if key and key not in seen:
-            seen.add(key)
+        if not key:
+            continue
+        if key in seen:
+            merged[seen[key]] = {**merged[seen[key]], **dict(item)}
+        else:
+            seen[key] = len(merged)
             merged.append(dict(item))
     return merged
 

@@ -53,7 +53,13 @@ class MarketSymbolMappingTest(unittest.TestCase):
         self.assertEqual(1, sum(1 for item in merged if item["pair"] == "SP500"))
         self.assertIn("NIKKEI", [item["pair"] for item in merged])
         sp500 = next(item for item in merged if item["pair"] == "SP500")
-        self.assertEqual("S&P 500", sp500["label"])
+        self.assertEqual("SP500", sp500["label"])
+        self.assertEqual("SP500", sp500["symbol"])
+
+    def test_custom_currency_overrides_duplicate_external_display(self):
+        merged = merge_custom_market_assets([{"pair": "AUD/USD", "label": "AUD/USD"}], get_custom_forex_currency_assets())
+        self.assertEqual(1, sum(1 for item in merged if item["pair"] == "AUDUSD"))
+        self.assertEqual("AUDUSD", merged[0]["symbol"])
 
 
 if __name__ == "__main__":
