@@ -39,9 +39,23 @@ try:
 except ModuleNotFoundError:
     from binary_signal import enforce_binary_signal as normalize_binary_signal
 try:
-    from backend.market_symbol_mapping import get_forex_stock_assets, get_twelvedata_symbol_candidates, has_explicit_twelvedata_mapping
+    from backend.market_symbol_mapping import (
+        get_custom_forex_currency_assets,
+        get_custom_forex_index_assets,
+        get_forex_stock_assets,
+        get_twelvedata_symbol_candidates,
+        has_explicit_twelvedata_mapping,
+        merge_custom_market_assets,
+    )
 except ModuleNotFoundError:
-    from market_symbol_mapping import get_forex_stock_assets, get_twelvedata_symbol_candidates, has_explicit_twelvedata_mapping
+    from market_symbol_mapping import (
+        get_custom_forex_currency_assets,
+        get_custom_forex_index_assets,
+        get_forex_stock_assets,
+        get_twelvedata_symbol_candidates,
+        has_explicit_twelvedata_mapping,
+        merge_custom_market_assets,
+    )
 try:
     from backend.pocket_api import POCKET_USER_INFO_ENDPOINT_TEMPLATE, build_pocket_user_info_url, mask_secret
 except ModuleNotFoundError:
@@ -453,8 +467,10 @@ async def get_forex_stream_options_payload(market: str) -> Dict[str, Any]:
     if forex_market == "currencies":
         binary_payload = await get_market_options_payload("forex", DEVSBITE_MIN_PAYOUT)
         pairs = [{"pair": item.get("pair"), "label": item.get("pair"), "market": forex_market} for item in binary_payload.get("pairs") or [] if item.get("pair")]
+        pairs = merge_custom_market_assets(pairs, get_custom_forex_currency_assets())
     elif forex_market == "indices":
         pairs = normalize_forex_stream_assets(forex_market, await fetch_devsbite_json("pairs/indices"))
+        pairs = merge_custom_market_assets(pairs, get_custom_forex_index_assets())
     elif forex_market == "commodities":
         pairs = normalize_forex_stream_assets(forex_market, await fetch_devsbite_json("pairs/commodity"))
     else:
@@ -3341,6 +3357,8 @@ async def fetch_binary_expiration_options() -> List[Dict[str, str]]:
 async def get_market_options_payload(kind: str, min_payout: int) -> Dict[str, Any]:
     market_kind = normalize_market_kind(kind)
     pairs = await fetch_devsbite_market_pairs(market_kind, min_payout)
+    if market_kind == "forex":
+        pairs = merge_custom_market_assets(pairs, get_custom_forex_currency_assets())
     expirations = await fetch_binary_expiration_options()
     return {
         "kind": market_kind,
@@ -3433,10 +3451,11 @@ async def get_indices_pairs(user=Depends(get_telegram_user)):
         try:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
-            return response.json()
+            pairs = normalize_forex_stream_assets("indices", response.json())
+            return merge_custom_market_assets(pairs, get_custom_forex_index_assets())
         except Exception as e:
             print(f"Indices API Error: {e}")
-            return []
+            return get_custom_forex_index_assets()
             
 @app.get("/api/analysis/active")
 async def get_active_analyses(user=Depends(get_telegram_user)):

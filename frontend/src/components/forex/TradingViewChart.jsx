@@ -45,11 +45,13 @@ const TradingViewChart = memo(({ symbol, interval, t, isDemo }) => {
       'CT1': 'ICEUS:CT1!',     
       
       'SPX': 'TVC:SPX',
+      'SP500': 'TVC:SPX',
       'NDX': 'TVC:NDX',
       'DJI': 'TVC:DJI',
       'DAX': 'TVC:DAX',
       'UK100': 'TVC:UKX',
-      'NI225': 'TVC:NI225'
+      'NI225': 'TVC:NI225',
+      'NIKKEI': 'TVC:NI225'
     };
 
     const cleanSym = sym.replace(/[\/-]/g, '');

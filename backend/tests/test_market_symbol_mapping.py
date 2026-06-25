@@ -1,6 +1,13 @@
 import unittest
 
-from market_symbol_mapping import get_forex_stock_assets, get_twelvedata_symbol_candidates, has_explicit_twelvedata_mapping
+from market_symbol_mapping import (
+    get_custom_forex_currency_assets,
+    get_custom_forex_index_assets,
+    get_forex_stock_assets,
+    get_twelvedata_symbol_candidates,
+    has_explicit_twelvedata_mapping,
+    merge_custom_market_assets,
+)
 
 
 class MarketSymbolMappingTest(unittest.TestCase):
@@ -21,6 +28,12 @@ class MarketSymbolMappingTest(unittest.TestCase):
         self.assertEqual(get_twelvedata_symbol_candidates("KC1")[0], ("COFF", "LSE"))
         self.assertEqual(get_twelvedata_symbol_candidates("CC1")[0], ("CC1", None))
 
+    def test_requested_currency_and_index_mappings(self):
+        self.assertEqual(get_twelvedata_symbol_candidates("AUDUSD")[0], ("AUD/USD", None))
+        self.assertEqual(get_twelvedata_symbol_candidates("SP500")[0], ("SPX", None))
+        self.assertEqual(get_twelvedata_symbol_candidates("DAX")[0], ("DAX", None))
+        self.assertEqual(get_twelvedata_symbol_candidates("NIKKEI")[0], ("NI225", None))
+
     def test_explicit_mapping_does_not_treat_plain_forex_pairs_as_mapped(self):
         self.assertTrue(has_explicit_twelvedata_mapping("Apple OTC"))
         self.assertTrue(has_explicit_twelvedata_mapping("AAPL"))
@@ -30,6 +43,15 @@ class MarketSymbolMappingTest(unittest.TestCase):
         assets = get_forex_stock_assets()
         self.assertIn({"pair": "AAPL", "asset": "AAPL", "symbol": "AAPL", "name": "Apple", "label": "Apple", "market": "stocks"}, assets)
         self.assertTrue(all("OTC" not in item["pair"] for item in assets))
+
+    def test_custom_assets_are_available_for_admin_lists(self):
+        self.assertIn("AUDUSD", [item["pair"] for item in get_custom_forex_currency_assets()])
+        self.assertEqual(["SP500", "DAX", "NIKKEI"], [item["pair"] for item in get_custom_forex_index_assets()])
+
+    def test_custom_asset_merge_does_not_duplicate_existing_rows(self):
+        merged = merge_custom_market_assets([{"pair": "SP500", "label": "S&P 500"}], get_custom_forex_index_assets())
+        self.assertEqual(1, sum(1 for item in merged if item["pair"] == "SP500"))
+        self.assertIn("NIKKEI", [item["pair"] for item in merged])
 
 
 if __name__ == "__main__":

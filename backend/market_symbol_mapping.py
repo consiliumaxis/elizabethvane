@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 TwelveSymbol = Tuple[str, Optional[str]]
@@ -32,12 +32,66 @@ FOREX_STOCK_SYMBOLS: List[Tuple[str, str]] = [
     ("VIX", "VIXY"),
 ]
 
+CUSTOM_FOREX_CURRENCY_ASSETS: List[Dict[str, str]] = [
+    {
+        "pair": "AUDUSD",
+        "asset": "AUDUSD",
+        "symbol": "AUDUSD",
+        "name": "AUDUSD",
+        "label": "AUDUSD",
+        "market": "currencies",
+    },
+]
+
+CUSTOM_FOREX_INDEX_ASSETS: List[Dict[str, str]] = [
+    {
+        "pair": "SP500",
+        "asset": "SP500",
+        "symbol": "SP500",
+        "name": "SP500",
+        "label": "SP500",
+        "market": "indices",
+        "country": "US",
+        "exchange": "TVC",
+    },
+    {
+        "pair": "DAX",
+        "asset": "DAX",
+        "symbol": "DAX",
+        "name": "DAX",
+        "label": "DAX",
+        "market": "indices",
+        "country": "DE",
+        "exchange": "TVC",
+    },
+    {
+        "pair": "NIKKEI",
+        "asset": "NIKKEI",
+        "symbol": "NIKKEI",
+        "name": "NIKKEI",
+        "label": "NIKKEI",
+        "market": "indices",
+        "country": "JP",
+        "exchange": "TVC",
+    },
+]
+
 
 def normalize_asset_key(value: str) -> str:
     return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
 
 
 TWELVEDATA_SYMBOL_MAP: Dict[str, List[TwelveSymbol]] = {
+    "audusd": [("AUD/USD", None)],
+    "audusdotc": [("AUD/USD", None)],
+    "sp500": [("SPX", None)],
+    "spx": [("SPX", None)],
+    "us500": [("SPX", None)],
+    "dax": [("DAX", None)],
+    "ger40": [("DAX", None)],
+    "nikkei": [("NI225", None)],
+    "nikkei225": [("NI225", None)],
+    "ni225": [("NI225", None)],
     "appleotc": [("AAPL", None)],
     "teslaotc": [("TSLA", None)],
     "nvidiaotc": [("NVDA", None)],
@@ -117,6 +171,33 @@ def get_twelvedata_symbol_candidates(asset: str) -> List[TwelveSymbol]:
 
 def has_explicit_twelvedata_mapping(asset: str) -> bool:
     return normalize_asset_key(asset) in TWELVEDATA_SYMBOL_MAP
+
+
+def get_custom_forex_currency_assets() -> List[Dict[str, str]]:
+    return [dict(item) for item in CUSTOM_FOREX_CURRENCY_ASSETS]
+
+
+def get_custom_forex_index_assets() -> List[Dict[str, str]]:
+    return [dict(item) for item in CUSTOM_FOREX_INDEX_ASSETS]
+
+
+def merge_custom_market_assets(rows: List[Dict[str, Any]], additions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged = [dict(item) for item in rows if isinstance(item, dict)]
+    seen = set()
+    for item in merged:
+        key_source = item.get("pair") or item.get("symbol") or item.get("asset") or item.get("name") or item.get("label")
+        key = normalize_asset_key(key_source)
+        if key:
+            seen.add(key)
+    for item in additions:
+        if not isinstance(item, dict):
+            continue
+        key_source = item.get("pair") or item.get("symbol") or item.get("asset") or item.get("name") or item.get("label")
+        key = normalize_asset_key(key_source)
+        if key and key not in seen:
+            seen.add(key)
+            merged.append(dict(item))
+    return merged
 
 
 def get_forex_stock_assets() -> List[Dict[str, str]]:
