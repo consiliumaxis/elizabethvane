@@ -83,6 +83,7 @@ class AccessPolicySourceTest(unittest.TestCase):
         for component_path in (
             "frontend/src/components/binary/BinarySignalSettings.jsx",
             "frontend/src/components/forex/ForexAnalysisSettings.jsx",
+            "frontend/src/components/demo/DemoAnalysisSettings.jsx",
         ):
             source = (PROJECT_ROOT / component_path).read_text(encoding="utf-8")
             self.assertIn("import SignalGateModal", source)

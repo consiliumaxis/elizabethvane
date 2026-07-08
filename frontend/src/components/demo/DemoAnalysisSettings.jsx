@@ -6,6 +6,7 @@ import './Demo.css';
 import iconEdit from '../../assets/icons/edit.svg?url';
 import TradingViewChart from '../forex/TradingViewChart';
 import NewsModal from '../forex/NewsModal';
+import SignalGateModal from '../SignalGateModal';
 import { apiFetchJson } from '../../lib/api';
 
 import * as Flags from 'country-flag-icons/react/3x2';
@@ -34,6 +35,7 @@ export default function DemoAnalysisSettings({
   const [analysisData, setAnalysisData] = useState(null);
   const [news, setNews] = useState(null);
   const [isNewsModalOpen, setIsNewsModalOpen] = useState(false);
+  const [signalGateOpen, setSignalGateOpen] = useState(false);
   const [assetType, setAssetType] = useState('Commodities');
   
   const [assetsData, setAssetsData] = useState({ Commodities: [], Indices: [] });
@@ -120,7 +122,8 @@ export default function DemoAnalysisSettings({
     setAnalysisData(null);
     setIsProcessing(true);
     setEditMode(null);
-    const uiDelay = Math.floor(Math.random() * 5000) + 3000; 
+    setSignalGateOpen(false);
+    const uiDelay = Math.floor(Math.random() * 5000) + 3000;
 
     const assetObj = getAssetObject(forexParams.pair);
     
@@ -149,10 +152,14 @@ export default function DemoAnalysisSettings({
           pair: forexParams.pair
         });
       } else {
-        alert(t.noDataError);
+        throw new Error(result?.error || t.noDataError);
       }
     } catch (error) {
-      alert(t.noDataError);
+      if (error.message === 'signal_access_required' || error.message === 'registration_and_deposit_required') {
+        setSignalGateOpen(true);
+      } else {
+        alert(t.noDataError);
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -334,6 +341,10 @@ export default function DemoAnalysisSettings({
 
   return (
     <div className="profile-wrapper">
+      {signalGateOpen && (
+        <SignalGateModal onClose={() => setSignalGateOpen(false)} />
+      )}
+
       {isSelectingAsset && (
         <div className="step-container fade-in">
           <h3 className="settings-main-title">{t.selectAsset}</h3>
