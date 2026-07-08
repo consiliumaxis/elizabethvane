@@ -71,6 +71,16 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     first_name VARCHAR(255) NULL,
                     avatar_url TEXT NULL,
                     trader_id VARCHAR(64) NULL,
+                    pocket_click_id VARCHAR(64) NULL,
+                    pocket_site_id VARCHAR(128) NULL,
+                    pocket_cid VARCHAR(128) NULL,
+                    pocket_sub_id1 VARCHAR(255) NULL,
+                    pocket_sub_id2 VARCHAR(255) NULL,
+                    pocket_registered TINYINT(1) NOT NULL DEFAULT 0,
+                    pocket_deposited TINYINT(1) NOT NULL DEFAULT 0,
+                    pocket_registered_at VARCHAR(64) NULL,
+                    pocket_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+                    pocket_checked_at TIMESTAMP NULL DEFAULT NULL,
                     balance DECIMAL(18,2) NOT NULL DEFAULT 0.00,
                     balance_sync_enabled TINYINT(1) NOT NULL DEFAULT 0,
                     balance_synced_at TIMESTAMP NULL DEFAULT NULL,
@@ -281,6 +291,32 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS pocket_postback_events (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    event_slug VARCHAR(64) NOT NULL,
+                    unique_key VARCHAR(191) NOT NULL,
+                    user_id BIGINT NULL,
+                    click_id VARCHAR(128) NULL,
+                    trader_id VARCHAR(64) NULL,
+                    deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+                    site_id VARCHAR(128) NULL,
+                    cid VARCHAR(128) NULL,
+                    sub_id1 VARCHAR(255) NULL,
+                    sub_id2 VARCHAR(255) NULL,
+                    raw_payload LONGTEXT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'received',
+                    reason VARCHAR(255) NULL,
+                    source_ip VARCHAR(64) NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_pocket_postback_unique_key (unique_key),
+                    KEY idx_pocket_postback_user_event (user_id, event_slug),
+                    KEY idx_pocket_postback_created_at (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS app_modes (
                     mode VARCHAR(16) NOT NULL PRIMARY KEY,
                     title VARCHAR(64) NOT NULL,
@@ -305,6 +341,16 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             )
 
         await _ensure_column(conn, db_name, "users", "trader_id", "ALTER TABLE users ADD COLUMN trader_id VARCHAR(64) NULL")
+        await _ensure_column(conn, db_name, "users", "pocket_click_id", "ALTER TABLE users ADD COLUMN pocket_click_id VARCHAR(64) NULL")
+        await _ensure_column(conn, db_name, "users", "pocket_site_id", "ALTER TABLE users ADD COLUMN pocket_site_id VARCHAR(128) NULL")
+        await _ensure_column(conn, db_name, "users", "pocket_cid", "ALTER TABLE users ADD COLUMN pocket_cid VARCHAR(128) NULL")
+        await _ensure_column(conn, db_name, "users", "pocket_sub_id1", "ALTER TABLE users ADD COLUMN pocket_sub_id1 VARCHAR(255) NULL")
+        await _ensure_column(conn, db_name, "users", "pocket_sub_id2", "ALTER TABLE users ADD COLUMN pocket_sub_id2 VARCHAR(255) NULL")
+        await _ensure_column(conn, db_name, "users", "pocket_registered", "ALTER TABLE users ADD COLUMN pocket_registered TINYINT(1) NOT NULL DEFAULT 0")
+        await _ensure_column(conn, db_name, "users", "pocket_deposited", "ALTER TABLE users ADD COLUMN pocket_deposited TINYINT(1) NOT NULL DEFAULT 0")
+        await _ensure_column(conn, db_name, "users", "pocket_registered_at", "ALTER TABLE users ADD COLUMN pocket_registered_at VARCHAR(64) NULL")
+        await _ensure_column(conn, db_name, "users", "pocket_deposit_amount", "ALTER TABLE users ADD COLUMN pocket_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00")
+        await _ensure_column(conn, db_name, "users", "pocket_checked_at", "ALTER TABLE users ADD COLUMN pocket_checked_at TIMESTAMP NULL DEFAULT NULL")
         await _ensure_column(conn, db_name, "users", "balance", "ALTER TABLE users ADD COLUMN balance DECIMAL(18,2) NOT NULL DEFAULT 0.00")
         await _ensure_column(conn, db_name, "users", "balance_sync_enabled", "ALTER TABLE users ADD COLUMN balance_sync_enabled TINYINT(1) NOT NULL DEFAULT 0")
         await _ensure_column(conn, db_name, "users", "balance_synced_at", "ALTER TABLE users ADD COLUMN balance_synced_at TIMESTAMP NULL DEFAULT NULL")
@@ -576,6 +622,10 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         )
         await _ensure_index(conn, db_name, "user_presets", "idx_user_presets_preset_id", "CREATE INDEX idx_user_presets_preset_id ON user_presets(preset_id)")
         await _ensure_index(conn, db_name, "user_mode_access", "idx_user_mode_access_mode", "CREATE INDEX idx_user_mode_access_mode ON user_mode_access(mode)")
+        await _ensure_index(conn, db_name, "users", "idx_users_pocket_click_id", "CREATE INDEX idx_users_pocket_click_id ON users(pocket_click_id)")
+        await _ensure_index(conn, db_name, "users", "idx_users_signal_gate", "CREATE INDEX idx_users_signal_gate ON users(pocket_registered, pocket_deposited)")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "sub_id2", "ALTER TABLE pocket_postback_events ADD COLUMN sub_id2 VARCHAR(255) NULL AFTER sub_id1")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "deposit_amount", "ALTER TABLE pocket_postback_events ADD COLUMN deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00 AFTER trader_id")
         await _ensure_index(
             conn,
             db_name,

@@ -6,6 +6,7 @@ import json
 import secrets
 import random
 from datetime import datetime, timedelta
+from urllib.parse import parse_qs
 from fastapi import FastAPI, Request, Depends, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types
@@ -57,9 +58,25 @@ except ModuleNotFoundError:
         merge_custom_market_assets,
     )
 try:
-    from backend.pocket_api import POCKET_USER_INFO_ENDPOINT_TEMPLATE, build_pocket_user_info_url, mask_secret
+    from backend.pocket_api import (
+        POCKET_DEPOSIT_EVENT,
+        POCKET_FTD_EVENT,
+        POCKET_REGISTRATION_EVENT,
+        POCKET_USER_INFO_ENDPOINT_TEMPLATE,
+        build_pocket_user_info_url,
+        mask_secret,
+        normalize_pocket_postback_payload,
+    )
 except ModuleNotFoundError:
-    from pocket_api import POCKET_USER_INFO_ENDPOINT_TEMPLATE, build_pocket_user_info_url, mask_secret
+    from pocket_api import (
+        POCKET_DEPOSIT_EVENT,
+        POCKET_FTD_EVENT,
+        POCKET_REGISTRATION_EVENT,
+        POCKET_USER_INFO_ENDPOINT_TEMPLATE,
+        build_pocket_user_info_url,
+        mask_secret,
+        normalize_pocket_postback_payload,
+    )
 
 load_dotenv()
 
@@ -110,6 +127,7 @@ DB_CONFIG = {
     "db": os.getenv("DB_NAME"),
     "autocommit": True
 }
+POCKET_POSTBACK_SECRET = (os.getenv("POCKET_POSTBACK_SECRET") or "").strip()
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -1205,6 +1223,197 @@ async def pocket_balance_sync_worker():
                 await asyncio.sleep(0.5)
         except Exception as e:
             print(f"[PocketSync] Worker error: {e}")
+
+
+async def read_postback_payload(request: Request) -> Dict[str, Any]:
+    payload = dict(request.query_params)
+    body = await request.body()
+    if not body:
+        return payload
+
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "application/json" in content_type:
+        try:
+            body_payload = json.loads(body.decode("utf-8"))
+            if isinstance(body_payload, dict):
+                payload.update(body_payload)
+        except Exception:
+            pass
+        return payload
+
+    try:
+        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+        payload.update({key: values[-1] if values else "" for key, values in parsed.items()})
+    except Exception:
+        pass
+    return payload
+
+
+def get_pocket_postback_secret() -> str:
+    return (os.getenv("POCKET_POSTBACK_SECRET") or POCKET_POSTBACK_SECRET or "").strip()
+
+
+def normalize_deposit_amount(value: Any) -> float:
+    try:
+        amount = float(str(value or "0").replace(",", "."))
+    except (TypeError, ValueError):
+        amount = 0.0
+    return round(max(amount, 0.0), 2)
+
+
+async def insert_pocket_postback_log(
+    normalized: Dict[str, Any],
+    raw_payload: Dict[str, Any],
+    status: str,
+    reason: Optional[str],
+    user_id: Optional[int],
+    source_ip: str,
+) -> int:
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO pocket_postback_events (
+                    event_slug, unique_key, user_id, click_id, trader_id, deposit_amount,
+                    site_id, cid, sub_id1, sub_id2, raw_payload, status, reason, source_ip
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    normalized.get("event_slug") or "unknown",
+                    normalized.get("unique_key") or "unknown",
+                    user_id,
+                    normalized.get("click_id") or None,
+                    normalized.get("trader_id") or None,
+                    normalized.get("deposit_amount") or "0.00",
+                    normalized.get("site_id") or None,
+                    normalized.get("cid") or None,
+                    normalized.get("sub_id1") or None,
+                    normalized.get("sub_id2") or None,
+                    json.dumps(raw_payload, ensure_ascii=False, default=str),
+                    status,
+                    reason,
+                    source_ip,
+                ),
+            )
+            return int(cur.lastrowid)
+
+
+@app.api_route("/api/integrations/pocket/postback", methods=["GET", "POST"])
+async def pocket_postback(request: Request):
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database is unavailable")
+
+    expected_secret = get_pocket_postback_secret()
+    if not expected_secret:
+        raise HTTPException(status_code=503, detail="Pocket postback secret is not configured")
+
+    payload = await read_postback_payload(request)
+    provided_secret = str(payload.get("secret") or request.headers.get("X-Pocket-Secret") or "").strip()
+    if not provided_secret or not secrets.compare_digest(provided_secret, expected_secret):
+        raise HTTPException(status_code=403, detail="Invalid postback secret")
+
+    normalized = normalize_pocket_postback_payload(payload)
+    source_ip = request.client.host if request.client else ""
+    event_slug = normalized.get("event_slug")
+    telegram_id = normalized.get("telegram_id")
+    click_id = normalized.get("click_id") or ""
+    trader_id = normalized.get("trader_id") or ""
+    site_id = normalized.get("site_id") or ""
+    cid = normalized.get("cid") or ""
+    sub_id1 = normalized.get("sub_id1") or ""
+    sub_id2 = normalized.get("sub_id2") or ""
+    deposit_amount = normalize_deposit_amount(normalized.get("deposit_amount"))
+
+    if event_slug not in {POCKET_REGISTRATION_EVENT, POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT}:
+        log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "unsupported_event", telegram_id, source_ip)
+        return {"status": "skipped", "reason": "unsupported_event", "log_id": log_id}
+
+    if not telegram_id:
+        log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "missing_click_id", None, source_ip)
+        return {"status": "skipped", "reason": "missing_click_id", "log_id": log_id}
+
+    if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT} and deposit_amount <= 0:
+        log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "invalid_deposit_amount", telegram_id, source_ip)
+        return {"status": "skipped", "reason": "invalid_deposit_amount", "log_id": log_id}
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT user_id FROM users WHERE user_id = %s LIMIT 1", (telegram_id,))
+            user_row = await cur.fetchone()
+            if not user_row:
+                log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "user_not_found", telegram_id, source_ip)
+                return {"status": "skipped", "reason": "user_not_found", "log_id": log_id}
+
+            if event_slug == POCKET_REGISTRATION_EVENT:
+                await cur.execute(
+                    """
+                    UPDATE users
+                    SET trader_id = CASE WHEN %s <> '' THEN %s ELSE trader_id END,
+                        pocket_click_id = CASE WHEN %s <> '' THEN %s ELSE pocket_click_id END,
+                        pocket_site_id = CASE WHEN %s <> '' THEN %s ELSE pocket_site_id END,
+                        pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
+                        pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
+                        pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
+                        pocket_registered = 1,
+                        pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
+                        pocket_checked_at = NOW()
+                    WHERE user_id = %s
+                    """,
+                    (
+                        trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
+                        sub_id1, sub_id1, sub_id2, sub_id2, telegram_id,
+                    ),
+                )
+            else:
+                await cur.execute(
+                    """
+                    UPDATE users
+                    SET trader_id = CASE WHEN %s <> '' THEN %s ELSE trader_id END,
+                        pocket_click_id = CASE WHEN %s <> '' THEN %s ELSE pocket_click_id END,
+                        pocket_site_id = CASE WHEN %s <> '' THEN %s ELSE pocket_site_id END,
+                        pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
+                        pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
+                        pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
+                        pocket_registered = 1,
+                        pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
+                        pocket_deposited = 1,
+                        pocket_deposit_amount = COALESCE(pocket_deposit_amount, 0) + %s,
+                        pocket_checked_at = NOW()
+                    WHERE user_id = %s
+                    """,
+                    (
+                        trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
+                        sub_id1, sub_id1, sub_id2, sub_id2, f"{deposit_amount:.2f}", telegram_id,
+                    ),
+                )
+            await cur.execute(
+                """
+                SELECT COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount
+                FROM users
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (telegram_id,),
+            )
+            updated_user_row = await cur.fetchone()
+
+    status = "registered" if event_slug == POCKET_REGISTRATION_EVENT else "deposited"
+    log_id = await insert_pocket_postback_log(normalized, payload, status, None, telegram_id, source_ip)
+    total_deposit_amount = normalize_deposit_amount((updated_user_row or {}).get("pocket_deposit_amount"))
+    return {
+        "status": status,
+        "log_id": log_id,
+        "user_id": telegram_id,
+        "event": event_slug,
+        "trader_id": trader_id or None,
+        "deposit_amount": f"{deposit_amount:.2f}" if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT} else None,
+        "total_deposit_amount": f"{total_deposit_amount:.2f}" if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT} else None,
+        "site_id": site_id or None,
+        "cid": cid or None,
+        "sub_id1": sub_id1 or None,
+        "sub_id2": sub_id2 or None,
+    }
 
 
 def normalize_access_payload(value) -> int:
