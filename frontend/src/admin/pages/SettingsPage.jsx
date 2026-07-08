@@ -1199,7 +1199,7 @@ export default function SettingsPage({ adminUser }) {
               onClick={() => setSystemAccessPolicy(item.key)}
             >
               <span className="admin-access-radio">{systemAccessPolicy === item.key ? '●' : '○'}</span>
-              <span>
+              <span className="admin-access-policy-text">
                 <strong>{item.title}</strong>
                 <small>{item.description}</small>
               </span>

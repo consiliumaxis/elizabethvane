@@ -64,12 +64,16 @@ class AccessPolicySourceTest(unittest.TestCase):
     def test_schema_and_admin_ui_have_access_policy_controls(self):
         schema = (PROJECT_ROOT / "backend/db_bootstrap.py").read_text(encoding="utf-8")
         ui = (PROJECT_ROOT / "frontend/src/admin/pages/SettingsPage.jsx").read_text(encoding="utf-8")
+        css = (PROJECT_ROOT / "frontend/src/admin/admin.css").read_text(encoding="utf-8")
 
         self.assertIn("admin_system_access_settings", schema)
         self.assertIn("registration_deposit", schema)
         self.assertIn("ACCESS_POLICIES", ui)
         self.assertIn("После регистрации и депозита", ui)
         self.assertIn("payload.system_access", ui)
+        self.assertIn(".admin-access-policy", css)
+        self.assertIn(".admin-access-policy-text", css)
+        self.assertIn("grid-template-columns: 28px minmax(0, 1fr) auto", css)
 
     def test_frontend_shows_signal_gate_modal_on_access_denied(self):
         modal = PROJECT_ROOT / "frontend/src/components/SignalGateModal.jsx"
