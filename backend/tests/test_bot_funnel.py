@@ -1,4 +1,7 @@
 import unittest
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from bot_funnel import (
     CHATTERFY_CHANNEL_SUBSCRIBE_EVENT,
@@ -83,6 +86,20 @@ class BotFunnelTest(unittest.TestCase):
         self.assertEqual(QUIZ_COMPLETE_EVENT, "quiz_complete")
         self.assertEqual(CHANNEL_SUBSCRIBE_EVENT, "channel_subscribe")
         self.assertEqual(CHATTERFY_CHANNEL_SUBSCRIBE_EVENT, CHANNEL_SUBSCRIBE_EVENT)
+
+    def test_start_flow_sends_video_note_before_first_quiz_question(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn("START_VIDEO_NOTE_PATH", source)
+        self.assertIn("send_start_video_note", source)
+        self.assertIn("send_video_note", source)
+        self.assertIn("FSInputFile", source)
+        self.assertIn("await send_start_video_note(message.chat.id)", source)
+        self.assertLess(
+            source.index("await send_start_video_note(message.chat.id)"),
+            source.index("await send_quiz_welcome(message.chat.id)"),
+        )
+        self.assertTrue((PROJECT_ROOT / "backend" / "assets" / "elizabeth_start_video_note.mp4").exists())
 
 
 if __name__ == "__main__":

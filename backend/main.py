@@ -221,6 +221,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 db_pool = None
 bot = Bot(token=os.getenv("BOT_TOKEN"))
 dp = Dispatcher()
+START_VIDEO_NOTE_PATH = (
+    os.getenv("START_VIDEO_NOTE_PATH")
+    or os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "elizabeth_start_video_note.mp4")
+)
+START_VIDEO_NOTE_LENGTH = get_env_int("START_VIDEO_NOTE_LENGTH", 240)
 menu_photo_file_id = (os.getenv("MENU_PHOTO_FILE_ID") or "").strip()
 menu_file_id_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "menu.file_id")
 if not menu_photo_file_id and os.path.exists(menu_file_id_path):
@@ -5127,6 +5132,20 @@ async def send_quiz_question(chat_id: int, step: str):
     )
 
 
+async def send_start_video_note(chat_id: int):
+    try:
+        if not START_VIDEO_NOTE_PATH or not os.path.exists(START_VIDEO_NOTE_PATH):
+            print(f"[Bot] start video note is missing: {START_VIDEO_NOTE_PATH}")
+            return
+        await bot.send_video_note(
+            chat_id=chat_id,
+            video_note=FSInputFile(START_VIDEO_NOTE_PATH),
+            length=START_VIDEO_NOTE_LENGTH,
+        )
+    except Exception as e:
+        print(f"[Bot] start video note send failed: {e}")
+
+
 async def send_quiz_welcome(chat_id: int):
     await bot.send_message(
         chat_id=chat_id,
@@ -5260,6 +5279,7 @@ async def route_user_after_start(message: types.Message, user_id: int, user_name
     if not row.get("quiz_completed_at"):
         current_step = normalize_quiz_step(row.get("current_step"))
         if current_step == "experience" and not row.get("quiz_experience"):
+            await send_start_video_note(message.chat.id)
             await send_quiz_welcome(message.chat.id)
         await send_quiz_question(message.chat.id, current_step)
         return
