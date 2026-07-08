@@ -89,21 +89,61 @@ except ModuleNotFoundError:
     )
 try:
     from backend.aio_tracking import (
+        build_aio_field_trigger_url,
         build_aio_pocket_deposit_conversion_url,
         build_aio_pocket_ftd_conversion_url,
         build_aio_pocket_registration_conversion_url,
+        build_aio_postback_url,
         extract_aio_visit_uuid_from_start_text,
+        normalize_aio_event_slug,
         normalize_aio_revenue,
         normalize_aio_visit_uuid,
     )
 except ModuleNotFoundError:
     from aio_tracking import (
+        build_aio_field_trigger_url,
         build_aio_pocket_deposit_conversion_url,
         build_aio_pocket_ftd_conversion_url,
         build_aio_pocket_registration_conversion_url,
+        build_aio_postback_url,
         extract_aio_visit_uuid_from_start_text,
+        normalize_aio_event_slug,
         normalize_aio_revenue,
         normalize_aio_visit_uuid,
+    )
+try:
+    from backend.bot_funnel import (
+        CHANNEL_SUBSCRIBE_EVENT,
+        QUIZ_COMPLETE_EVENT,
+        get_aio_question_field,
+        get_next_quiz_step,
+        get_quiz_options,
+        get_quiz_question,
+        get_quiz_steps_to_complete,
+        is_skip_answer,
+        is_valid_quiz_step,
+        map_quiz_answer_locally,
+        normalize_channel_settings,
+        normalize_quiz_answer,
+        normalize_quiz_config,
+        normalize_quiz_step,
+    )
+except ModuleNotFoundError:
+    from bot_funnel import (
+        CHANNEL_SUBSCRIBE_EVENT,
+        QUIZ_COMPLETE_EVENT,
+        get_aio_question_field,
+        get_next_quiz_step,
+        get_quiz_options,
+        get_quiz_question,
+        get_quiz_steps_to_complete,
+        is_skip_answer,
+        is_valid_quiz_step,
+        map_quiz_answer_locally,
+        normalize_channel_settings,
+        normalize_quiz_answer,
+        normalize_quiz_config,
+        normalize_quiz_step,
     )
 try:
     from backend.chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
@@ -1127,15 +1167,20 @@ async def get_support_links_row():
     fallback = {
         "channel_url": (os.getenv("CHANNEL_URL") or "").strip(),
         "support_url": (os.getenv("SUPPORT_URL") or "").strip(),
+        "channel_id": (os.getenv("CHANNEL_ID") or "").strip(),
+        "check_subscription_enabled": (os.getenv("CHECK_SUBSCRIPTION_ENABLED") or "").strip(),
+        "quiz_config": {},
     }
     if not db_pool:
-        return fallback
+        settings = normalize_channel_settings(fallback)
+        settings["quiz_config"] = normalize_quiz_config()
+        return settings
     try:
         async with db_pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
                     """
-                    SELECT channel_url, support_url
+                    SELECT channel_id, channel_url, support_url, check_subscription_enabled, quiz_config
                     FROM admin_support_links
                     WHERE id = 1
                     LIMIT 1
@@ -1144,13 +1189,30 @@ async def get_support_links_row():
                 row = await cur.fetchone()
     except Exception as e:
         print(f"Support links fallback: {e}")
-        return fallback
+        settings = normalize_channel_settings(fallback)
+        settings["quiz_config"] = normalize_quiz_config()
+        return settings
     if not row:
-        return fallback
-    return {
-        "channel_url": (row.get("channel_url") or fallback["channel_url"] or "").strip(),
-        "support_url": (row.get("support_url") or fallback["support_url"] or "").strip(),
+        settings = normalize_channel_settings(fallback)
+        settings["quiz_config"] = normalize_quiz_config()
+        return settings
+    merged = {
+        "channel_id": row.get("channel_id") or fallback["channel_id"],
+        "channel_url": row.get("channel_url") or fallback["channel_url"],
+        "support_url": row.get("support_url") or fallback["support_url"],
+        "check_subscription_enabled": row.get("check_subscription_enabled")
+        if row.get("check_subscription_enabled") is not None
+        else fallback["check_subscription_enabled"],
+        "quiz_config": row.get("quiz_config") or fallback["quiz_config"],
     }
+    settings = normalize_channel_settings(merged)
+    settings["quiz_config"] = normalize_quiz_config(merged.get("quiz_config"))
+    return settings
+
+
+async def get_quiz_config_row():
+    settings = await get_support_links_row()
+    return normalize_quiz_config(settings.get("quiz_config"))
 
 
 async def get_pocket_api_settings_row(include_token: bool = False):
@@ -1532,6 +1594,168 @@ async def send_chatterfy_pocket_postback(
     return result
 
 
+async def send_aio_postback_event(
+    user_id: int,
+    event_slug: str,
+    revenue: Optional[object] = None,
+    currency: Optional[str] = None,
+    unique_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+
+    normalized_event_slug = normalize_aio_event_slug(event_slug)
+    if not normalized_event_slug:
+        return {"status": "skipped", "reason": "invalid_event_slug"}
+
+    normalized_unique_key = str(unique_key or normalized_event_slug).strip()[:128] or normalized_event_slug
+    normalized_currency = str(currency or "").strip().upper()[:8] or None
+    normalized_revenue = normalize_aio_revenue(revenue)
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1", (user_id,))
+            user_row = await cur.fetchone()
+            aio_visit_uuid = normalize_aio_visit_uuid((user_row or {}).get("aio_visit_uuid"))
+            if not aio_visit_uuid:
+                return {"status": "skipped", "reason": "missing_aio_visit_uuid"}
+
+            request_url = build_aio_postback_url(
+                aio_visit_uuid,
+                normalized_event_slug,
+                revenue=normalized_revenue,
+                currency=normalized_currency,
+                unique_key=None if normalized_unique_key == normalized_event_slug else normalized_unique_key,
+            )
+
+            await cur.execute(
+                """
+                INSERT IGNORE INTO aio_postback_events (
+                    user_id, aio_visit_uuid, event_slug, unique_key, revenue, currency, request_url, status
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
+                """,
+                (
+                    user_id,
+                    aio_visit_uuid,
+                    normalized_event_slug,
+                    normalized_unique_key,
+                    normalized_revenue,
+                    normalized_currency,
+                    request_url,
+                ),
+            )
+            if cur.rowcount == 0:
+                return {"status": "skipped", "reason": "duplicate"}
+            event_id = cur.lastrowid
+
+    response_status = None
+    response_body = ""
+    error_text = None
+    final_status = "sent"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(request_url)
+        response_status = response.status_code
+        response_body = response.text[:4000]
+        if response.status_code >= 400:
+            final_status = "failed"
+            error_text = f"AIO returned HTTP {response.status_code}"
+    except Exception as exc:
+        final_status = "failed"
+        error_text = str(exc)[:4000]
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE aio_postback_events
+                SET status = %s,
+                    response_status = %s,
+                    response_body = %s,
+                    error = %s,
+                    sent_at = NOW()
+                WHERE id = %s
+                """,
+                (final_status, response_status, response_body, error_text, event_id),
+            )
+
+    return {"status": final_status, "event_id": event_id, "response_status": response_status, "error": error_text}
+
+
+async def send_aio_user_fields(user_id: int, first_name: str = "", username: str = "") -> Dict[str, Any]:
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1", (user_id,))
+            user_row = await cur.fetchone()
+
+    aio_visit_uuid = normalize_aio_visit_uuid((user_row or {}).get("aio_visit_uuid"))
+    if not aio_visit_uuid:
+        return {"status": "skipped", "reason": "missing_aio_visit_uuid"}
+
+    fields = {
+        "tgid": str(user_id),
+        "tg_first_name": str(first_name or "").strip(),
+        "tg_username": str(username or "").strip().lstrip("@"),
+    }
+    request_urls = [
+        build_aio_field_trigger_url(aio_visit_uuid, field_name, field_value)
+        for field_name, field_value in fields.items()
+        if field_name == "tgid" or field_value
+    ]
+
+    results = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for request_url in request_urls:
+            try:
+                response = await client.get(request_url)
+                results.append(
+                    {
+                        "url": request_url,
+                        "status": "sent" if response.status_code < 400 else "failed",
+                        "response_status": response.status_code,
+                        "response_body": response.text[:4000],
+                    }
+                )
+            except Exception as exc:
+                results.append({"url": request_url, "status": "failed", "error": str(exc)[:4000]})
+
+    return {"status": "sent", "count": len(results), "results": results}
+
+
+async def send_aio_field_value(user_id: int, field_name: str, field_value: object) -> Dict[str, Any]:
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1", (user_id,))
+            user_row = await cur.fetchone()
+
+    aio_visit_uuid = normalize_aio_visit_uuid((user_row or {}).get("aio_visit_uuid"))
+    if not aio_visit_uuid:
+        return {"status": "skipped", "reason": "missing_aio_visit_uuid"}
+
+    try:
+        request_url = build_aio_field_trigger_url(aio_visit_uuid, field_name, field_value)
+    except ValueError as exc:
+        return {"status": "skipped", "reason": str(exc)}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(request_url)
+        return {
+            "status": "sent" if response.status_code < 400 else "failed",
+            "response_status": response.status_code,
+            "response_body": response.text[:4000],
+        }
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)[:4000]}
+
+
 async def send_aio_pocket_conversion(
     user_id: int,
     event_slug: str,
@@ -1794,7 +2018,9 @@ async def get_support_links():
     support_url = links["support_url"]
     return {
         "channel_url": channel_url,
-        "support_url": support_url
+        "support_url": support_url,
+        "channel_id": links["channel_id"],
+        "check_subscription_enabled": links["check_subscription_enabled"],
     }
 
 @app.get("/api/webapp/bot-info")
@@ -2574,18 +2800,36 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                     ),
                 )
             if isinstance(support_data, dict) and support_data:
+                channel_id = normalize_channel_settings(
+                    {"channel_id": support_data.get("channel_id")}
+                )["channel_id"]
                 channel_url = str(support_data.get("channel_url") or "").strip()[:1000]
                 support_url = str(support_data.get("support_url") or "").strip()[:1000]
+                check_subscription_enabled = 1 if bool(support_data.get("check_subscription_enabled")) else 0
+                quiz_config = normalize_quiz_config(support_data.get("quiz_config"))
+                quiz_config_json = json.dumps(quiz_config, ensure_ascii=False)
                 await cur.execute(
                     """
-                    INSERT INTO admin_support_links (id, channel_url, support_url, updated_by)
-                    VALUES (1, %s, %s, %s)
+                    INSERT INTO admin_support_links (
+                        id, channel_id, channel_url, support_url, check_subscription_enabled, quiz_config, updated_by
+                    )
+                    VALUES (1, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
+                        channel_id = VALUES(channel_id),
                         channel_url = VALUES(channel_url),
                         support_url = VALUES(support_url),
+                        check_subscription_enabled = VALUES(check_subscription_enabled),
+                        quiz_config = VALUES(quiz_config),
                         updated_by = VALUES(updated_by)
                     """,
-                    (channel_url, support_url, int(admin["user_id"])),
+                    (
+                        channel_id,
+                        channel_url,
+                        support_url,
+                        check_subscription_enabled,
+                        quiz_config_json,
+                        int(admin["user_id"]),
+                    ),
                 )
             if isinstance(pocket_data, dict) and pocket_data:
                 partner_id = str(pocket_data.get("partner_id") or "").strip()[:64]
@@ -4751,9 +4995,284 @@ async def update_analysis_status(request: Request, user=Depends(get_telegram_use
             """, (status, analysis_id, user_id))
     return {"status": "success"}
     
+FUNNEL_CHECK_CHANNEL_CALLBACK = "funnel_check_channel"
+FUNNEL_CONTINUE_CALLBACK = "funnel_continue"
+QUIZ_ANSWER_CALLBACK_PREFIX = "quiz_answer"
+QUALIFICATION_GPT_SYSTEM_PROMPT = """
+You classify one Telegram qualification answer for Elizabeth Vane's trading project.
+Return exactly one allowed option and nothing else.
+If the user does not want to answer, asks to skip, says later, or asks for the channel link, return Skip.
+Do not explain your reasoning.
+""".strip()
+
+
+async def build_main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    keyboard_rows = [
+        [
+            InlineKeyboardButton(
+                text="Open Elizabeth Vane",
+                web_app=WebAppInfo(url=os.getenv("WEB_APP_URL")),
+            )
+        ]
+    ]
+    if await is_admin_user(user_id):
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Admin Center",
+                    web_app=WebAppInfo(url=build_admin_webapp_url()),
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+
+async def send_main_menu(chat_id: int, user_id: int, user_name: str):
+    global menu_photo_file_id
+    welcome_text = (
+        f"Welcome, {user_name}!\n\n"
+        f"<b>Elizabeth Vane</b> | <code>Private Trading Analytics</code>\n\n"
+        f"A professional analytical space for those who value precision. "
+        f"We've combined advanced technical analysis methods with the convenience of a Web App.\n\n"
+        f"<i>Your market edge begins here.</i>"
+    )
+    keyboard = await build_main_menu_keyboard(user_id)
+
+    if menu_photo_file_id:
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=menu_photo_file_id,
+            caption=welcome_text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        return
+
+    photo_path = resolve_menu_photo_path()
+    sent_message = await bot.send_photo(
+        chat_id=chat_id,
+        photo=FSInputFile(photo_path),
+        caption=welcome_text,
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
+    if sent_message and sent_message.photo:
+        menu_photo_file_id = sent_message.photo[-1].file_id
+        try:
+            with open(menu_file_id_path, "w", encoding="utf-8") as f:
+                f.write(menu_photo_file_id)
+        except Exception:
+            pass
+
+
+async def get_onboarding_row(user_id: int) -> Optional[Dict[str, Any]]:
+    if not db_pool:
+        return None
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT user_id, quiz_name, quiz_age, quiz_experience, quiz_broker_experience, quiz_capital, current_step,
+                       quiz_completed_at, channel_subscribed_at, channel_gate_completed_at
+                FROM user_onboarding
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            return await cur.fetchone()
+
+
+async def ensure_onboarding_row(user_id: int) -> Dict[str, Any]:
+    if not db_pool:
+        return {}
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT IGNORE INTO user_onboarding (user_id, current_step)
+                VALUES (%s, 'experience')
+                """,
+                (user_id,),
+            )
+            await cur.execute(
+                """
+                UPDATE user_onboarding
+                SET current_step = 'experience'
+                WHERE user_id = %s
+                  AND quiz_completed_at IS NULL
+                  AND current_step NOT IN ('experience', 'broker_experience', 'capital')
+                """,
+                (user_id,),
+            )
+    return await get_onboarding_row(user_id) or {}
+
+
+async def send_quiz_question(chat_id: int, step: str):
+    normalized_step = normalize_quiz_step(step)
+    quiz_config = await get_quiz_config_row()
+    keyboard_rows = [
+        [
+            InlineKeyboardButton(
+                text=option,
+                callback_data=f"{QUIZ_ANSWER_CALLBACK_PREFIX}:{normalized_step}:{index}",
+            )
+        ]
+        for index, option in enumerate(get_quiz_options(normalized_step, quiz_config))
+    ]
+    await bot.send_message(
+        chat_id=chat_id,
+        text=get_quiz_question(normalized_step, quiz_config),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
+    )
+
+
+async def send_quiz_welcome(chat_id: int):
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "Hi, this is Elizabeth Vane's assistant.\n\n"
+            "To give you a more relevant starting point, I'll ask 3 quick questions.\n"
+            "If you prefer not to answer, that's okay - I can just send you the channel link."
+        ),
+    )
+
+
+async def send_channel_gate(chat_id: int):
+    settings = await get_support_links_row()
+    keyboard_rows = [
+        [InlineKeyboardButton(text="Open channel", url=settings["channel_url"])],
+        [InlineKeyboardButton(text="Go to trading", callback_data=FUNNEL_CONTINUE_CALLBACK)],
+    ]
+    await bot.send_message(
+        chat_id=chat_id,
+        text=f"Here is the channel link:\n{settings['channel_url']}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
+    )
+
+
+async def map_quiz_answer_with_ai(step: str, text: str) -> Optional[str]:
+    local_answer = map_quiz_answer_locally(step, text)
+    if local_answer:
+        return local_answer
+
+    normalized_step = normalize_quiz_step(step)
+    quiz_config = await get_quiz_config_row()
+    options = list(get_quiz_options(normalized_step, quiz_config))
+    result = await ai_service.call_openai(
+        [
+            {"role": "system", "content": QUALIFICATION_GPT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Question: {get_quiz_question(normalized_step, quiz_config)}\n"
+                    f"Allowed options: {json.dumps(options, ensure_ascii=False)}\n"
+                    f"User answer: {text}"
+                ),
+            },
+        ],
+        model=(os.getenv("QUALIFICATION_GPT_MODEL") or os.getenv("OPENAI_FALLBACK_MODEL") or "gpt-4o-mini"),
+    )
+    if not result.get("ok"):
+        return None
+    ai_answer = str(result.get("text") or "").strip().strip('"').strip("'")
+    if is_skip_answer(ai_answer):
+        return "Skip"
+    for option in options:
+        if option.lower() == ai_answer.lower():
+            return option
+    return None
+
+
+async def save_quiz_answer(user_id: int, step: str, answer: str, skip_flow: bool = False) -> tuple[Optional[str], bool]:
+    normalized_step = normalize_quiz_step(step)
+    normalized_answer = normalize_quiz_answer(normalized_step, answer)
+    next_step = None if skip_flow else get_next_quiz_step(normalized_step)
+    field_map = {
+        "experience": "quiz_experience",
+        "broker_experience": "quiz_broker_experience",
+        "capital": "quiz_capital",
+    }
+    field_name = field_map[normalized_step]
+    completed_steps = get_quiz_steps_to_complete(normalized_step, skip_flow)
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            if next_step:
+                await cur.execute(
+                    f"""
+                    UPDATE user_onboarding
+                    SET {field_name} = %s,
+                        current_step = %s
+                    WHERE user_id = %s
+                      AND current_step = %s
+                      AND quiz_completed_at IS NULL
+                    """,
+                    (normalized_answer, next_step, user_id, normalized_step),
+                )
+            else:
+                assignments = [f"{field_map[item]} = %s" for item in completed_steps]
+                values = [normalized_answer if item == normalized_step else "Skip" for item in completed_steps]
+                await cur.execute(
+                    f"""
+                    UPDATE user_onboarding
+                    SET {', '.join(assignments)},
+                        current_step = %s,
+                        quiz_completed_at = COALESCE(quiz_completed_at, NOW())
+                    WHERE user_id = %s
+                      AND current_step = %s
+                      AND quiz_completed_at IS NULL
+                    """,
+                    (*values, "skipped" if skip_flow else "completed", user_id, normalized_step),
+                )
+            saved = cur.rowcount > 0
+
+    if not saved:
+        return None, False
+    for item in completed_steps:
+        value = normalized_answer if item == normalized_step else "Skip"
+        asyncio.create_task(send_aio_field_value(user_id, get_aio_question_field(item), value))
+    return next_step, True
+
+
+async def finish_quiz_and_show_channel(message: types.Message, user_id: int, skipped: bool = False):
+    asyncio.create_task(send_aio_postback_event(user_id, QUIZ_COMPLETE_EVENT))
+    if skipped:
+        await message.answer("No problem.")
+        await send_channel_gate(message.chat.id)
+        return
+
+    await message.answer(
+        "Thank you, I've saved your answers.\n\n"
+        "Later, if you want help with a more suitable broker setup for your capital and experience, "
+        "you can message the manager.\n\n"
+        "Trading involves risk. The app helps you with structure and analysis, but the final decision is always yours."
+    )
+    await send_channel_gate(message.chat.id)
+
+
+async def route_user_after_start(message: types.Message, user_id: int, user_name: str):
+    if not db_pool:
+        await send_main_menu(message.chat.id, user_id, user_name)
+        return
+
+    row = await ensure_onboarding_row(user_id)
+    if not row.get("quiz_completed_at"):
+        current_step = normalize_quiz_step(row.get("current_step"))
+        if current_step == "experience" and not row.get("quiz_experience"):
+            await send_quiz_welcome(message.chat.id)
+        await send_quiz_question(message.chat.id, current_step)
+        return
+
+    if row.get("channel_gate_completed_at"):
+        await send_main_menu(message.chat.id, user_id, user_name)
+        return
+
+    await send_channel_gate(message.chat.id)
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    global menu_photo_file_id
     user_name = message.from_user.first_name or message.from_user.username or "Trader"
     user_id = int(message.from_user.id)
     username = message.from_user.username or ""
@@ -4787,56 +5306,115 @@ async def cmd_start(message: types.Message):
                     [(user_id, "forex"), (user_id, "binary")],
                 )
 
-    welcome_text = (
-        f"Welcome, {user_name}!\n\n"
-        f"<b>Elizabeth Vane</b> | <code>Private Trading Analytics</code>\n\n"
-        f"A professional analytical space for those who value precision. "
-        f"We've combined advanced technical analysis methods with the convenience of a Web App.\n\n"
-        f"<i>Your market edge begins here.</i>"
-    )
+    asyncio.create_task(send_aio_postback_event(user_id, "bot_start"))
+    asyncio.create_task(send_aio_user_fields(user_id, first_name=first_name, username=username))
+    await route_user_after_start(message, user_id, user_name)
 
-    keyboard_rows = [
-        [
-            InlineKeyboardButton(
-                text="Open Elizabeth Vane",
-                web_app=WebAppInfo(url=os.getenv("WEB_APP_URL"))
-            )
-        ]
-    ]
-    if await is_admin_user(user_id):
-        keyboard_rows.append(
-            [
-                InlineKeyboardButton(
-                    text="Admin Center",
-                    web_app=WebAppInfo(url=build_admin_webapp_url())
-                )
-            ]
-        )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
-    if menu_photo_file_id:
-        await message.answer_photo(
-            photo=menu_photo_file_id,
-            caption=welcome_text,
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
+@dp.message()
+async def handle_onboarding_answer(message: types.Message):
+    if not db_pool or not message.from_user:
+        return
+    user_id = int(message.from_user.id)
+    row = await get_onboarding_row(user_id)
+    if not row or row.get("quiz_completed_at"):
         return
 
-    photo_path = resolve_menu_photo_path()
-    sent_message = await message.answer_photo(
-        photo=FSInputFile(photo_path),
-        caption=welcome_text,
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
-    if sent_message and sent_message.photo:
-        menu_photo_file_id = sent_message.photo[-1].file_id
-        try:
-            with open(menu_file_id_path, "w", encoding="utf-8") as f:
-                f.write(menu_photo_file_id)
-        except Exception:
-            pass
+    current_step = normalize_quiz_step(row.get("current_step"))
+    text = message.text or ""
+    if "financial advice" in text.lower():
+        await message.answer(
+            "No. We provide educational content and analytical tools. You make your own trading decisions."
+        )
+        await send_quiz_question(message.chat.id, current_step)
+        return
+
+    answer = await map_quiz_answer_with_ai(current_step, text)
+    if not answer:
+        await message.answer("Please choose one of the options below, or tap Skip.")
+        await send_quiz_question(message.chat.id, current_step)
+        return
+
+    skip_flow = is_skip_answer(answer)
+    next_step, saved = await save_quiz_answer(user_id, current_step, answer, skip_flow=skip_flow)
+    if not saved:
+        await message.answer("This question has already changed. Please use the latest options.")
+        latest_row = await get_onboarding_row(user_id)
+        if latest_row and not latest_row.get("quiz_completed_at"):
+            await send_quiz_question(message.chat.id, latest_row.get("current_step") or "experience")
+        return
+    if next_step:
+        await send_quiz_question(message.chat.id, next_step)
+        return
+
+    await finish_quiz_and_show_channel(message, user_id, skipped=skip_flow)
+
+
+@dp.callback_query(lambda callback: str(callback.data or "").startswith(f"{QUIZ_ANSWER_CALLBACK_PREFIX}:"))
+async def handle_quiz_answer_callback(callback: types.CallbackQuery):
+    if not callback.message or not callback.from_user:
+        return
+    parts = str(callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer("Please try again.", show_alert=True)
+        return
+
+    _, raw_step, raw_index = parts
+    if not is_valid_quiz_step(raw_step):
+        await callback.answer("Please try again.", show_alert=True)
+        return
+    current_step = normalize_quiz_step(raw_step)
+    try:
+        quiz_config = await get_quiz_config_row()
+        option = get_quiz_options(current_step, quiz_config)[int(raw_index)]
+    except (ValueError, IndexError):
+        await callback.answer("Please try again.", show_alert=True)
+        return
+
+    user_id = int(callback.from_user.id)
+    row = await get_onboarding_row(user_id)
+    if not row or row.get("quiz_completed_at"):
+        await callback.answer()
+        return
+    if normalize_quiz_step(row.get("current_step")) != current_step:
+        await callback.answer("This question has already changed.", show_alert=True)
+        return
+
+    skip_flow = is_skip_answer(option)
+    next_step, saved = await save_quiz_answer(user_id, current_step, option, skip_flow=skip_flow)
+    if not saved:
+        await callback.answer("This question has already changed.", show_alert=True)
+        return
+    await callback.answer()
+    if next_step:
+        await send_quiz_question(callback.message.chat.id, next_step)
+        return
+
+    await finish_quiz_and_show_channel(callback.message, user_id, skipped=skip_flow)
+
+
+@dp.callback_query(lambda callback: callback.data == FUNNEL_CONTINUE_CALLBACK)
+async def handle_funnel_continue(callback: types.CallbackQuery):
+    if callback.message and callback.from_user:
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        UPDATE user_onboarding
+                        SET channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())
+                        WHERE user_id = %s
+                        """,
+                        (int(callback.from_user.id),),
+                    )
+        user_name = callback.from_user.first_name or callback.from_user.username or "Trader"
+        await callback.answer()
+        await send_main_menu(callback.message.chat.id, int(callback.from_user.id), user_name)
+
+
+@dp.callback_query(lambda callback: callback.data == FUNNEL_CHECK_CHANNEL_CALLBACK)
+async def handle_funnel_check_channel(callback: types.CallbackQuery):
+    await handle_funnel_continue(callback)
 
 class AIChatRequest(BaseModel):
     user_id: Optional[int] = None
