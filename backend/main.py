@@ -77,6 +77,28 @@ except ModuleNotFoundError:
         mask_secret,
         normalize_pocket_postback_payload,
     )
+try:
+    from backend.aio_tracking import (
+        build_aio_pocket_deposit_conversion_url,
+        build_aio_pocket_ftd_conversion_url,
+        build_aio_pocket_registration_conversion_url,
+        extract_aio_visit_uuid_from_start_text,
+        normalize_aio_revenue,
+        normalize_aio_visit_uuid,
+    )
+except ModuleNotFoundError:
+    from aio_tracking import (
+        build_aio_pocket_deposit_conversion_url,
+        build_aio_pocket_ftd_conversion_url,
+        build_aio_pocket_registration_conversion_url,
+        extract_aio_visit_uuid_from_start_text,
+        normalize_aio_revenue,
+        normalize_aio_visit_uuid,
+    )
+try:
+    from backend.chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
+except ModuleNotFoundError:
+    from chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
 
 load_dotenv()
 
@@ -1273,7 +1295,7 @@ async def insert_pocket_postback_log(
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                INSERT INTO pocket_postback_events (
+                INSERT IGNORE INTO pocket_postback_events (
                     event_slug, unique_key, user_id, click_id, trader_id, deposit_amount,
                     site_id, cid, sub_id1, sub_id2, raw_payload, status, reason, source_ip
                 )
@@ -1297,6 +1319,174 @@ async def insert_pocket_postback_log(
                 ),
             )
             return int(cur.lastrowid)
+
+
+async def update_pocket_chatterfy_delivery(log_id: int, result: Dict[str, Any]) -> None:
+    if not log_id or not db_pool:
+        return
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE pocket_postback_events
+                SET chatterfy_request_url = %s,
+                    chatterfy_status = %s,
+                    chatterfy_response_status = %s,
+                    chatterfy_response_body = %s,
+                    chatterfy_error = %s,
+                    chatterfy_sent_at = NOW()
+                WHERE id = %s
+                """,
+                (
+                    result.get("url"),
+                    result.get("status"),
+                    result.get("response_status"),
+                    result.get("response_body"),
+                    result.get("error") or result.get("reason"),
+                    log_id,
+                ),
+            )
+
+
+async def send_chatterfy_pocket_postback(
+    *,
+    log_id: int,
+    event_slug: str,
+    clickid: str,
+    trader_id: str,
+    trader_aio_id: str,
+    tgid: int,
+    revenue: str = "",
+    unique_key: str = "",
+) -> Dict[str, Any]:
+    event_slug = str(event_slug or "").strip()
+    clickid = str(clickid or "").strip()
+    trader_id = str(trader_id or "").strip()
+    trader_aio_id = normalize_aio_visit_uuid(trader_aio_id) or ""
+    if event_slug not in CHATTERFY_POCKET_EVENT_SLUGS:
+        result = {"status": "skipped", "reason": "unsupported_chatterfy_event"}
+        await update_pocket_chatterfy_delivery(log_id, result)
+        return result
+    if not clickid:
+        result = {"status": "skipped", "reason": "missing_chatterfy_clickid"}
+        await update_pocket_chatterfy_delivery(log_id, result)
+        return result
+    try:
+        request_url = build_chatterfy_pocket_postback_url(
+            event_slug=event_slug,
+            clickid=clickid,
+            trader_id=trader_id,
+            trader_aio_id=trader_aio_id,
+            tgid=tgid,
+            revenue=revenue,
+            unique_key=unique_key,
+        )
+    except ValueError as exc:
+        result = {"status": "skipped", "reason": str(exc)}
+        await update_pocket_chatterfy_delivery(log_id, result)
+        return result
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(request_url)
+        response_body = response.text[:4000]
+        result = {
+            "url": request_url,
+            "status": "sent" if response.status_code < 400 else "failed",
+            "response_status": response.status_code,
+            "response_body": response_body,
+        }
+        if response.status_code >= 400:
+            result["error"] = f"Chatterfy returned HTTP {response.status_code}"
+    except Exception as exc:
+        result = {"url": request_url, "status": "failed", "error": str(exc)[:4000]}
+    await update_pocket_chatterfy_delivery(log_id, result)
+    return result
+
+
+async def send_aio_pocket_conversion(
+    user_id: int,
+    event_slug: str,
+    trader_id: str,
+    unique_key: str,
+    revenue: object = None,
+) -> Dict[str, Any]:
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+
+    normalized_unique_key = str(unique_key or f"{event_slug}:{user_id}:{trader_id}").strip()[:128]
+    normalized_trader_id = str(trader_id or "").strip()
+    if event_slug == POCKET_REGISTRATION_EVENT:
+        aio_event_slug = "pocket_registration"
+    elif event_slug == POCKET_FTD_EVENT:
+        aio_event_slug = "pocket_ftd"
+    elif event_slug == POCKET_DEPOSIT_EVENT:
+        aio_event_slug = "pocket_deposit"
+    else:
+        return {"status": "skipped", "reason": "unsupported_pocket_event"}
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1", (user_id,))
+            user_row = await cur.fetchone()
+            aio_visit_uuid = normalize_aio_visit_uuid((user_row or {}).get("aio_visit_uuid"))
+            if not aio_visit_uuid:
+                return {"status": "skipped", "reason": "missing_aio_visit_uuid"}
+
+            try:
+                if event_slug == POCKET_REGISTRATION_EVENT:
+                    request_url = build_aio_pocket_registration_conversion_url(aio_visit_uuid, user_id, normalized_trader_id)
+                elif event_slug == POCKET_FTD_EVENT:
+                    request_url = build_aio_pocket_ftd_conversion_url(aio_visit_uuid, revenue, user_id, normalized_trader_id)
+                else:
+                    request_url = build_aio_pocket_deposit_conversion_url(aio_visit_uuid, revenue, user_id, normalized_trader_id)
+            except ValueError as exc:
+                return {"status": "skipped", "reason": str(exc)}
+
+            await cur.execute(
+                """
+                INSERT IGNORE INTO aio_postback_events (
+                    user_id, aio_visit_uuid, event_slug, unique_key, revenue, request_url, status
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending')
+                """,
+                (user_id, aio_visit_uuid, aio_event_slug, normalized_unique_key, normalize_aio_revenue(revenue), request_url),
+            )
+            if cur.rowcount == 0:
+                return {"status": "skipped", "reason": "duplicate"}
+            event_id = cur.lastrowid
+
+    response_status = None
+    response_body = ""
+    error_text = None
+    final_status = "sent"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(request_url)
+        response_status = response.status_code
+        response_body = response.text[:4000]
+        if response.status_code >= 400:
+            final_status = "failed"
+            error_text = f"AIO returned HTTP {response.status_code}"
+    except Exception as exc:
+        final_status = "failed"
+        error_text = str(exc)[:4000]
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE aio_postback_events
+                SET status = %s,
+                    response_status = %s,
+                    response_body = %s,
+                    error = %s,
+                    sent_at = NOW()
+                WHERE id = %s
+                """,
+                (final_status, response_status, response_body, error_text, event_id),
+            )
+    return {"status": final_status, "event_id": event_id, "response_status": response_status, "error": error_text}
 
 
 @app.api_route("/api/integrations/pocket/postback", methods=["GET", "POST"])
@@ -1339,7 +1529,7 @@ async def pocket_postback(request: Request):
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT user_id FROM users WHERE user_id = %s LIMIT 1", (telegram_id,))
+            await cur.execute("SELECT user_id, aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1", (telegram_id,))
             user_row = await cur.fetchone()
             if not user_row:
                 log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "user_not_found", telegram_id, source_ip)
@@ -1401,6 +1591,23 @@ async def pocket_postback(request: Request):
     status = "registered" if event_slug == POCKET_REGISTRATION_EVENT else "deposited"
     log_id = await insert_pocket_postback_log(normalized, payload, status, None, telegram_id, source_ip)
     total_deposit_amount = normalize_deposit_amount((updated_user_row or {}).get("pocket_deposit_amount"))
+    aio_result = await send_aio_pocket_conversion(
+        user_id=int(telegram_id),
+        event_slug=event_slug,
+        unique_key=normalized.get("unique_key") or event_slug,
+        trader_id=trader_id,
+        revenue=f"{deposit_amount:.2f}" if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT} else "",
+    )
+    chatterfy_result = await send_chatterfy_pocket_postback(
+        log_id=log_id,
+        event_slug=event_slug,
+        clickid=sub_id2,
+        trader_id=trader_id,
+        trader_aio_id=(user_row or {}).get("aio_visit_uuid") or "",
+        tgid=int(telegram_id),
+        revenue=f"{deposit_amount:.2f}" if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT} else "",
+        unique_key=normalized.get("unique_key") or event_slug,
+    )
     return {
         "status": status,
         "log_id": log_id,
@@ -1413,6 +1620,8 @@ async def pocket_postback(request: Request):
         "cid": cid or None,
         "sub_id1": sub_id1 or None,
         "sub_id2": sub_id2 or None,
+        "aio": aio_result,
+        "chatterfy": chatterfy_result,
     }
 
 
@@ -4397,6 +4606,36 @@ async def cmd_start(message: types.Message):
     global menu_photo_file_id
     user_name = message.from_user.first_name or message.from_user.username or "Trader"
     user_id = int(message.from_user.id)
+    username = message.from_user.username or ""
+    first_name = message.from_user.first_name or ""
+    aio_visit_uuid = extract_aio_visit_uuid_from_start_text(message.text)
+
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO users (user_id, username, first_name, aio_visit_uuid, lang, mode)
+                    VALUES (%s, %s, %s, %s, 'ru', 'forex')
+                    ON DUPLICATE KEY UPDATE
+                        username = VALUES(username),
+                        first_name = VALUES(first_name),
+                        aio_visit_uuid = CASE
+                            WHEN (aio_visit_uuid IS NULL OR TRIM(aio_visit_uuid) = '')
+                                 AND VALUES(aio_visit_uuid) IS NOT NULL
+                            THEN VALUES(aio_visit_uuid)
+                            ELSE aio_visit_uuid
+                        END
+                    """,
+                    (user_id, username, first_name, aio_visit_uuid),
+                )
+                await cur.executemany(
+                    """
+                    INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
+                    VALUES (%s, %s, 1, NULL)
+                    """,
+                    [(user_id, "forex"), (user_id, "binary")],
+                )
 
     welcome_text = (
         f"Welcome, {user_name}!\n\n"
