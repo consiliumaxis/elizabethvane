@@ -99,6 +99,20 @@ try:
     from backend.chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
 except ModuleNotFoundError:
     from chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
+try:
+    from backend.access_policy import (
+        ACCESS_POLICY_REGISTRATION_DEPOSIT,
+        normalize_access_policy,
+        normalize_min_deposit,
+        system_policy_grants_signal_access,
+    )
+except ModuleNotFoundError:
+    from access_policy import (
+        ACCESS_POLICY_REGISTRATION_DEPOSIT,
+        normalize_access_policy,
+        normalize_min_deposit,
+        system_policy_grants_signal_access,
+    )
 
 load_dotenv()
 
@@ -1149,11 +1163,92 @@ async def get_pocket_api_settings_row(include_token: bool = False):
     return settings
 
 
+def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    policy = normalize_access_policy((row or {}).get("policy"))
+    min_deposit = normalize_min_deposit((row or {}).get("min_deposit_amount"))
+    return {
+        "policy": policy,
+        "min_deposit_amount": str(min_deposit),
+        "updated_at": (row or {}).get("updated_at"),
+        "updated_by": (row or {}).get("updated_by"),
+    }
+
+
+async def get_system_access_settings_row() -> Dict[str, Any]:
+    default_settings = serialize_system_access_settings(
+        {"policy": ACCESS_POLICY_REGISTRATION_DEPOSIT, "min_deposit_amount": "0"}
+    )
+    if not db_pool:
+        return default_settings
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT policy, min_deposit_amount, updated_at, updated_by
+                    FROM admin_system_access_settings
+                    WHERE id = 1
+                    LIMIT 1
+                    """
+                )
+                row = await cur.fetchone()
+        return serialize_system_access_settings(row) if row else default_settings
+    except Exception as e:
+        print(f"System access settings fallback: {e}")
+        return default_settings
+
+
 def truthy_db(value) -> int:
     try:
         return 1 if int(value or 0) == 1 else 0
     except (TypeError, ValueError):
         return 0
+
+
+SIGNAL_ACCESS_REQUIRED_DETAIL = "signal_access_required"
+
+
+async def get_signal_access_status(user_id: int, mode: str) -> Dict[str, Any]:
+    if not user_id or not db_pool:
+        return {"access": 0}
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode not in ("forex", "binary"):
+        return {"access": 0}
+    settings = await get_system_access_settings_row()
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT
+                    u.user_id,
+                    COALESCE(u.pocket_registered, 0) AS pocket_registered,
+                    COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
+                    COALESCE(u.pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                    COALESCE(uma.is_enabled, 0) AS manual_access
+                FROM users u
+                LEFT JOIN user_mode_access uma ON uma.user_id = u.user_id AND uma.mode = %s
+                WHERE u.user_id = %s
+                LIMIT 1
+                """,
+                (normalized_mode, user_id),
+            )
+            row = await cur.fetchone()
+    if not row:
+        return {"access": 0, "policy": settings.get("policy")}
+    if truthy_db(row.get("manual_access")) == 1:
+        return {"access": 1, "policy": "manual"}
+    return {
+        "access": 1 if system_policy_grants_signal_access(settings, row) else 0,
+        "policy": settings.get("policy"),
+        "min_deposit_amount": settings.get("min_deposit_amount"),
+    }
+
+
+async def require_signal_access(user_id: int, mode: str) -> Dict[str, Any]:
+    status = await get_signal_access_status(user_id, mode)
+    if truthy_db(status.get("access")) != 1:
+        raise HTTPException(status_code=403, detail=SIGNAL_ACCESS_REQUIRED_DETAIL)
+    return status
 
 
 def extract_pocket_balance(payload: Any) -> Optional[float]:
@@ -1590,6 +1685,8 @@ async def pocket_postback(request: Request):
 
     status = "registered" if event_slug == POCKET_REGISTRATION_EVENT else "deposited"
     log_id = await insert_pocket_postback_log(normalized, payload, status, None, telegram_id, source_ip)
+    signal_access_status = await get_signal_access_status(int(telegram_id), "forex")
+    access_granted = truthy_db(signal_access_status.get("access")) == 1
     total_deposit_amount = normalize_deposit_amount((updated_user_row or {}).get("pocket_deposit_amount"))
     aio_result = await send_aio_pocket_conversion(
         user_id=int(telegram_id),
@@ -1620,6 +1717,8 @@ async def pocket_postback(request: Request):
         "cid": cid or None,
         "sub_id1": sub_id1 or None,
         "sub_id2": sub_id2 or None,
+        "access_granted": access_granted,
+        "access_policy": signal_access_status.get("policy"),
         "aio": aio_result,
         "chatterfy": chatterfy_result,
     }
@@ -1636,8 +1735,8 @@ async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
                u.trader_id, COALESCE(u.balance, 0) AS balance,
                COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                u.balance_synced_at, u.balance_sync_error,
-               COALESCE(fx.is_enabled, 1) AS forex_access,
-               COALESCE(bin.is_enabled, 1) AS binary_access,
+               COALESCE(fx.is_enabled, 0) AS forex_access,
+               COALESCE(bin.is_enabled, 0) AS binary_access,
                COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at, u.blocked_by, u.created_at,
                p.name AS strategy_name,
                CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
@@ -1839,8 +1938,8 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
                            u.trader_id, COALESCE(u.balance, 0) AS balance,
                            COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                            u.balance_synced_at, u.balance_sync_error,
-                           COALESCE(fx.is_enabled, 1) AS forex_access,
-                           COALESCE(bin.is_enabled, 1) AS binary_access,
+                           COALESCE(fx.is_enabled, 0) AS forex_access,
+                           COALESCE(bin.is_enabled, 0) AS binary_access,
                            COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at, u.blocked_by, u.created_at,
                            p.name AS strategy_name,
                            CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
@@ -1863,7 +1962,7 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
                     SELECT u.user_id, u.username, u.first_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
                            NULL AS trader_id, 0 AS balance,
                            0 AS balance_sync_enabled, NULL AS balance_synced_at, NULL AS balance_sync_error,
-                           1 AS forex_access, 1 AS binary_access,
+                           0 AS forex_access, 0 AS binary_access,
                            0 AS is_blocked, NULL AS blocked_at, NULL AS blocked_by, NULL AS created_at,
                            p.name AS strategy_name,
                            CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin,
@@ -2222,6 +2321,7 @@ async def admin_settings(admin=Depends(get_admin_user)):
     stream_settings = await get_stream_settings_row()
     support_links = await get_support_links_row()
     pocket_settings = await get_pocket_api_settings_row()
+    system_access_settings = await get_system_access_settings_row()
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("SELECT id, system_prompt, model, updated_at FROM ai_settings WHERE id = 1")
@@ -2254,6 +2354,7 @@ async def admin_settings(admin=Depends(get_admin_user)):
             "stream_strategies": stream_strategies or [],
             "support": support_links,
             "pocket_api": pocket_settings,
+            "system_access": system_access_settings,
         },
     }
 
@@ -2265,6 +2366,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
     streams_data = data.get("streams") or {}
     support_data = data.get("support") or {}
     pocket_data = data.get("pocket_api") or {}
+    system_access_data = data.get("system_access") or {}
     system_prompt = (ai_data.get("system_prompt") or "").strip()
     model = (ai_data.get("model") or "").strip()
 
@@ -2480,6 +2582,22 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         """,
                         (partner_id, int(admin["user_id"]), 1 if clear_token else 0),
                     )
+            if isinstance(system_access_data, dict) and system_access_data:
+                access_policy = normalize_access_policy(system_access_data.get("policy"))
+                min_deposit = normalize_min_deposit(system_access_data.get("min_deposit_amount"))
+                if access_policy != ACCESS_POLICY_REGISTRATION_DEPOSIT:
+                    min_deposit = normalize_min_deposit(0)
+                await cur.execute(
+                    """
+                    INSERT INTO admin_system_access_settings (id, policy, min_deposit_amount, updated_by)
+                    VALUES (1, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        policy = VALUES(policy),
+                        min_deposit_amount = VALUES(min_deposit_amount),
+                        updated_by = VALUES(updated_by)
+                    """,
+                    (access_policy, str(min_deposit), int(admin["user_id"])),
+                )
     return {"status": "success"}
 
 
@@ -3576,8 +3694,8 @@ async def get_profile(user=Depends(get_telegram_user)):
                        u.strategy_id, u.trader_id, COALESCE(u.balance, 0) AS balance,
                        COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                        u.balance_synced_at,
-                       COALESCE(fx.is_enabled, 1) AS forex_access,
-                       COALESCE(bin.is_enabled, 1) AS binary_access,
+                       COALESCE(fx.is_enabled, 0) AS forex_access,
+                       COALESCE(bin.is_enabled, 0) AS binary_access,
                        COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at,
                        p.name as strategy_name,
                        CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin
@@ -3590,6 +3708,11 @@ async def get_profile(user=Depends(get_telegram_user)):
             """, (user_id,))
             user = await cur.fetchone()
     if user:
+        forex_status = await get_signal_access_status(int(user_id), "forex")
+        binary_status = await get_signal_access_status(int(user_id), "binary")
+        user["forex_access"] = 1 if truthy_db(forex_status.get("access")) == 1 else 0
+        user["binary_access"] = 1 if truthy_db(binary_status.get("access")) == 1 else 0
+        user["access_policy"] = forex_status.get("policy")
         user["admin_url"] = build_admin_webapp_url() if int(user.get("is_admin") or 0) == 1 else ""
     return user or {"error": "Not found"}
 
@@ -3728,7 +3851,7 @@ async def sync_user(user=Depends(get_telegram_user)):
             await cur.executemany(
                 """
                 INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
-                VALUES (%s, %s, 1, NULL)
+                VALUES (%s, %s, 0, NULL)
                 """,
                 [(user_id, "forex"), (user_id, "binary")],
             )
@@ -3741,21 +3864,13 @@ async def update_mode(request: Request, user=Depends(get_telegram_user)):
     new_mode = data.get("mode")
     
     if user_id and new_mode:
+        normalized_mode = str(new_mode).lower()
+        if normalized_mode in ("forex", "binary"):
+            access_status = await get_signal_access_status(user_id, normalized_mode)
+            if truthy_db(access_status.get("access")) != 1:
+                raise HTTPException(status_code=403, detail=SIGNAL_ACCESS_REQUIRED_DETAIL)
         async with db_pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
-                if str(new_mode).lower() in ("forex", "binary"):
-                    await cur.execute(
-                        """
-                        SELECT COALESCE(is_enabled, 1) AS is_enabled
-                        FROM user_mode_access
-                        WHERE user_id = %s AND mode = %s
-                        LIMIT 1
-                        """,
-                        (user_id, str(new_mode).lower()),
-                    )
-                    access_row = await cur.fetchone()
-                    if access_row and truthy_db(access_row.get("is_enabled")) != 1:
-                        raise HTTPException(status_code=403, detail=f"{new_mode} access is disabled")
                 await cur.execute("UPDATE users SET mode = %s WHERE user_id = %s", (new_mode, user_id))
         return {"status": "success", "mode": new_mode}
     return {"error": "Invalid data"}
@@ -4161,6 +4276,7 @@ async def get_news(user=Depends(get_telegram_user)):
 async def create_binary_analysis(request: Request, user=Depends(get_telegram_user)):
     data = await request.json()
     user_id = int(user["user_id"])
+    await require_signal_access(user_id, "binary")
     pair = str(data.get("pair") or "").strip()
     interval_raw = str(data.get("exp") or "1m").strip().lower()
     market_kind = normalize_market_kind(data.get("market") or data.get("market_kind") or "forex")
@@ -4437,6 +4553,7 @@ async def settle_analysis_now(request: Request, user=Depends(get_telegram_user))
 async def create_forex_analysis(request: Request, user=Depends(get_telegram_user)):
     data = await request.json()
     user_id = int(user["user_id"])
+    await require_signal_access(user_id, "forex")
     pair = data.get("pair")
     interval_raw = data.get("exp")
     strategy_id = data.get("strategy_id")
@@ -4632,7 +4749,7 @@ async def cmd_start(message: types.Message):
                 await cur.executemany(
                     """
                     INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
-                    VALUES (%s, %s, 1, NULL)
+                    VALUES (%s, %s, 0, NULL)
                     """,
                     [(user_id, "forex"), (user_id, "binary")],
                 )

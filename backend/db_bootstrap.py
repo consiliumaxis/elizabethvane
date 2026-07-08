@@ -348,6 +348,18 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS admin_system_access_settings (
+                    id TINYINT NOT NULL PRIMARY KEY DEFAULT 1,
+                    policy VARCHAR(32) NOT NULL DEFAULT 'registration_deposit',
+                    min_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+                    updated_by BIGINT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS app_modes (
                     mode VARCHAR(16) NOT NULL PRIMARY KEY,
                     title VARCHAR(64) NOT NULL,
@@ -665,6 +677,10 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_response_body", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_response_body LONGTEXT NULL")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_error", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_error TEXT NULL")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_sent_at", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_sent_at TIMESTAMP NULL DEFAULT NULL")
+        await _ensure_column(conn, db_name, "admin_system_access_settings", "policy", "ALTER TABLE admin_system_access_settings ADD COLUMN policy VARCHAR(32) NOT NULL DEFAULT 'registration_deposit'")
+        await _ensure_column(conn, db_name, "admin_system_access_settings", "min_deposit_amount", "ALTER TABLE admin_system_access_settings ADD COLUMN min_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00")
+        await _ensure_column(conn, db_name, "admin_system_access_settings", "updated_by", "ALTER TABLE admin_system_access_settings ADD COLUMN updated_by BIGINT NULL")
+        await _ensure_column(conn, db_name, "admin_system_access_settings", "updated_at", "ALTER TABLE admin_system_access_settings ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
         await _ensure_index(conn, db_name, "aio_postback_events", "idx_aio_postback_events_user", "CREATE INDEX idx_aio_postback_events_user ON aio_postback_events(user_id, created_at)")
         await _ensure_index(conn, db_name, "aio_postback_events", "idx_aio_postback_events_status", "CREATE INDEX idx_aio_postback_events_status ON aio_postback_events(status, created_at)")
         await _ensure_index(conn, db_name, "pocket_postback_events", "idx_pocket_postback_events_user", "CREATE INDEX idx_pocket_postback_events_user ON pocket_postback_events(user_id, created_at)")
@@ -903,6 +919,14 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 """
             )
 
+            await cur.execute(
+                """
+                INSERT INTO admin_system_access_settings (id, policy, min_deposit_amount, updated_by)
+                VALUES (1, 'registration_deposit', 0.00, NULL)
+                ON DUPLICATE KEY UPDATE id = id
+                """
+            )
+
             await cur.executemany(
                 """
                 INSERT INTO app_modes (mode, title, is_enabled, sort_order)
@@ -921,13 +945,13 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             await cur.execute(
                 """
                 INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
-                SELECT user_id, 'forex', 1, NULL FROM users
+                SELECT user_id, 'forex', 0, NULL FROM users
                 """
             )
             await cur.execute(
                 """
                 INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
-                SELECT user_id, 'binary', 1, NULL FROM users
+                SELECT user_id, 'binary', 0, NULL FROM users
                 """
             )
 
