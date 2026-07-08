@@ -203,12 +203,16 @@ async def get_admin_user(
     user=Depends(get_telegram_user),
     x_admin_token: str = Header(default="", alias="X-Admin-Token"),
 ):
-    expected = get_admin_panel_token()
-    provided = (x_admin_token or "").strip()
-    if not provided or not secrets.compare_digest(provided, expected):
-        raise HTTPException(status_code=403, detail="Admin token is invalid")
     if not await is_admin_user(int(user["user_id"])):
         raise HTTPException(status_code=403, detail="Admin access denied")
+
+    expected = get_admin_panel_token()
+    provided = (x_admin_token or "").strip()
+    if provided and secrets.compare_digest(provided, expected):
+        return user
+
+    # Telegram WebApp initData already proves the user identity; keep old
+    # admin buttons working even if their URL token was rotated by a deploy.
     return user
 
 
@@ -3157,14 +3161,18 @@ async def get_profile(user=Depends(get_telegram_user)):
                        COALESCE(fx.is_enabled, 1) AS forex_access,
                        COALESCE(bin.is_enabled, 1) AS binary_access,
                        COALESCE(u.is_blocked, 0) AS is_blocked, u.blocked_at,
-                       p.name as strategy_name
+                       p.name as strategy_name,
+                       CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin
                 FROM users u
                 LEFT JOIN presets p ON u.strategy_id = p.id
+                LEFT JOIN admin_users a ON a.user_id = u.user_id
                 LEFT JOIN user_mode_access fx ON fx.user_id = u.user_id AND fx.mode = 'forex'
                 LEFT JOIN user_mode_access bin ON bin.user_id = u.user_id AND bin.mode = 'binary'
                 WHERE u.user_id = %s
             """, (user_id,))
             user = await cur.fetchone()
+    if user:
+        user["admin_url"] = build_admin_webapp_url() if int(user.get("is_admin") or 0) == 1 else ""
     return user or {"error": "Not found"}
 
 @app.get("/api/indicators")
@@ -3297,7 +3305,7 @@ async def sync_user(user=Depends(get_telegram_user)):
                 ON DUPLICATE KEY UPDATE 
                     username = VALUES(username),
                     first_name = VALUES(first_name),
-                    avatar_url = VALUES(avatar_url)
+                    avatar_url = COALESCE(NULLIF(VALUES(avatar_url), ''), avatar_url)
             """, (user_id, username, first_name, avatar_url))
             await cur.executemany(
                 """
