@@ -2,6 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
 
 const getDisplayName = (user) => user?.first_name || user?.username || `User ${user?.user_id || ''}`;
+const getAvatarUrl = (user) => String(user?.avatar_url || '').trim();
+const getInitials = (user) => String(user?.first_name || user?.username || user?.user_id || 'U')
+  .trim()
+  .slice(0, 2)
+  .toUpperCase();
 const formatBalance = (value) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? `$${parsed.toFixed(2)}` : '$0.00';
@@ -179,6 +184,7 @@ export default function UsersPage() {
   };
 
   if (selectedUser) {
+    const selectedAvatarUrl = getAvatarUrl(selectedUser);
     return (
       <div className="admin-card">
         <div className="admin-row-between">
@@ -190,8 +196,18 @@ export default function UsersPage() {
 
         <div className="admin-user-detail">
           <div className="admin-user-detail-head">
-            <span className="admin-user-state">{isBlocked ? '⛔ Заблокирован' : '✅ Активен'}</span>
-            <strong>{getDisplayName(selectedUser)}</strong>
+            <div className="admin-user-title-row">
+              <div className="admin-user-avatar large">
+                <span>{getInitials(selectedUser)}</span>
+                {selectedAvatarUrl ? (
+                  <img src={selectedAvatarUrl} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                ) : null}
+              </div>
+              <div>
+                <span className="admin-user-state">{isBlocked ? '⛔ Заблокирован' : '✅ Активен'}</span>
+                <strong>{getDisplayName(selectedUser)}</strong>
+              </div>
+            </div>
           </div>
 
           <div className="admin-user-grid">
@@ -346,6 +362,7 @@ export default function UsersPage() {
       <div className="admin-entity-list">
         {users.map((user) => {
           const blocked = Number(user.is_blocked) === 1;
+          const avatarUrl = getAvatarUrl(user);
           return (
             <button
               key={user.user_id}
@@ -355,8 +372,14 @@ export default function UsersPage() {
             >
               <div className="admin-entity-head">
                 <div className="admin-entity-title">
-                  <span className="admin-state-icon">{blocked ? '⛔' : '✅'}</span>
+                  <div className="admin-user-avatar">
+                    <span>{getInitials(user)}</span>
+                    {avatarUrl ? (
+                      <img src={avatarUrl} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                    ) : null}
+                  </div>
                   <span>{getDisplayName(user)}</span>
+                  <span className="admin-state-icon">{blocked ? '⛔' : '✅'}</span>
                 </div>
                 <span
                   className="admin-entity-gear"

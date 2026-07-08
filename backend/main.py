@@ -1214,7 +1214,7 @@ def normalize_access_payload(value) -> int:
 async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
     await cur.execute(
         """
-        SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
+        SELECT u.user_id, u.username, u.first_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
                u.trader_id, COALESCE(u.balance, 0) AS balance,
                COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                u.balance_synced_at, u.balance_sync_error,
@@ -1417,7 +1417,7 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
             try:
                 await cur.execute(
                     """
-                    SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
+                    SELECT u.user_id, u.username, u.first_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
                            u.trader_id, COALESCE(u.balance, 0) AS balance,
                            COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                            u.balance_synced_at, u.balance_sync_error,
@@ -1442,7 +1442,7 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
             except Exception:
                 await cur.execute(
                     """
-                    SELECT u.user_id, u.username, u.first_name, u.mode, u.lang, u.strategy_id,
+                    SELECT u.user_id, u.username, u.first_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
                            NULL AS trader_id, 0 AS balance,
                            0 AS balance_sync_enabled, NULL AS balance_synced_at, NULL AS balance_sync_error,
                            1 AS forex_access, 1 AS binary_access,

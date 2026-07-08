@@ -1,8 +1,7 @@
-﻿import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { apiFetchJson } from '../../lib/api';
 import './Profile.css';
 import iconEdit from '../../assets/icons/edit.svg?url';
-import avatarImg from '../../assets/elizabeth-avatar.jpg'; 
 
 const ICON_CHOICES = [
   '\uD83D\uDCC8', '\uD83D\uDCC9', '\uD83D\uDCCA', '\uD83D\uDCB0', '\uD83D\uDCB5', '\uD83E\uDE99', '\uD83C\uDFE6', '\uD83D\uDC8E',
@@ -21,10 +20,11 @@ export default function Profile({
   const clickTimeout = useRef(null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isIconDropdownOpen, setIsIconDropdownOpen] = useState(false); 
+  const [isIconDropdownOpen, setIsIconDropdownOpen] = useState(false);
   const [editPresetId, setEditPresetId] = useState(null);
   const [formData, setFormData] = useState({ name: '', indicators: [], icon: '\u26A1' });
   const [clickCount, setClickCount] = useState(0);
+  const [avatarBroken, setAvatarBroken] = useState(false);
 
   useEffect(() => {
     if (scrollTarget === 'strategies' && strategyRef.current) {
@@ -34,12 +34,22 @@ export default function Profile({
     }
   }, [scrollTarget]);
 
+  useEffect(() => {
+    setAvatarBroken(false);
+  }, [user?.avatar_url]);
+
   if (!user) return null;
 
+  const avatarUrl = String(user.avatar_url || '').trim();
+  const profileInitials = String(user.first_name || user.username || 'EV')
+    .trim()
+    .slice(0, 2)
+    .toUpperCase();
   const currentMode = (user.mode || 'binary').toLowerCase();
   const isDemo = currentMode === 'demo';
   const forexAvailable = Number(user.forex_access ?? 1) === 1;
   const binaryAvailable = Number(user.binary_access ?? 1) === 1;
+  const isAdmin = Number(user.is_admin || 0) === 1 && Boolean(user.admin_url);
   const selectedStrategy = strategies.find(s => s.id === user.strategy_id) || {};
 
   const systemStrategies = strategies.filter(s => s.is_system === 1);
@@ -103,7 +113,7 @@ export default function Profile({
     const payload = {
       action,
       name: formData.name,
-      icon: formData.icon, 
+      icon: formData.icon,
       indicators: formData.indicators
     };
 
@@ -144,7 +154,7 @@ export default function Profile({
 
     if (newCount >= 5) {
       onToggleMode(isDemo ? 'forex' : 'demo');
-      setClickCount(0); 
+      setClickCount(0);
     }
 
     if (clickTimeout.current) clearTimeout(clickTimeout.current);
@@ -153,15 +163,29 @@ export default function Profile({
     }, 1500);
   };
 
+  const openAdminCenter = () => {
+    if (!user.admin_url) return;
+    window.location.href = user.admin_url;
+  };
+
   return (
     <div className="page-container">
       <div className="profile-wrapper">
-        
-        
+
+
         <div className="profile-header-container">
           <div className="profile-user-section">
             <div className="profile-avatar-container" onClick={handleAvatarClick} style={{ cursor: 'pointer' }}>
-              <img src={avatarImg} alt="Avatar" className="profile-avatar" />
+              {avatarUrl && !avatarBroken ? (
+                <img
+                  src={avatarUrl}
+                  alt="Avatar"
+                  className="profile-avatar"
+                  onError={() => setAvatarBroken(true)}
+                />
+              ) : (
+                <div className="profile-avatar-placeholder">{profileInitials}</div>
+              )}
             </div>
             <h2 className="profile-name">Elizabeth Vane</h2>
           </div>
@@ -204,7 +228,7 @@ export default function Profile({
           </div>
         </div>
 
-        
+
         {!isDemo && (
           <div className="profile-settings-row">
             <div className="mode-toggle-label">{t.profile.chooseMode}</div>
@@ -228,12 +252,18 @@ export default function Profile({
           </div>
         )}
 
+        {isAdmin ? (
+          <button className="admin-center-profile-btn" onClick={openAdminCenter}>
+            Admin Center
+          </button>
+        ) : null}
+
         <div className="strategies-section" ref={strategyRef}>
           <button className="start-analysis-btn" onClick={onStartAnalysis}>
             {isDemo ? (t.demoSettings?.startStudy || 'Start Study') : (currentMode === 'binary' ? t.binaryAnalytics.cta : t.forexAnalytics.cta)}
           </button>
 
-          
+
           <h3 className="settings-main-title">{t.profile.strategyTitle}</h3>
 
           <div className="strategy-details">
@@ -298,19 +328,19 @@ export default function Profile({
 
             <div className="modal-form-group" style={{ position: 'relative' }}>
               <label>Icon</label>
-              <div 
+              <div
                 className="icon-dropdown-trigger"
                 onClick={() => setIsIconDropdownOpen(!isIconDropdownOpen)}
               >
                 <span className="selected-icon-display">{formData.icon}</span>
                 <span className={`dropdown-arrow ${isIconDropdownOpen ? 'open' : ''}`}>{'\u25BE'}</span>
               </div>
-              
+
               {isIconDropdownOpen && (
                 <div className="icon-dropdown-menu fade-in">
                   {ICON_CHOICES.map(icon => (
-                    <div 
-                      key={icon} 
+                    <div
+                      key={icon}
                       className={`icon-choice-item ${formData.icon === icon ? 'selected' : ''}`}
                       onClick={() => {
                         setFormData({...formData, icon});

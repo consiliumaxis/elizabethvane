@@ -27,6 +27,20 @@ class ProfileAdminAvatarTest(unittest.TestCase):
 
         self.assertIn("NULLIF(VALUES(avatar_url), '')", source)
 
+    def test_profile_uses_user_avatar_url(self):
+        source = (PROJECT_ROOT / "frontend/src/components/pages/Profile.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("user.avatar_url", source)
+        self.assertIn("avatarBroken", source)
+        self.assertNotIn("eric-avatar.jpg", source)
+        self.assertNotIn("elizabeth-avatar.jpg", source)
+
+    def test_admin_users_render_user_avatar(self):
+        source = (PROJECT_ROOT / "frontend/src/admin/pages/UsersPage.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("getAvatarUrl", source)
+        self.assertIn("admin-user-avatar", source)
+
 
 if __name__ == "__main__":
     unittest.main()
