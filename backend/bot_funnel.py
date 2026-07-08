@@ -253,10 +253,21 @@ def normalize_bool_flag(value: Any, default: int = 0) -> int:
     return 1 if bool(value) else 0
 
 
+def normalize_telegram_url(value: Any, default: str = "") -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return default
+    if raw.startswith("@"):
+        return f"https://t.me/{raw[1:].strip('/')}"
+    if raw.startswith("t.me/"):
+        return f"https://{raw}"
+    return raw
+
+
 def normalize_channel_settings(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     source = row or {}
-    channel_url = str(source.get("channel_url") or "").strip() or DEFAULT_CHANNEL_URL
-    support_url = str(source.get("support_url") or "").strip()
+    channel_url = normalize_telegram_url(source.get("channel_url"), DEFAULT_CHANNEL_URL)
+    support_url = normalize_telegram_url(source.get("support_url"))
     return {
         "channel_id": normalize_channel_id(source.get("channel_id")),
         "channel_url": channel_url,

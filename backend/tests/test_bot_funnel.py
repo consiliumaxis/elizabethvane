@@ -67,13 +67,13 @@ class BotFunnelTest(unittest.TestCase):
         custom = normalize_channel_settings(
             {
                 "channel_id": "-1001",
-                "channel_url": " https://t.me/test ",
+                "channel_url": " @test_channel ",
                 "check_subscription_enabled": "0",
-                "support_url": " https://t.me/support ",
+                "support_url": " t.me/support ",
             }
         )
         self.assertEqual(custom["channel_id"], -1001)
-        self.assertEqual(custom["channel_url"], "https://t.me/test")
+        self.assertEqual(custom["channel_url"], "https://t.me/test_channel")
         self.assertEqual(custom["check_subscription_enabled"], 0)
         self.assertEqual(custom["support_url"], "https://t.me/support")
 
