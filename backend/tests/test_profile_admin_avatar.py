@@ -35,6 +35,14 @@ class ProfileAdminAvatarTest(unittest.TestCase):
         self.assertNotIn("eric-avatar.jpg", source)
         self.assertNotIn("elizabeth-avatar.jpg", source)
 
+    def test_profile_uses_telegram_display_name(self):
+        source = (PROJECT_ROOT / "frontend/src/components/pages/Profile.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("profileDisplayName", source)
+        self.assertIn("user.first_name", source)
+        self.assertIn("user.username", source)
+        self.assertNotIn('<h2 className="profile-name">Elizabeth Vane</h2>', source)
+
     def test_admin_users_render_user_avatar(self):
         source = (PROJECT_ROOT / "frontend/src/admin/pages/UsersPage.jsx").read_text(encoding="utf-8")
 

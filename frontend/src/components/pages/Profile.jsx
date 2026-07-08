@@ -41,6 +41,9 @@ export default function Profile({
   if (!user) return null;
 
   const avatarUrl = String(user.avatar_url || '').trim();
+  const profileDisplayName = String(user.first_name || user.username || 'Elizabeth Vane')
+    .trim()
+    .replace(/^@+/, '');
   const profileInitials = String(user.first_name || user.username || 'EV')
     .trim()
     .slice(0, 2)
@@ -187,7 +190,7 @@ export default function Profile({
                 <div className="profile-avatar-placeholder">{profileInitials}</div>
               )}
             </div>
-            <h2 className="profile-name">Elizabeth Vane</h2>
+            <h2 className="profile-name">{profileDisplayName}</h2>
           </div>
 
           <div className="profile-stats-card">
