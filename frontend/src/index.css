@@ -134,6 +134,121 @@ button:focus-visible {
   word-wrap: break-word;
 }
 
+.signal-gate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(2, 6, 15, 0.52);
+  backdrop-filter: blur(5px);
+}
+
+.signal-gate-modal {
+  width: min(390px, 100%);
+  background: var(--bg-panel);
+  border: 1px solid rgba(212, 175, 55, 0.38);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.42);
+  padding: 22px;
+  color: var(--text-main);
+  text-align: left;
+}
+
+.signal-gate-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 11px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(212, 175, 55, 0.36);
+  border-radius: 999px;
+  background: rgba(212, 175, 55, 0.12);
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.signal-gate-modal h3 {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-size: 1.14rem;
+  line-height: 1.25;
+}
+
+.signal-gate-modal p {
+  margin: 0 0 10px;
+  color: var(--text-main);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.signal-gate-note {
+  color: var(--text-soft) !important;
+  font-size: 0.82rem !important;
+}
+
+.signal-gate-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.signal-gate-primary,
+.signal-gate-secondary,
+.signal-gate-close {
+  min-height: 44px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+}
+
+.signal-gate-primary {
+  background: linear-gradient(160deg, var(--accent), var(--accent-strong));
+  color: #fffaf0;
+  box-shadow: 0 10px 20px rgba(212, 175, 55, 0.2);
+}
+
+.signal-gate-secondary {
+  background: rgba(9, 16, 31, 0.78);
+  border-color: rgba(212, 175, 55, 0.28);
+  color: var(--accent);
+}
+
+.signal-gate-close {
+  width: 100%;
+  margin-top: 10px;
+  background: transparent;
+  border-color: rgba(212, 175, 55, 0.22);
+  color: var(--text-soft);
+}
+
+.signal-gate-primary:hover,
+.signal-gate-secondary:hover,
+.signal-gate-close:hover {
+  transform: translateY(-1px);
+}
+
+.signal-gate-primary:disabled,
+.signal-gate-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+  box-shadow: none;
+}
+
+@media (max-width: 420px) {
+  .signal-gate-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
 @keyframes slideDown {
   from {
     opacity: 0;

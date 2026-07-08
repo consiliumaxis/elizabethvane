@@ -4,6 +4,7 @@ import Lottie from 'lottie-react';
 import animationData from '../../assets/analize.json';
 import './ForexAnalysisSettings.css';
 import iconEdit from '../../assets/icons/edit.svg?url';
+import SignalGateModal from '../SignalGateModal';
 import TradingViewChart from './TradingViewChart';
 import NewsModal from './NewsModal';
 import { apiFetchJson } from '../../lib/api';
@@ -46,6 +47,7 @@ export default function ForexAnalysisSettings({
   const [timeStats, setTimeStats] = useState({ passed: 0, remaining: 0, expired: false });
   const [news, setNews] = useState(null);
   const [isNewsModalOpen, setIsNewsModalOpen] = useState(false);
+  const [signalGateOpen, setSignalGateOpen] = useState(false);
   
   const [assetType, setAssetType] = useState('Currencies');
   const expOptions = ['5m', '15m', '30m', '1h', '4h', '1d'];
@@ -273,7 +275,8 @@ export default function ForexAnalysisSettings({
     setAnalysisData(null);
     setIsProcessing(true);
     setEditMode(null);
-    const uiDelay = Math.floor(Math.random() * 7000) + 3000; 
+    setSignalGateOpen(false);
+    const uiDelay = Math.floor(Math.random() * 7000) + 3000;
     const startTime = Date.now();
     const assetObj = getAssetObject(forexParams.pair);
     const stratKeys = selectedStrategy.indicator_keys 
@@ -308,7 +311,11 @@ export default function ForexAnalysisSettings({
       }
     } catch (error) {
       console.error(error);
-      alert(t.noDataError);
+      if (error.message === 'signal_access_required' || error.message === 'registration_and_deposit_required') {
+        setSignalGateOpen(true);
+      } else {
+        alert(t.noDataError);
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -608,6 +615,9 @@ export default function ForexAnalysisSettings({
           <button className="conduct-analysis-btn" onClick={handleConductAnalysis}>{t.conductAnalysisBtn}</button>
         </div>
       )}
+      {signalGateOpen ? (
+        <SignalGateModal onClose={() => setSignalGateOpen(false)} />
+      ) : null}
     </div>
   );
 }

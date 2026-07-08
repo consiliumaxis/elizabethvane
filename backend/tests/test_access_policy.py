@@ -71,6 +71,31 @@ class AccessPolicySourceTest(unittest.TestCase):
         self.assertIn("После регистрации и депозита", ui)
         self.assertIn("payload.system_access", ui)
 
+    def test_frontend_shows_signal_gate_modal_on_access_denied(self):
+        modal = PROJECT_ROOT / "frontend/src/components/SignalGateModal.jsx"
+        self.assertTrue(modal.exists(), "SignalGateModal should be available in Elizabeth frontend")
+
+        modal_source = modal.read_text(encoding="utf-8")
+        self.assertIn("Full signal access is not enabled yet", modal_source)
+        self.assertIn("Open Channel", modal_source)
+        self.assertIn("Message Manager", modal_source)
+
+        for component_path in (
+            "frontend/src/components/binary/BinarySignalSettings.jsx",
+            "frontend/src/components/forex/ForexAnalysisSettings.jsx",
+        ):
+            source = (PROJECT_ROOT / component_path).read_text(encoding="utf-8")
+            self.assertIn("import SignalGateModal", source)
+            self.assertIn("signalGateOpen", source)
+            self.assertIn("setSignalGateOpen(true)", source)
+            self.assertIn("signal_access_required", source)
+            self.assertIn("registration_and_deposit_required", source)
+            self.assertIn("<SignalGateModal", source)
+
+        css = (PROJECT_ROOT / "frontend/src/index.css").read_text(encoding="utf-8")
+        self.assertIn(".signal-gate-overlay", css)
+        self.assertIn(".signal-gate-modal", css)
+
 
 if __name__ == "__main__":
     unittest.main()

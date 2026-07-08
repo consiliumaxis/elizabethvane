@@ -3,6 +3,7 @@ import Loader from '../Loader/Loader';
 import Lottie from 'lottie-react';
 import animationData from '../../assets/analize.json';
 import { apiFetchJson } from '../../lib/api';
+import SignalGateModal from '../SignalGateModal';
 import NewsModal from '../forex/NewsModal';
 import './BinarySignalSettings.css';
 import iconEdit from '../../assets/icons/edit.svg?url';
@@ -105,6 +106,7 @@ export default function BinarySignalSettings({
   const [news, setNews] = useState(null);
   const [isNewsModalOpen, setIsNewsModalOpen] = useState(false);
   const [timeStats, setTimeStats] = useState({ remaining: 0, expired: false });
+  const [signalGateOpen, setSignalGateOpen] = useState(false);
   const settleStartedRef = useRef(false);
   const expirationDeadlineRef = useRef(null);
 
@@ -307,6 +309,7 @@ export default function BinarySignalSettings({
     setAnalysisData(null);
     setEditMode(null);
     setLoadError('');
+    setSignalGateOpen(false);
     settleStartedRef.current = false;
     const stratKeys = selectedStrategy?.indicator_keys
       ? selectedStrategy.indicator_keys.split(',').map(item => item.trim().toUpperCase()).filter(Boolean)
@@ -345,7 +348,12 @@ export default function BinarySignalSettings({
         throw new Error(result?.error || t.noDataError || 'Signal is unavailable');
       }
     } catch (error) {
-      setLoadError(error.message || t.noDataError || 'Signal is unavailable');
+      if (error.message === 'signal_access_required' || error.message === 'registration_and_deposit_required') {
+        setSignalGateOpen(true);
+        setLoadError('');
+      } else {
+        setLoadError(error.message || t.noDataError || 'Signal is unavailable');
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -676,6 +684,10 @@ export default function BinarySignalSettings({
           </button>
         </div>
       )}
+
+      {signalGateOpen ? (
+        <SignalGateModal onClose={() => setSignalGateOpen(false)} />
+      ) : null}
 
 
       <div className="actions-wrapper" style={{ marginTop: '30px' }}>
