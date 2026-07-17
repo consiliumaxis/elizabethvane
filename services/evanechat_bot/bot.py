@@ -1382,6 +1382,37 @@ async def call_chat_with_retry(messages, model: str, temperature: float = 0.4,
 
     # если все попытки умерли на rate limit
     raise last_err if last_err else RuntimeError("OpenAI rate limit, retries exhausted")
+
+
+async def ensure_english_reply(reply_text: str, model: str) -> str:
+    """Гарантирует английский ответ даже при русской истории и инструкциях планировщика."""
+    text = (reply_text or "").strip()
+    if not re.search(r"[А-Яа-яЁё]", text):
+        return text
+    try:
+        response = await call_chat_with_retry(
+            model=model,
+            temperature=0.0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Translate the supplied Telegram reply into natural English only. "
+                        "Preserve its meaning, paragraph structure, HTML, URLs, emojis, and every "
+                        "[SEND:id] tag exactly. Return only the translated reply."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+        )
+        translated = (response.choices[0].message.content or "").strip()
+        if translated and not re.search(r"[А-Яа-яЁё]", translated):
+            logging.info("[language] translated non-English AI reply to English")
+            return translated
+        logging.error("[language] translation still contains Cyrillic")
+    except Exception as exc:
+        logging.exception("[language] failed to translate AI reply: %s", exc)
+    return "Thanks for your message! I’ll explain everything clearly in English. What would you like to know first?"
 async def call_affiliate_post(endpoint: str, payload: dict) -> dict | None:
     """
     Общий POST в affiliate-сервис.
@@ -1871,6 +1902,13 @@ async def generate_ai_reply(
 
         # история и текущий запрос
         messages.extend(history)
+        messages.append({
+            "role": "system",
+            "content": (
+                "FINAL OUTPUT LANGUAGE RULE: Reply only in natural English. "
+                "Do not use Russian or any other language, even if the user or conversation history does."
+            ),
+        })
         messages.append({"role": "user", "content": user_text})
 
         resp = await call_chat_with_retry(
@@ -1880,6 +1918,7 @@ async def generate_ai_reply(
         )
 
         reply = (resp.choices[0].message.content or "").strip()
+        reply = await ensure_english_reply(reply, ai_model)
 
         selected_media_key, _, _ = split_funnel_reply(reply)
         if stage == STAGE_NEW and not selected_media_key:

@@ -118,6 +118,13 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn('get_next_unsent_funnel_media_key(tg_user_id, "A")', bot)
         self.assertIn("inserted required cold-stage media", bot)
 
+    def test_ai_reply_is_forced_to_english(self):
+        bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
+
+        self.assertIn("FINAL OUTPUT LANGUAGE RULE", bot)
+        self.assertIn("ensure_english_reply", bot)
+        self.assertIn("translated non-English AI reply to English", bot)
+
     def test_funnel_default_order_is_semantic_not_alphabetical(self):
         source = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
         expected = [
