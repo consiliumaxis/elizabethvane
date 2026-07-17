@@ -4,6 +4,7 @@ import { apiAdminFetchJson } from '../../lib/api';
 const SECTIONS = [
   { id: 'overview', label: 'Обзор' },
   { id: 'settings', label: 'Настройки' },
+  { id: 'funnel', label: 'Воронка' },
   { id: 'users', label: 'Диалоги' },
   { id: 'triggers', label: 'Триггеры' },
   { id: 'postbacks', label: 'Постбеки' },
@@ -16,6 +17,14 @@ const AI_MODEL_OPTIONS = [
   { value: 'gpt-4.1-nano', label: 'GPT-4.1 nano — минимальная стоимость' },
   { value: 'gpt-4o-mini', label: 'GPT-4o mini — экономичная' },
 ];
+
+const FUNNEL_BLOCKS = {
+  A: 'Прогрев',
+  W: 'Механика',
+  E: 'Депозит',
+  R: 'После депозита',
+  C: 'Копитрейдинг',
+};
 
 const EMPTY_SETTINGS = {
   system_enabled: true,
@@ -36,6 +45,7 @@ const EMPTY_SETTINGS = {
   log_commissions: true,
   log_system_errors: false,
   commission_mode: 'auto',
+  funnel_media_enabled: true,
 };
 
 const formatDate = (value) => {
@@ -48,6 +58,12 @@ const formatMoney = (value) => Number(value || 0).toLocaleString('ru-RU', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+
+const formatBytes = (value) => {
+  const bytes = Number(value || 0);
+  if (!bytes) return '0 МБ';
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
+};
 
 function Toggle({ checked, onChange, label, hint }) {
   return (
@@ -86,6 +102,9 @@ export default function AIChatterPage() {
   const [statsDays, setStatsDays] = useState(7);
   const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
   const [manualAmount, setManualAmount] = useState('');
+  const [funnelItems, setFunnelItems] = useState([]);
+  const [funnelSaving, setFunnelSaving] = useState(false);
+  const [uploadingKey, setUploadingKey] = useState('');
 
   const flash = (message) => {
     setSuccess(message);
@@ -128,6 +147,11 @@ export default function AIChatterPage() {
     setStatistics({ daily: result.daily || [], manual_commissions: result.manual_commissions || [] });
   }, []);
 
+  const loadFunnel = useCallback(async () => {
+    const result = await apiAdminFetchJson('/api/admin/aichatter/funnel');
+    setFunnelItems(result.items || []);
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       Promise.all([loadOverview(), loadTriggers(), loadAdmins(), loadStatistics(7)])
@@ -142,6 +166,7 @@ export default function AIChatterPage() {
     try {
       if (nextSection === 'users') await loadUsers();
       if (nextSection === 'postbacks') await loadPostbacks();
+      if (nextSection === 'funnel') await loadFunnel();
     } catch (requestError) {
       setError(requestError.message || 'Не удалось загрузить данные');
     }
@@ -284,6 +309,71 @@ export default function AIChatterPage() {
     }
   };
 
+  const updateFunnelItem = (mediaKey, patch) => {
+    setFunnelItems((current) => current.map((item) => (
+      item.media_key === mediaKey ? { ...item, ...patch } : item
+    )));
+  };
+
+  const moveFunnelItem = (index, direction) => {
+    const target = index + direction;
+    if (target < 0 || target >= funnelItems.length) return;
+    setFunnelItems((current) => {
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next.map((item, itemIndex) => ({ ...item, sort_order: (itemIndex + 1) * 10 }));
+    });
+  };
+
+  const saveFunnel = async () => {
+    setFunnelSaving(true);
+    setError('');
+    try {
+      const result = await apiAdminFetchJson('/api/admin/aichatter/funnel', {
+        method: 'PUT',
+        body: JSON.stringify({
+          items: funnelItems.map((item, index) => ({
+            media_key: item.media_key,
+            block_code: item.block_code,
+            title: item.title,
+            description: item.description || '',
+            sort_order: (index + 1) * 10,
+            enabled: Boolean(item.enabled),
+          })),
+        }),
+      });
+      setFunnelItems(result.items || []);
+      flash('Порядок и настройки воронки сохранены');
+    } catch (requestError) {
+      setError(requestError.message || 'Не удалось сохранить воронку');
+    } finally {
+      setFunnelSaving(false);
+    }
+  };
+
+  const uploadFunnelMedia = async (mediaKey, file) => {
+    if (!file) return;
+    if (file.type && file.type !== 'video/mp4') {
+      setError('Для кружка нужен MP4-файл');
+      return;
+    }
+    setUploadingKey(mediaKey);
+    setError('');
+    try {
+      await apiAdminFetchJson(`/api/admin/aichatter/funnel/${encodeURIComponent(mediaKey)}/media`, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'video/mp4' },
+        body: file,
+      });
+      await loadFunnel();
+      flash(`Кружок ${mediaKey.toUpperCase()} загружен`);
+    } catch (requestError) {
+      setError(requestError.message || 'Не удалось загрузить кружок');
+    } finally {
+      setUploadingKey('');
+    }
+  };
+
   if (loading) return <div className="admin-card admin-muted">Загрузка АИЧАТТЕР…</div>;
 
   return (
@@ -380,6 +470,65 @@ export default function AIChatterPage() {
             </div>
           </section>
           <button className="admin-btn aichatter-save" disabled={saving} onClick={saveSettings}>{saving ? 'Сохранение…' : 'Сохранить все настройки'}</button>
+        </div>
+      )}
+
+      {section === 'funnel' && (
+        <div className="aichatter-stack">
+          <section className="admin-card">
+            <div className="aichatter-section-head">
+              <div>
+                <h3 className="admin-section-title">Сценарий воронки</h3>
+                <p className="admin-muted">ИИ вызывает кружок тегом [SEND:id]. Клиент получает видео и текстовое резюме из промпта.</p>
+              </div>
+              <Toggle checked={settings.funnel_media_enabled} onChange={(value) => updateField('funnel_media_enabled', value)} label="Кружки включены" hint="Глобальное включение отправки" />
+            </div>
+            <label>Основной промпт воронки<textarea className="admin-textarea aichatter-prompt" value={settings.system_prompt} onChange={(event) => updateField('system_prompt', event.target.value)} /></label>
+            <button className="admin-btn" disabled={saving} onClick={saveSettings}>{saving ? 'Сохранение…' : 'Сохранить сценарий'}</button>
+          </section>
+
+          <section className="admin-card">
+            <div className="aichatter-section-head">
+              <div>
+                <h3 className="admin-section-title">Кружки и порядок</h3>
+                <p className="admin-muted">Порядок задан по логике A → W → E → R → C. Кнопками можно менять фактическую последовательность независимо от имени файла.</p>
+              </div>
+              <div className="aichatter-funnel-total">{funnelItems.filter((item) => item.file_exists).length}/{funnelItems.length} загружено</div>
+            </div>
+
+            <div className="aichatter-funnel-list">
+              {funnelItems.map((item, index) => (
+                <article className={`aichatter-funnel-item ${item.enabled ? '' : 'disabled'}`} key={item.media_key}>
+                  <div className="aichatter-funnel-order">
+                    <strong>{index + 1}</strong>
+                    <button type="button" disabled={index === 0} onClick={() => moveFunnelItem(index, -1)} title="Поднять">↑</button>
+                    <button type="button" disabled={index === funnelItems.length - 1} onClick={() => moveFunnelItem(index, 1)} title="Опустить">↓</button>
+                  </div>
+                  <div className="aichatter-funnel-fields">
+                    <div className="aichatter-funnel-row">
+                      <span className="aichatter-funnel-key">[SEND:{item.media_key}]</span>
+                      <select className="admin-input compact" value={item.block_code} onChange={(event) => updateFunnelItem(item.media_key, { block_code: event.target.value })}>
+                        {Object.entries(FUNNEL_BLOCKS).map(([code, label]) => <option key={code} value={code}>{code} · {label}</option>)}
+                      </select>
+                      <Toggle checked={item.enabled} onChange={(value) => updateFunnelItem(item.media_key, { enabled: value })} label="Активен" />
+                    </div>
+                    <input className="admin-input" value={item.title} onChange={(event) => updateFunnelItem(item.media_key, { title: event.target.value })} placeholder="Название шага" />
+                    <textarea className="admin-textarea aichatter-funnel-description" value={item.description || ''} onChange={(event) => updateFunnelItem(item.media_key, { description: event.target.value })} placeholder="Когда и зачем отправлять этот кружок" />
+                    <div className="aichatter-funnel-file-row">
+                      <span className={`aichatter-pill ${item.file_exists ? 'ok' : 'off'}`}>{item.file_exists ? `${item.file_name} · ${formatBytes(item.file_size)}` : 'Файл не загружен'}</span>
+                      <span className="admin-muted">Отправлен клиентам: {item.sent_count || 0}</span>
+                      <label className="admin-btn-outline aichatter-file-button">
+                        {uploadingKey === item.media_key ? 'Загрузка…' : item.file_exists ? 'Заменить MP4' : 'Загрузить MP4'}
+                        <input type="file" accept="video/mp4,.mp4" disabled={Boolean(uploadingKey)} onChange={(event) => uploadFunnelMedia(item.media_key, event.target.files?.[0])} />
+                      </label>
+                    </div>
+                  </div>
+                </article>
+              ))}
+              {!funnelItems.length && <div className="admin-muted">Шаги воронки пока не загружены</div>}
+            </div>
+          </section>
+          <button className="admin-btn aichatter-save" disabled={funnelSaving} onClick={saveFunnel}>{funnelSaving ? 'Сохранение…' : 'Сохранить порядок и кружки'}</button>
         </div>
       )}
 

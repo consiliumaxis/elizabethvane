@@ -37,6 +37,9 @@ REGISTER_BASE_URL = os.getenv(
 
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/VBerin")
 SUPPORT_URL = os.getenv("SUPPORT_URL", CHANNEL_URL)
+FUNNEL_MEDIA_DIR = os.path.abspath(
+    os.getenv("FUNNEL_MEDIA_DIR", "/root/evanechat/media/funnel")
+)
 
 PROMPT_PAGE_SIZE = int(os.getenv("PROMPT_PAGE_SIZE", "800"))
 KV_CACHE_TTL = timedelta(minutes=5)

@@ -8,6 +8,47 @@ import aiomysql
 from config import DB_CONFIG
 
 
+FUNNEL_MEDIA_DEFAULTS = (
+    ("a1", "A", "Знакомство с Элизабет"),
+    ("a2", "A", "Открытость системы"),
+    ("a3", "A", "Доступно каждому"),
+    ("a4", "A", "17 индикаторов и 10 стратегий"),
+    ("a5", "A", "Канал видео-отзывов"),
+    ("w1", "W", "Как работает AI-инструмент"),
+    ("w2", "W", "Механика сигналов"),
+    ("w2.5", "W", "Конфлюенс индикаторов"),
+    ("w2.6", "W", "Порог сигнала 70%"),
+    ("w3", "W", "Выбор актива"),
+    ("w4", "W", "Запрос анализа"),
+    ("w5", "W", "Ответ на сомнения"),
+    ("w5.2", "W", "Проверка результата"),
+    ("w5.3", "W", "Дисциплина"),
+    ("w5.4", "W", "Не торговать на эмоциях"),
+    ("w5.5", "W", "Доверие к системе"),
+    ("w6", "W", "Регистрация у брокера"),
+    ("e1", "E", "Зачем нужен депозит"),
+    ("e2", "E", "Что открывается после депозита"),
+    ("e3", "E", "Доверяй данным"),
+    ("e4", "E", "Честно об убытках"),
+    ("e5", "E", "Первые шаги"),
+    ("e5.2", "E", "Работа с сомнениями"),
+    ("e5.3", "E", "Дисциплина после пополнения"),
+    ("e5.4", "E", "Переход к торговле"),
+    ("r1", "R", "Онбординг и риск-менеджмент"),
+    ("r2", "R", "Алгоритм открытия сделки"),
+    ("r3", "R", "Нет сильного сигнала"),
+    ("r3.2", "R", "Торговля на эмоциях"),
+    ("r4", "R", "Убыточная сделка"),
+    ("r5", "R", "Нет времени и VIP"),
+    ("r6", "R", "Страх перед сделкой"),
+    ("c1", "C", "Нет времени — копитрейдинг"),
+    ("c2", "C", "Проверка по Trader ID"),
+    ("c3", "C", "Условия копитрейдеров"),
+    ("c4", "C", "Марафон и результаты"),
+    ("c6", "C", "Как подключиться"),
+)
+
+
 def to_time(val) -> time:
     if isinstance(val, time):
         return val
@@ -251,6 +292,46 @@ async def init_db() -> Tuple[
 
         await cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS funnel_media (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                media_key VARCHAR(32) NOT NULL UNIQUE,
+                block_code VARCHAR(16) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                description TEXT NULL,
+                sort_order INT NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                telegram_file_id VARCHAR(255) NULL,
+                enabled TINYINT(1) NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_funnel_media_order (sort_order)
+            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            """
+        )
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS funnel_media_sent (
+                tg_user_id BIGINT UNSIGNED NOT NULL,
+                media_key VARCHAR(32) NOT NULL,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tg_user_id, media_key),
+                INDEX idx_funnel_media_sent_at (sent_at)
+            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            """
+        )
+        for index, (media_key, block_code, title) in enumerate(FUNNEL_MEDIA_DEFAULTS, start=1):
+            await cur.execute(
+                """
+                INSERT INTO funnel_media
+                    (media_key, block_code, title, description, sort_order, file_name, enabled)
+                VALUES (%s, %s, %s, %s, %s, %s, 1)
+                ON DUPLICATE KEY UPDATE media_key = media_key
+                """,
+                (media_key, block_code, title, title, index * 10, f"{media_key.upper()}.MP4"),
+            )
+
+        await cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS postback_events (
                 id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 event_code VARCHAR(32) NOT NULL,
@@ -456,6 +537,7 @@ async def init_db() -> Tuple[
         await ensure_kv_setting(cur, "LOG_SYSTEM_ERRORS", "0")
         await ensure_kv_setting(cur, "POSTBACK_LOG_CHAT_ID", "")
         await ensure_kv_setting(cur, "STATS_COMMISSION_MODE", "auto")
+        await ensure_kv_setting(cur, "FUNNEL_MEDIA_ENABLED", "1")
 
         await cur.execute(
             "SELECT svalue FROM kv_settings WHERE skey = 'BOT_NAME'"

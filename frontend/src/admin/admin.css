@@ -1428,7 +1428,7 @@
 
 .aichatter-nav {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -1617,6 +1617,120 @@
   font-weight: 800;
 }
 
+.aichatter-funnel-total {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 11px;
+  color: var(--accent-strong);
+  background: var(--surface-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.aichatter-funnel-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.aichatter-funnel-item {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 10px;
+  border: 1px solid rgba(143, 106, 46, 0.2);
+  border-radius: 14px;
+  padding: 11px;
+  background: rgba(255, 252, 246, 0.8);
+}
+
+.aichatter-funnel-item.disabled {
+  opacity: 0.62;
+}
+
+.aichatter-funnel-order {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.aichatter-funnel-order strong {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  color: #fffaf1;
+  background: var(--accent-strong);
+}
+
+.aichatter-funnel-order button {
+  width: 34px;
+  height: 29px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--accent-strong);
+  background: var(--surface-strong);
+  cursor: pointer;
+}
+
+.aichatter-funnel-order button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.aichatter-funnel-fields {
+  display: grid;
+  gap: 8px;
+}
+
+.aichatter-funnel-row,
+.aichatter-funnel-file-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.aichatter-funnel-row .aichatter-toggle-row {
+  margin-left: auto;
+  padding: 7px 9px;
+}
+
+.aichatter-funnel-key {
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: #fffaf1;
+  background: rgba(95, 69, 26, 0.92);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.aichatter-funnel-description {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.aichatter-funnel-file-row .admin-muted {
+  margin-right: auto;
+}
+
+.aichatter-file-button {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.aichatter-file-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 @media (max-width: 760px) {
   .aichatter-nav {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1655,6 +1769,20 @@
 
   .aichatter-message {
     width: 92%;
+  }
+
+  .aichatter-funnel-item {
+    grid-template-columns: 1fr;
+  }
+
+  .aichatter-funnel-order {
+    flex-direction: row;
+    justify-content: flex-start;
+  }
+
+  .aichatter-funnel-row .aichatter-toggle-row {
+    width: 100%;
+    margin-left: 0;
   }
 }
 

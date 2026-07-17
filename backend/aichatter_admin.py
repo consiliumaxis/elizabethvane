@@ -1,10 +1,11 @@
 import os
 import re
 from datetime import date
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import aiomysql
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 
@@ -22,6 +23,47 @@ _KV_KEYS = (
     "LOG_COMMISSIONS",
     "LOG_SYSTEM_ERRORS",
     "STATS_COMMISSION_MODE",
+    "FUNNEL_MEDIA_ENABLED",
+)
+
+_FUNNEL_DEFAULTS = (
+    ("a1", "A", "Знакомство с Элизабет"),
+    ("a2", "A", "Открытость системы"),
+    ("a3", "A", "Доступно каждому"),
+    ("a4", "A", "17 индикаторов и 10 стратегий"),
+    ("a5", "A", "Канал видео-отзывов"),
+    ("w1", "W", "Как работает AI-инструмент"),
+    ("w2", "W", "Механика сигналов"),
+    ("w2.5", "W", "Конфлюенс индикаторов"),
+    ("w2.6", "W", "Порог сигнала 70%"),
+    ("w3", "W", "Выбор актива"),
+    ("w4", "W", "Запрос анализа"),
+    ("w5", "W", "Ответ на сомнения"),
+    ("w5.2", "W", "Проверка результата"),
+    ("w5.3", "W", "Дисциплина"),
+    ("w5.4", "W", "Не торговать на эмоциях"),
+    ("w5.5", "W", "Доверие к системе"),
+    ("w6", "W", "Регистрация у брокера"),
+    ("e1", "E", "Зачем нужен депозит"),
+    ("e2", "E", "Что открывается после депозита"),
+    ("e3", "E", "Доверяй данным"),
+    ("e4", "E", "Честно об убытках"),
+    ("e5", "E", "Первые шаги"),
+    ("e5.2", "E", "Работа с сомнениями"),
+    ("e5.3", "E", "Дисциплина после пополнения"),
+    ("e5.4", "E", "Переход к торговле"),
+    ("r1", "R", "Онбординг и риск-менеджмент"),
+    ("r2", "R", "Алгоритм открытия сделки"),
+    ("r3", "R", "Нет сильного сигнала"),
+    ("r3.2", "R", "Торговля на эмоциях"),
+    ("r4", "R", "Убыточная сделка"),
+    ("r5", "R", "Нет времени и VIP"),
+    ("r6", "R", "Страх перед сделкой"),
+    ("c1", "C", "Нет времени — копитрейдинг"),
+    ("c2", "C", "Проверка по Trader ID"),
+    ("c3", "C", "Условия копитрейдеров"),
+    ("c4", "C", "Марафон и результаты"),
+    ("c6", "C", "Как подключиться"),
 )
 
 
@@ -44,6 +86,7 @@ class AichatterSettingsUpdate(BaseModel):
     log_commissions: Optional[bool] = None
     log_system_errors: Optional[bool] = None
     commission_mode: Optional[str] = None
+    funnel_media_enabled: Optional[bool] = None
 
 
 class AichatterTriggersUpdate(BaseModel):
@@ -64,6 +107,19 @@ class AichatterManualCommissionUpdate(BaseModel):
     amount: float
 
 
+class AichatterFunnelItemUpdate(BaseModel):
+    media_key: str
+    block_code: str
+    title: str
+    description: Optional[str] = None
+    sort_order: int
+    enabled: bool = True
+
+
+class AichatterFunnelUpdate(BaseModel):
+    items: list[AichatterFunnelItemUpdate]
+
+
 def _config() -> Dict[str, Any]:
     return {
         "host": (os.getenv("AICHAT_DB_HOST") or os.getenv("DB_HOST") or "localhost").strip(),
@@ -76,6 +132,53 @@ def _config() -> Dict[str, Any]:
         "minsize": 1,
         "maxsize": 5,
     }
+
+
+def _media_dir() -> Path:
+    return Path(os.getenv("AICHAT_MEDIA_DIR") or "/root/evanechat/media/funnel").resolve()
+
+
+async def _ensure_funnel_schema(pool):
+    async with pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS funnel_media (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                media_key VARCHAR(32) NOT NULL UNIQUE,
+                block_code VARCHAR(16) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                description TEXT NULL,
+                sort_order INT NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                telegram_file_id VARCHAR(255) NULL,
+                enabled TINYINT(1) NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_funnel_media_order (sort_order)
+            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+            """
+        )
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS funnel_media_sent (
+                tg_user_id BIGINT UNSIGNED NOT NULL,
+                media_key VARCHAR(32) NOT NULL,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tg_user_id, media_key),
+                INDEX idx_funnel_media_sent_at (sent_at)
+            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+            """
+        )
+        for index, (media_key, block_code, title) in enumerate(_FUNNEL_DEFAULTS, start=1):
+            await cur.execute(
+                """
+                INSERT INTO funnel_media
+                    (media_key, block_code, title, description, sort_order, file_name, enabled)
+                VALUES (%s, %s, %s, %s, %s, %s, 1)
+                ON DUPLICATE KEY UPDATE media_key = media_key
+                """,
+                (media_key, block_code, title, title, index * 10, f"{media_key.upper()}.MP4"),
+            )
 
 
 async def _get_pool():
@@ -136,6 +239,7 @@ async def _load_settings(pool) -> Dict[str, Any]:
         "log_commissions": kv.get("LOG_COMMISSIONS", "1") == "1",
         "log_system_errors": kv.get("LOG_SYSTEM_ERRORS", "0") == "1",
         "commission_mode": kv.get("STATS_COMMISSION_MODE", "auto"),
+        "funnel_media_enabled": kv.get("FUNNEL_MEDIA_ENABLED", "1") == "1",
         "ai_enabled": bool(ai.get("enabled", 1)),
         "ai_model": ai.get("model") or "gpt-4.1",
         "system_prompt": ai.get("system_prompt") or "",
@@ -226,6 +330,7 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
                 "log_commissions": "LOG_COMMISSIONS",
                 "log_system_errors": "LOG_SYSTEM_ERRORS",
                 "commission_mode": "STATS_COMMISSION_MODE",
+                "funnel_media_enabled": "FUNNEL_MEDIA_ENABLED",
             }
             for field, key in kv_map.items():
                 if field in data:
@@ -324,6 +429,120 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
             else:
                 await cur.execute("INSERT INTO keyword_triggers (phrases) VALUES (%s)", (", ".join(phrases),))
         return {"status": "success", "phrases": phrases}
+
+    @router.get("/funnel")
+    async def funnel(admin=Depends(admin_dependency)):
+        pool = await _get_pool()
+        await _ensure_funnel_schema(pool)
+        media_dir = _media_dir()
+        async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT fm.id, fm.media_key, fm.block_code, fm.title, fm.description,
+                       fm.sort_order, fm.file_name, fm.enabled, fm.updated_at,
+                       COUNT(fms.tg_user_id) AS sent_count
+                FROM funnel_media fm
+                LEFT JOIN funnel_media_sent fms ON fms.media_key = fm.media_key
+                GROUP BY fm.id
+                ORDER BY fm.sort_order, fm.id
+                """
+            )
+            rows = await cur.fetchall()
+        for row in rows:
+            file_path = (media_dir / Path(row["file_name"]).name).resolve()
+            exists = file_path.parent == media_dir and file_path.is_file()
+            row["file_exists"] = exists
+            row["file_size"] = file_path.stat().st_size if exists else 0
+        return {"status": "success", "items": rows, "media_dir": str(media_dir)}
+
+    @router.put("/funnel")
+    async def update_funnel(payload: AichatterFunnelUpdate, admin=Depends(admin_dependency)):
+        if not payload.items:
+            raise HTTPException(status_code=400, detail="Funnel must contain at least one item")
+        keys = [item.media_key.strip().lower() for item in payload.items]
+        if len(keys) != len(set(keys)):
+            raise HTTPException(status_code=400, detail="Duplicate funnel media key")
+        for item, media_key in zip(payload.items, keys):
+            if not re.fullmatch(r"[a-z][a-z0-9]*(?:\.[0-9]+)?", media_key):
+                raise HTTPException(status_code=400, detail=f"Invalid media key: {item.media_key}")
+            if item.block_code.upper() not in {"A", "W", "E", "R", "C"}:
+                raise HTTPException(status_code=400, detail=f"Invalid block: {item.block_code}")
+            if not item.title.strip():
+                raise HTTPException(status_code=400, detail=f"Title is required: {item.media_key}")
+
+        pool = await _get_pool()
+        await _ensure_funnel_schema(pool)
+        async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT media_key FROM funnel_media")
+            known = {row["media_key"] for row in await cur.fetchall()}
+            unknown = sorted(set(keys) - known)
+            if unknown:
+                raise HTTPException(status_code=400, detail=f"Unknown media keys: {', '.join(unknown)}")
+            for item, media_key in zip(payload.items, keys):
+                await cur.execute(
+                    """
+                    UPDATE funnel_media
+                    SET block_code = %s, title = %s, description = %s,
+                        sort_order = %s, enabled = %s
+                    WHERE media_key = %s
+                    """,
+                    (
+                        item.block_code.upper(),
+                        item.title.strip()[:255],
+                        (item.description or "").strip(),
+                        item.sort_order,
+                        int(item.enabled),
+                        media_key,
+                    ),
+                )
+        return await funnel(admin)
+
+    @router.put("/funnel/{media_key}/media")
+    async def upload_funnel_media(media_key: str, request: Request, admin=Depends(admin_dependency)):
+        media_key = media_key.strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9]*(?:\.[0-9]+)?", media_key):
+            raise HTTPException(status_code=400, detail="Invalid media key")
+        declared_size = int(request.headers.get("content-length") or 0)
+        max_size = 50 * 1024 * 1024
+        if declared_size > max_size:
+            raise HTTPException(status_code=413, detail="Video is larger than 50 MB")
+        content_type = (request.headers.get("content-type") or "").lower()
+        if content_type and "video/mp4" not in content_type and "application/octet-stream" not in content_type:
+            raise HTTPException(status_code=415, detail="Only MP4 video is supported")
+        payload_bytes = await request.body()
+        if not payload_bytes or len(payload_bytes) > max_size:
+            raise HTTPException(status_code=413, detail="Video must be between 1 byte and 50 MB")
+        if b"ftyp" not in payload_bytes[:32]:
+            raise HTTPException(status_code=400, detail="File is not a valid MP4 container")
+
+        pool = await _get_pool()
+        await _ensure_funnel_schema(pool)
+        async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT media_key FROM funnel_media WHERE media_key = %s", (media_key,))
+            if not await cur.fetchone():
+                raise HTTPException(status_code=404, detail="Funnel item not found")
+
+        media_dir = _media_dir()
+        media_dir.mkdir(parents=True, exist_ok=True)
+        file_name = f"{media_key.upper()}.MP4"
+        file_path = (media_dir / file_name).resolve()
+        if file_path.parent != media_dir:
+            raise HTTPException(status_code=400, detail="Invalid media path")
+        temp_path = file_path.with_suffix(".uploading")
+        try:
+            with temp_path.open("wb") as target:
+                target.write(payload_bytes)
+            os.replace(temp_path, file_path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+
+        async with pool.acquire() as conn, conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE funnel_media SET file_name = %s, telegram_file_id = NULL WHERE media_key = %s",
+                (file_name, media_key),
+            )
+        return {"status": "success", "media_key": media_key, "file_name": file_name, "file_size": len(payload_bytes)}
 
     @router.get("/admins")
     async def admins(admin=Depends(admin_dependency)):

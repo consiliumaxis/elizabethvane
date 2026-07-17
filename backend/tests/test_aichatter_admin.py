@@ -20,6 +20,9 @@ class AichatterAdminTest(unittest.TestCase):
             '@router.get("/postbacks")',
             '@router.get("/statistics")',
             '@router.put("/statistics/manual-commission")',
+            '@router.get("/funnel")',
+            '@router.put("/funnel")',
+            '@router.put("/funnel/{media_key}/media")',
         ):
             self.assertIn(route, source)
         self.assertIn('prefix="/api/admin/aichatter"', source)
@@ -59,6 +62,36 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn("gpt-4.1-mini", source)
         self.assertIn("gpt-4.1-nano", source)
         self.assertIn("<label>Модель OpenAI<select", source)
+
+    def test_funnel_media_uses_business_video_notes_and_prevents_repeats(self):
+        bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
+        db = (PROJECT_ROOT / "services/evanechat_bot/db.py").read_text(encoding="utf-8")
+
+        self.assertIn("split_funnel_reply", bot)
+        self.assertIn("send_ai_reply_with_funnel_media", bot)
+        self.assertIn("bot.send_video_note", bot)
+        self.assertIn("business_connection_id=business_id", bot)
+        self.assertIn("funnel_media_sent", bot)
+        self.assertIn("CREATE TABLE IF NOT EXISTS funnel_media", db)
+        self.assertIn("CREATE TABLE IF NOT EXISTS funnel_media_sent", db)
+
+    def test_funnel_default_order_is_semantic_not_alphabetical(self):
+        source = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
+        expected = [
+            '"a1"', '"a5"', '"w1"', '"w2"', '"w2.5"', '"w2.6"', '"w3"',
+            '"w6"', '"e1"', '"e5"', '"e5.2"', '"e5.3"', '"e5.4"',
+            '"r1"', '"r3"', '"r3.2"', '"r4"', '"r6"', '"c1"', '"c4"', '"c6"',
+        ]
+        positions = [source.index(value) for value in expected]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_admin_contains_funnel_management_section(self):
+        source = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("{ id: 'funnel', label: 'Воронка' }", source)
+        self.assertIn("saveFunnel", source)
+        self.assertIn("uploadFunnelMedia", source)
+        self.assertIn("Кружки и порядок", source)
 
 
 if __name__ == "__main__":

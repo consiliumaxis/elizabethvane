@@ -37,6 +37,7 @@ from flows.vip import send_vip_onboarding_flow
 from flows.existing_account import send_existing_account_flow
 from flows.greeting import send_greeting_flow
 from service.funnel import update_user_stage_from_exchange
+from service.funnel_media import split_funnel_reply
 from service.keyword_trigger import handle_keyword_trigger
 from admin.admin import (
     router as admin_router,
@@ -69,6 +70,7 @@ from config import (
     STAGE_DEPOSIT_DONE,
     STAGE_TITLES,
     KV_CACHE_TTL,
+    FUNNEL_MEDIA_DIR,
 )
 
 logging.basicConfig(
@@ -819,7 +821,6 @@ async def plan_conversation(
 
     # 4) системный промт
     sys = await get_planner_prompt()
-    min_deposit = await get_min_deposit_threshold()
 
     # 5) user-message для планнер-модели
     user_content = (
@@ -827,7 +828,6 @@ async def plan_conversation(
         f"Текущий этап воронки (stage): {stage}\n"
         f"registration_status: {reg_status}\n"
         f"deposit_status: {dep_status}\n"
-        f"min_deposit_usd: {min_deposit}\n"
         f"country: {country or 'не указана'}\n\n"
         f"Краткая сводка по клиенту:\n{long_memory or '(нет сводки)'}\n\n"
         f"История переписки:\n{history_text}\n\n"
@@ -1670,8 +1670,6 @@ async def generate_ai_reply(
 ) -> str:
 
     global ai_system_prompt, ai_enabled, ai_model
-    min_deposit = await get_min_deposit_threshold()
-
     fallback_text = "Простите, сейчас большая нагрузка, вернусь к вам через пару минут 🙏"
     if not ai_client or not ai_enabled:
         # уведомляем админов
@@ -1736,13 +1734,14 @@ async def generate_ai_reply(
             f"- registration_status = {reg_status}\n"
             f"- deposit_status = {dep_status}\n"
             f"- country = {country or 'не указана'}\n"
-            f"- min_deposit = {min_deposit:.0f}$\n\n"
+            "- денежные условия и точные суммы сообщает только личный менеджер\n\n"
             "Правила:\n"
             "- Не противоречь статусам из БД.\n"
             "- Если registration_status = 1, не говори, что регистрация не найдена.\n"
             "- Если registration_status = 0, можно вести к регистрации по ссылке.\n"
             "- Если deposit_status = 1, не говори, что депозит ещё не подтверждён.\n"
-            "- Если deposit_status = 0, можно вести к пополнению и объяснять минимальный депозит.\n"
+            "- Если deposit_status = 0, можно вести к пополнению, но не называй конкретных сумм.\n"
+            "- По всем денежным условиям отправляй к личному менеджеру.\n"
             "- Если клиент спрашивает, из какой ты страны, отвечай, что ты из Беларуси.\n"
         )
 
@@ -2100,6 +2099,151 @@ async def transcribe_voice_to_text(msg: Message, bot: Bot) -> str | None:
     except Exception as e:
         logging.warning("Ошибка расшифровки голосового: %s", e)
         return None
+
+
+async def get_funnel_media_for_user(tg_user_id: int, media_key: str) -> dict | None:
+    settings = await load_kv_settings()
+    if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
+        return None
+    assert db_pool is not None
+    async with db_pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
+        await cur.execute(
+            """
+            SELECT media_key, title, file_name, telegram_file_id
+            FROM funnel_media
+            WHERE media_key = %s AND enabled = 1
+            LIMIT 1
+            """,
+            (media_key,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        await cur.execute(
+            "SELECT 1 FROM funnel_media_sent WHERE tg_user_id = %s AND media_key = %s LIMIT 1",
+            (tg_user_id, media_key),
+        )
+        if await cur.fetchone():
+            logging.info("[funnel media] skip repeated %s for user %s", media_key, tg_user_id)
+            return None
+    return row
+
+
+async def mark_funnel_media_sent(tg_user_id: int, media_key: str, telegram_file_id: str | None):
+    assert db_pool is not None
+    async with db_pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            "INSERT IGNORE INTO funnel_media_sent (tg_user_id, media_key) VALUES (%s, %s)",
+            (tg_user_id, media_key),
+        )
+        if telegram_file_id:
+            await cur.execute(
+                "UPDATE funnel_media SET telegram_file_id = %s WHERE media_key = %s",
+                (telegram_file_id, media_key),
+            )
+
+
+async def send_funnel_video_note(
+    tg_user_id: int,
+    business_id: str,
+    media_key: str,
+    bot: Bot,
+    reply_markup=None,
+) -> Message | None:
+    media = await get_funnel_media_for_user(tg_user_id, media_key)
+    if not media:
+        return None
+
+    file_name = os.path.basename(str(media.get("file_name") or ""))
+    media_root = os.path.abspath(FUNNEL_MEDIA_DIR)
+    file_path = os.path.abspath(os.path.join(media_root, file_name))
+    if os.path.commonpath((media_root, file_path)) != media_root or not os.path.isfile(file_path):
+        logging.error("[funnel media] file missing for %s: %s", media_key, file_path)
+        return None
+
+    async def send(video_note):
+        return await bot.send_video_note(
+            chat_id=tg_user_id,
+            video_note=video_note,
+            business_connection_id=business_id,
+            reply_markup=reply_markup,
+        )
+
+    sent = None
+    cached_file_id = str(media.get("telegram_file_id") or "").strip()
+    if cached_file_id:
+        try:
+            sent = await send(cached_file_id)
+        except Exception as exc:
+            logging.warning("[funnel media] cached file_id failed for %s: %s", media_key, exc)
+    if sent is None:
+        try:
+            sent = await send(FSInputFile(file_path))
+        except Exception as exc:
+            logging.exception("[funnel media] upload failed for %s: %s", media_key, exc)
+            return None
+
+    telegram_file_id = sent.video_note.file_id if sent.video_note else None
+    await mark_funnel_media_sent(tg_user_id, media_key, telegram_file_id)
+    await save_message(sent.chat.id, "out", f"[Кружок {media_key.upper()}]", is_business=True)
+    return sent
+
+
+async def send_ai_reply_with_funnel_media(
+    tg_user_id: int,
+    business_id: str,
+    reply_text: str,
+    bot: Bot,
+    reply_markup=None,
+) -> tuple[int | None, int]:
+    media_key, before, after = split_funnel_reply(reply_text)
+    if not media_key:
+        sent = await bot.send_message(
+            chat_id=tg_user_id,
+            text=reply_text,
+            business_connection_id=business_id,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML,
+        )
+        await save_message(sent.chat.id, "out", reply_text, is_business=True)
+        return sent.chat.id, 1
+
+    sent_chat_id = None
+    sent_count = 0
+
+    if before:
+        sent = await bot.send_message(
+            chat_id=tg_user_id,
+            text=before,
+            business_connection_id=business_id,
+            parse_mode=ParseMode.HTML,
+        )
+        await save_message(sent.chat.id, "out", before, is_business=True)
+        sent_chat_id, sent_count = sent.chat.id, sent_count + 1
+
+    if not is_manual_takeover_active(tg_user_id):
+        sent_media = await send_funnel_video_note(
+            tg_user_id,
+            business_id,
+            media_key,
+            bot,
+            reply_markup=reply_markup if not after else None,
+        )
+        if sent_media:
+            sent_chat_id, sent_count = sent_media.chat.id, sent_count + 1
+
+    if after and not is_manual_takeover_active(tg_user_id):
+        sent = await bot.send_message(
+            chat_id=tg_user_id,
+            text=after,
+            business_connection_id=business_id,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML,
+        )
+        await save_message(sent.chat.id, "out", after, is_business=True)
+        sent_chat_id, sent_count = sent.chat.id, sent_count + 1
+
+    return sent_chat_id, sent_count
     
 async def send_business_ai_reply(
     tg_user_id: int,
@@ -2160,10 +2304,9 @@ async def send_business_ai_reply(
                 return
 
             if code == "registered":
-                min_deposit = await get_min_deposit_threshold()
                 confirm_text = (
-                    f"Отлично, аккаунт вижу 🤝\n\nТеперь нужно пополнить баланс минимум на {min_deposit:.0f}$, "
-                    "и после этого мы продолжим дальше."
+                    "Отлично, аккаунт вижу 🤝\n\nТеперь нужно пополнить баланс, "
+                    "и после этого мы продолжим дальше. Точные условия и сумму подскажет твой личный менеджер."
                 )
                 sent = await bot.send_message(
                     chat_id=tg_user_id,
@@ -2235,10 +2378,9 @@ async def send_business_ai_reply(
             return
 
         if code == "registered":
-            min_deposit = await get_min_deposit_threshold()
             confirm_text = (
-                f"Отлично, аккаунт вижу 🤝\n\nТеперь нужно пополнить баланс минимум на {min_deposit:.0f}$, "
-                "и после этого мы продолжим дальше."
+                "Отлично, аккаунт вижу 🤝\n\nТеперь нужно пополнить баланс, "
+                "и после этого мы продолжим дальше. Точные условия и сумму подскажет твой личный менеджер."
             )
             sent = await bot.send_message(
                 chat_id=tg_user_id,
@@ -2399,7 +2541,7 @@ async def send_business_ai_reply(
                     skip_ai_reply = True
 
         elif action == "CHECK_DEPOSIT_API":
-            code, sum_deposits, min_deposit = await check_deposit_via_affiliate(tg_user_id, bot)
+            code, _sum_deposits, _min_deposit = await check_deposit_via_affiliate(tg_user_id, bot)
 
             if code == "below_threshold":
                 plan = {
@@ -2407,11 +2549,10 @@ async def send_business_ai_reply(
                     "actions": [],
                     "main_prompt": (
                         "Affiliate API показал, что депозит клиента найден, "
-                        f"но его сумма {sum_deposits:.2f} меньше минимального депозита {min_deposit:.2f}.\n\n"
+                        "но он пока ниже необходимого порога.\n\n"
                         "Основной ИИ должен сказать клиенту примерно так:\n"
-                        f"«Вижу твоё пополнение, но сумма меньше минимального депозита. "
-                        f"Минимальная сумма — {min_deposit:.0f}$. "
-                        "Сможешь докинуть до минимальной, чтобы мы продолжили? 🙂»"
+                        "«Вижу твоё пополнение, но пока нужно пополнить ещё немного. "
+                        "Точные условия и сумму подскажет твой личный менеджер 🙂»"
                     ),
                     "tone": "friendly_short",
                 }
@@ -2492,17 +2633,16 @@ async def send_business_ai_reply(
     if is_manual_takeover_active(tg_user_id):
         return
 
-    sent = await bot.send_message(
-        chat_id=tg_user_id,
-        text=reply_text,
-        business_connection_id=business_id,
+    sent_chat_id, sent_count = await send_ai_reply_with_funnel_media(
+        tg_user_id=tg_user_id,
+        business_id=business_id,
+        reply_text=reply_text,
+        bot=bot,
         reply_markup=reply_markup,
-        parse_mode=ParseMode.HTML,
     )
-    await save_message(sent.chat.id, "out", reply_text, is_business=True)
-
-    session_clients.add(sent.chat.id)
-    session_out_messages += 1
+    if sent_chat_id is not None:
+        session_clients.add(sent_chat_id)
+        session_out_messages += sent_count
 
     # 7. Обновляем долгосрочную память асинхронно
     asyncio.create_task(update_user_memory(tg_user_id))
