@@ -2269,6 +2269,7 @@ async def prepare_square_video_note(source_path: str) -> str | None:
         try:
             if (
                 os.path.isfile(output_path)
+                and os.path.getsize(output_path) > 1024
                 and os.path.getmtime(output_path) >= os.path.getmtime(source_path)
             ):
                 return output_path
