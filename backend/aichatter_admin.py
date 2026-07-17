@@ -77,6 +77,7 @@ class AichatterSettingsUpdate(BaseModel):
     check_company: Optional[bool] = None
     ai_enabled: Optional[bool] = None
     ai_model: Optional[str] = None
+    openai_api_key: Optional[str] = None
     system_prompt: Optional[str] = None
     planner_system_prompt: Optional[str] = None
     postback_log_chat_id: Optional[str] = None
@@ -195,6 +196,22 @@ async def _get_pool():
     return _pool
 
 
+async def _ensure_ai_settings_schema(pool):
+    async with pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'ai_settings'
+              AND COLUMN_NAME = 'openai_api_key'
+            LIMIT 1
+            """
+        )
+        if not await cur.fetchone():
+            await cur.execute("ALTER TABLE ai_settings ADD COLUMN openai_api_key TEXT NULL")
+
+
 def _time_text(value) -> Optional[str]:
     if value is None:
         return None
@@ -214,10 +231,13 @@ def _split_phrases(raw: str) -> list[str]:
 
 
 async def _load_settings(pool) -> Dict[str, Any]:
+    await _ensure_ai_settings_schema(pool)
     async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
         await cur.execute("SELECT work_start, work_end, is_enabled FROM settings WHERE id = 1")
         settings = await cur.fetchone() or {}
-        await cur.execute("SELECT system_prompt, planner_system_prompt, enabled, model FROM ai_settings WHERE id = 1")
+        await cur.execute(
+            "SELECT system_prompt, planner_system_prompt, enabled, model, openai_api_key FROM ai_settings WHERE id = 1"
+        )
         ai = await cur.fetchone() or {}
         await cur.execute(
             f"SELECT skey, svalue FROM kv_settings WHERE skey IN ({','.join(['%s'] * len(_KV_KEYS))})",
@@ -242,6 +262,8 @@ async def _load_settings(pool) -> Dict[str, Any]:
         "funnel_media_enabled": kv.get("FUNNEL_MEDIA_ENABLED", "1") == "1",
         "ai_enabled": bool(ai.get("enabled", 1)),
         "ai_model": ai.get("model") or "gpt-4.1",
+        "openai_api_key": "",
+        "openai_key_configured": bool(str(ai.get("openai_api_key") or "").strip()),
         "system_prompt": ai.get("system_prompt") or "",
         "planner_system_prompt": ai.get("planner_system_prompt") or "",
     }
@@ -284,6 +306,7 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
     @router.put("/settings")
     async def update_settings(payload: AichatterSettingsUpdate, admin=Depends(admin_dependency)):
         pool = await _get_pool()
+        await _ensure_ai_settings_schema(pool)
         data = payload.model_dump(exclude_unset=True)
         for key in ("work_start", "work_end"):
             if key in data and data[key] is not None and not _TIME_RE.fullmatch(data[key]):
@@ -294,6 +317,12 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid commission mode")
         if "ai_model" in data and not str(data["ai_model"] or "").strip():
             raise HTTPException(status_code=400, detail="AI model is required")
+        if "openai_api_key" in data:
+            openai_api_key = str(data["openai_api_key"] or "").strip()
+            if openai_api_key and (not openai_api_key.startswith("sk-") or len(openai_api_key) < 20):
+                raise HTTPException(status_code=400, detail="Invalid OpenAI API key")
+            if not openai_api_key:
+                data.pop("openai_api_key")
 
         async with pool.acquire() as conn, conn.cursor() as cur:
             setting_parts, setting_values = [], []
@@ -309,6 +338,7 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
             for field, column in (
                 ("ai_enabled", "enabled"),
                 ("ai_model", "model"),
+                ("openai_api_key", "openai_api_key"),
                 ("system_prompt", "system_prompt"),
                 ("planner_system_prompt", "planner_system_prompt"),
             ):

@@ -83,6 +83,7 @@ if not OPENAI_API_KEY:
     ai_client: AsyncOpenAI | None = None
 else:
     ai_client: AsyncOpenAI | None = AsyncOpenAI(api_key=OPENAI_API_KEY)
+active_openai_api_key: str = OPENAI_API_KEY
 
 db_pool: aiomysql.Pool | None = None
 
@@ -731,7 +732,7 @@ async def update_user_memory(tg_user_id: int):
         )
 
     try:
-        resp = await ai_client.chat.completions.create(
+        resp = await call_chat_with_retry(
             model=ai_model,
             messages=[
                 {
@@ -1306,11 +1307,12 @@ async def call_chat_with_retry(messages, model: str, temperature: float = 0.4,
 
     for attempt in range(1, max_retries + 1):
         try:
-            resp = await ai_client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-            )
+            request = {"model": model, "messages": messages}
+            # GPT-5 reasoning-модели принимают только стандартную temperature=1.
+            # Не передаём параметр, чтобы одна настройка модели работала для 4.x и 5.x.
+            if not model.lower().startswith("gpt-5"):
+                request["temperature"] = temperature
+            resp = await ai_client.chat.completions.create(**request)
             return resp
 
         except Exception as e:
@@ -1937,6 +1939,7 @@ async def runtime_settings_refresh_worker():
     global work_start, work_end, work_enabled_manual
     global ai_system_prompt, ai_enabled, ai_model, bot_name
     global KV_CACHE, KV_CACHE_LOADED_AT
+    global ai_client, active_openai_api_key
 
     while True:
         await asyncio.sleep(10)
@@ -1947,7 +1950,7 @@ async def runtime_settings_refresh_worker():
                 await cur.execute("SELECT work_start, work_end, is_enabled FROM settings WHERE id = 1")
                 settings_row = await cur.fetchone()
                 await cur.execute(
-                    "SELECT system_prompt, enabled, model FROM ai_settings WHERE id = 1"
+                    "SELECT system_prompt, enabled, model, openai_api_key FROM ai_settings WHERE id = 1"
                 )
                 ai_row = await cur.fetchone()
                 await cur.execute("SELECT svalue FROM kv_settings WHERE skey = 'BOT_NAME'")
@@ -1961,6 +1964,14 @@ async def runtime_settings_refresh_worker():
                 ai_system_prompt = ai_row[0] or ""
                 ai_enabled = bool(ai_row[1])
                 ai_model = ai_row[2] or "gpt-4.1"
+                next_openai_api_key = (ai_row[3] or OPENAI_API_KEY or "").strip()
+                if next_openai_api_key != active_openai_api_key:
+                    ai_client = AsyncOpenAI(api_key=next_openai_api_key) if next_openai_api_key else None
+                    active_openai_api_key = next_openai_api_key
+                    logging.info(
+                        "OpenAI client reconfigured from admin settings: configured=%s",
+                        bool(next_openai_api_key),
+                    )
             if name_row:
                 bot_name = name_row[0] or "Elizabeth Vane"
 
@@ -2769,8 +2780,6 @@ async def main():
 
     if not API_TOKEN:
         raise RuntimeError("API_TOKEN is required")
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY is required")
 
     (
         db_pool,

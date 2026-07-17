@@ -11,6 +11,12 @@ const SECTIONS = [
 ];
 
 const AI_MODEL_OPTIONS = [
+  { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol — максимальное качество' },
+  { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra — баланс качества и цены' },
+  { value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna — быстро и экономично' },
+  { value: 'gpt-5.4', label: 'GPT-5.4 — предыдущее флагманское поколение' },
+  { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini — быстрее и дешевле' },
+  { value: 'gpt-5.4-nano', label: 'GPT-5.4 nano — минимальная стоимость' },
   { value: 'gpt-4.1', label: 'GPT-4.1 — лучшее качество' },
   { value: 'gpt-4.1-mini', label: 'GPT-4.1 mini — быстрее и дешевле' },
   { value: 'gpt-4.1-nano', label: 'GPT-4.1 nano — минимальная стоимость' },
@@ -35,6 +41,8 @@ const EMPTY_SETTINGS = {
   check_company: true,
   ai_enabled: true,
   ai_model: 'gpt-4.1',
+  openai_api_key: '',
+  openai_key_configured: false,
   system_prompt: '',
   planner_system_prompt: '',
   postback_log_chat_id: '',
@@ -410,6 +418,7 @@ export default function AIChatterPage() {
               <label>Код компании<input className="admin-input" value={settings.company_code} onChange={(event) => updateField('company_code', event.target.value)} /></label>
               <label>Минимальный депозит<input className="admin-input" type="number" min="0" value={settings.min_deposit} onChange={(event) => updateField('min_deposit', Number(event.target.value))} /></label>
               <label>Модель OpenAI<select className="admin-input" value={settings.ai_model} onChange={(event) => updateField('ai_model', event.target.value)}>{!AI_MODEL_OPTIONS.some((item) => item.value === settings.ai_model) && <option value={settings.ai_model}>{settings.ai_model} — текущая</option>}{AI_MODEL_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+              <label>OpenAI API-ключ<input className="admin-input" type="password" autoComplete="off" value={settings.openai_api_key || ''} onChange={(event) => updateField('openai_api_key', event.target.value)} placeholder={settings.openai_key_configured ? 'Ключ настроен — введите новый для замены' : 'sk-proj-…'} /><small className="admin-muted">{settings.openai_key_configured ? 'Ключ настроен и скрыт. Пустое поле сохраняет текущий ключ.' : 'Ключ ещё не настроен.'}</small></label>
             </div>
           </section>
           <section className="admin-card">

@@ -53,7 +53,7 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn("runtime_settings_refresh_worker", source)
         self.assertIn("asyncio.create_task(runtime_settings_refresh_worker())", source)
         self.assertIn("SELECT work_start, work_end, is_enabled FROM settings", source)
-        self.assertIn("SELECT system_prompt, enabled, model FROM ai_settings", source)
+        self.assertIn("SELECT system_prompt, enabled, model, openai_api_key FROM ai_settings", source)
 
     def test_admin_uses_a_model_picker(self):
         source = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
@@ -61,7 +61,21 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn("AI_MODEL_OPTIONS", source)
         self.assertIn("gpt-4.1-mini", source)
         self.assertIn("gpt-4.1-nano", source)
+        self.assertIn("gpt-5.6-sol", source)
+        self.assertIn("gpt-5.6-terra", source)
+        self.assertIn("gpt-5.6-luna", source)
         self.assertIn("<label>Модель OpenAI<select", source)
+
+    def test_openai_key_is_managed_without_returning_the_secret(self):
+        backend = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
+        frontend = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
+        bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
+
+        self.assertIn("openai_api_key: Optional[str]", backend)
+        self.assertIn('"openai_api_key": ""', backend)
+        self.assertIn('"openai_key_configured"', backend)
+        self.assertIn('type="password"', frontend)
+        self.assertIn("OpenAI client reconfigured from admin settings", bot)
 
     def test_funnel_media_uses_business_video_notes_and_prevents_repeats(self):
         bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")

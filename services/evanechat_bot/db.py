@@ -430,6 +430,7 @@ async def init_db() -> Tuple[
         await ensure_column(cur, "messages", "is_business", "is_business TINYINT(1) NOT NULL DEFAULT 0")
         await ensure_column(cur, "ai_settings", "planner_system_prompt", "planner_system_prompt LONGTEXT NULL")
         await ensure_column(cur, "ai_settings", "model", "model VARCHAR(64) NOT NULL DEFAULT 'gpt-4.1-mini'")
+        await ensure_column(cur, "ai_settings", "openai_api_key", "openai_api_key TEXT NULL")
         await ensure_column(cur, "postback_events", "event_code", "event_code VARCHAR(32) NOT NULL DEFAULT 'unknown'")
         await ensure_column(cur, "postback_events", "tg_user_id", "tg_user_id BIGINT UNSIGNED DEFAULT NULL")
         await ensure_column(cur, "postback_events", "click_id", "click_id VARCHAR(128) DEFAULT NULL")
