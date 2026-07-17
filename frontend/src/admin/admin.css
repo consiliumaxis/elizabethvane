@@ -1404,6 +1404,12 @@
   margin-bottom: 4px;
 }
 
+.aichatter-conversation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .aichatter-status {
   flex: 0 0 auto;
   padding: 8px 12px;

@@ -420,6 +420,28 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
             rows = list(reversed(await cur.fetchall()))
         return {"status": "success", "messages": rows}
 
+    @router.delete("/users/{telegram_id}/messages")
+    async def clear_user_messages(telegram_id: int, admin=Depends(admin_dependency)):
+        pool = await _get_pool()
+        async with pool.acquire() as conn, conn.cursor() as cur:
+            await cur.execute("SELECT 1 FROM users WHERE tg_user_id = %s LIMIT 1", (telegram_id,))
+            if not await cur.fetchone():
+                raise HTTPException(status_code=404, detail="User not found")
+            await conn.begin()
+            try:
+                await cur.execute("DELETE FROM messages WHERE tg_user_id = %s", (telegram_id,))
+                deleted_messages = cur.rowcount
+                await cur.execute("DELETE FROM conversation_memory WHERE tg_user_id = %s", (telegram_id,))
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+        return {
+            "status": "success",
+            "telegram_id": telegram_id,
+            "deleted_messages": deleted_messages,
+        }
+
     @router.patch("/users/{telegram_id}")
     async def update_user(telegram_id: int, payload: AichatterUserUpdate, admin=Depends(admin_dependency)):
         pool = await _get_pool()

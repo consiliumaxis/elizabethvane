@@ -98,6 +98,7 @@ export default function AIChatterPage() {
   const [userSearch, setUserSearch] = useState('');
   const [selectedUser, setSelectedUser] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [clearingHistory, setClearingHistory] = useState(false);
 
   const [triggers, setTriggers] = useState([]);
   const [triggerInput, setTriggerInput] = useState('');
@@ -234,6 +235,30 @@ export default function AIChatterPage() {
       flash(user.bot_active ? 'Бот отключён для пользователя' : 'Бот включён для пользователя');
     } catch (requestError) {
       setError(requestError.message);
+    }
+  };
+
+  const clearConversationHistory = async (user) => {
+    const confirmed = window.confirm(
+      `Очистить историю диалога с ${user.first_name || user.tg_user_id}?\n\nСообщения и AI-память будут удалены без возможности восстановления.`,
+    );
+    if (!confirmed) return;
+
+    setClearingHistory(true);
+    setError('');
+    try {
+      await apiAdminFetchJson(`/api/admin/aichatter/users/${user.tg_user_id}/messages`, {
+        method: 'DELETE',
+      });
+      setMessages([]);
+      setUsers((current) => current.map((item) => (
+        item.tg_user_id === user.tg_user_id ? { ...item, messages_count: 0 } : item
+      )));
+      flash('История диалога и AI-память очищены');
+    } catch (requestError) {
+      setError(requestError.message || 'Не удалось очистить историю диалога');
+    } finally {
+      setClearingHistory(false);
     }
   };
 
@@ -510,7 +535,7 @@ export default function AIChatterPage() {
             <div className="aichatter-inline-form"><input className="admin-input" placeholder="ID, username, имя или Trader ID" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && loadUsers()} /><button className="admin-btn" onClick={() => loadUsers()}>Найти</button></div>
             <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Пользователь</th><th>Этап</th><th>Статус</th><th>Сообщения</th><th /></tr></thead><tbody>{users.map((user) => <tr key={user.tg_user_id}><td><strong>{user.first_name || 'Без имени'}</strong><br /><span className="admin-muted">@{user.username || '—'} · {user.tg_user_id}</span></td><td>{user.stage || 'new'}<br /><span className="admin-muted">Trader: {user.trader_id || '—'}</span></td><td><span className={`aichatter-pill ${user.bot_active ? 'ok' : 'off'}`}>{user.bot_active ? 'Бот включён' : 'Отключён'}</span><br /><span className="admin-muted">R: {user.registration_status ? 'да' : 'нет'} · D: {user.deposit_status ? 'да' : 'нет'}</span></td><td>{user.messages_count || 0}</td><td><button className="admin-btn-outline" onClick={() => openConversation(user)}>Открыть</button></td></tr>)}</tbody></table></div>
           </section>
-          {selectedUser && <section className="admin-card"><div className="aichatter-section-head"><div><h3 className="admin-section-title">Диалог с {selectedUser.first_name || selectedUser.tg_user_id}</h3><div className="admin-muted">{selectedUser.notes || 'Без заметок'}</div></div><button className={`admin-btn-outline ${selectedUser.bot_active ? 'danger' : ''}`} onClick={() => toggleUser(selectedUser)}>{selectedUser.bot_active ? 'Отключить бота' : 'Включить бота'}</button></div><div className="aichatter-conversation">{messages.length ? messages.map((message) => <div key={message.id} className={`aichatter-message ${message.direction === 'out' ? 'out' : 'in'}`}><div>{message.text || '—'}</div><small>{message.is_business ? 'Business · ' : ''}{formatDate(message.created_at)}</small></div>) : <div className="admin-muted">Сообщений пока нет</div>}</div></section>}
+          {selectedUser && <section className="admin-card"><div className="aichatter-section-head"><div><h3 className="admin-section-title">Диалог с {selectedUser.first_name || selectedUser.tg_user_id}</h3><div className="admin-muted">{selectedUser.notes || 'Без заметок'}</div></div><div className="aichatter-conversation-actions"><button className={`admin-btn-outline ${selectedUser.bot_active ? 'danger' : ''}`} onClick={() => toggleUser(selectedUser)}>{selectedUser.bot_active ? 'Отключить бота' : 'Включить бота'}</button><button className="admin-btn-outline danger" disabled={clearingHistory} onClick={() => clearConversationHistory(selectedUser)}>{clearingHistory ? 'Очистка…' : 'Очистить историю'}</button></div></div><div className="aichatter-conversation">{messages.length ? messages.map((message) => <div key={message.id} className={`aichatter-message ${message.direction === 'out' ? 'out' : 'in'}`}><div>{message.text || '—'}</div><small>{message.is_business ? 'Business · ' : ''}{formatDate(message.created_at)}</small></div>) : <div className="admin-muted">Сообщений пока нет</div>}</div></section>}
         </div>
       )}
 

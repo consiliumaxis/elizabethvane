@@ -14,6 +14,7 @@ class AichatterAdminTest(unittest.TestCase):
             '@router.put("/settings")',
             '@router.get("/users")',
             '@router.get("/users/{telegram_id}/messages")',
+            '@router.delete("/users/{telegram_id}/messages")',
             '@router.patch("/users/{telegram_id}")',
             '@router.put("/triggers")',
             '@router.post("/admins")',
@@ -27,6 +28,15 @@ class AichatterAdminTest(unittest.TestCase):
             self.assertIn(route, source)
         self.assertIn('prefix="/api/admin/aichatter"', source)
         self.assertIn("Depends(admin_dependency)", source)
+
+    def test_clear_history_removes_messages_and_ai_memory(self):
+        backend = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
+        frontend = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("DELETE FROM messages WHERE tg_user_id", backend)
+        self.assertIn("DELETE FROM conversation_memory WHERE tg_user_id", backend)
+        self.assertIn("window.confirm", frontend)
+        self.assertIn("Очистить историю", frontend)
 
     def test_database_config_is_isolated_from_elizabeth_database(self):
         source = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
