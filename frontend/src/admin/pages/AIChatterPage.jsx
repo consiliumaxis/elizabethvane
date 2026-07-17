@@ -10,6 +10,13 @@ const SECTIONS = [
   { id: 'admins', label: 'Админы' },
 ];
 
+const AI_MODEL_OPTIONS = [
+  { value: 'gpt-4.1', label: 'GPT-4.1 — лучшее качество' },
+  { value: 'gpt-4.1-mini', label: 'GPT-4.1 mini — быстрее и дешевле' },
+  { value: 'gpt-4.1-nano', label: 'GPT-4.1 nano — минимальная стоимость' },
+  { value: 'gpt-4o-mini', label: 'GPT-4o mini — экономичная' },
+];
+
 const EMPTY_SETTINGS = {
   system_enabled: true,
   work_start: '22:00',
@@ -350,7 +357,7 @@ export default function AIChatterPage() {
               <label>Имя менеджера<input className="admin-input" value={settings.bot_name} onChange={(event) => updateField('bot_name', event.target.value)} /></label>
               <label>Код компании<input className="admin-input" value={settings.company_code} onChange={(event) => updateField('company_code', event.target.value)} /></label>
               <label>Минимальный депозит<input className="admin-input" type="number" min="0" value={settings.min_deposit} onChange={(event) => updateField('min_deposit', Number(event.target.value))} /></label>
-              <label>Модель OpenAI<input className="admin-input" value={settings.ai_model} onChange={(event) => updateField('ai_model', event.target.value)} /></label>
+              <label>Модель OpenAI<select className="admin-input" value={settings.ai_model} onChange={(event) => updateField('ai_model', event.target.value)}>{!AI_MODEL_OPTIONS.some((item) => item.value === settings.ai_model) && <option value={settings.ai_model}>{settings.ai_model} — текущая</option>}{AI_MODEL_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
             </div>
           </section>
           <section className="admin-card">

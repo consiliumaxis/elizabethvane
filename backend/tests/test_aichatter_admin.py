@@ -52,6 +52,14 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn("SELECT work_start, work_end, is_enabled FROM settings", source)
         self.assertIn("SELECT system_prompt, enabled, model FROM ai_settings", source)
 
+    def test_admin_uses_a_model_picker(self):
+        source = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("AI_MODEL_OPTIONS", source)
+        self.assertIn("gpt-4.1-mini", source)
+        self.assertIn("gpt-4.1-nano", source)
+        self.assertIn("<label>Модель OpenAI<select", source)
+
 
 if __name__ == "__main__":
     unittest.main()
