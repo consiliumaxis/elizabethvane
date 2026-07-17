@@ -214,6 +214,9 @@ DB_CONFIG = {
     "autocommit": True
 }
 POCKET_POSTBACK_SECRET = (os.getenv("POCKET_POSTBACK_SECRET") or "").strip()
+AFFILIATE_API_SECRET = (os.getenv("AFFILIATE_API_SECRET") or "").strip()
+AFFILIATE_BOT_ID = (os.getenv("AFFILIATE_BOT_ID") or "elizabethvane").strip() or "elizabethvane"
+AI_CHAT_MIN_DEPOSIT = max(0.0, float((os.getenv("AI_CHAT_MIN_DEPOSIT") or "10").strip() or "10"))
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -1261,6 +1264,159 @@ async def get_pocket_api_settings_row(include_token: bool = False):
     if include_token:
         settings["api_token"] = token
     return settings
+
+
+def require_affiliate_api_secret(provided_secret: str) -> None:
+    if not AFFILIATE_API_SECRET:
+        raise HTTPException(status_code=503, detail="Affiliate API is not configured")
+    if not secrets.compare_digest(provided_secret or "", AFFILIATE_API_SECRET):
+        raise HTTPException(status_code=403, detail="Invalid affiliate API secret")
+
+
+def affiliate_api_response(
+    success: bool,
+    code: str,
+    message: str,
+    data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {"success": success, "code": code, "message": message, "data": data}
+
+
+def validate_affiliate_bot_id(bot_id: Any) -> None:
+    if str(bot_id or "").strip() != AFFILIATE_BOT_ID:
+        raise HTTPException(status_code=400, detail="Unknown affiliate bot id")
+
+
+async def get_affiliate_user(*, telegram_id: Optional[int] = None, trader_id: str = ""):
+    if not db_pool:
+        return None
+    clauses = []
+    params = []
+    if telegram_id:
+        clauses.append("user_id = %s")
+        params.append(int(telegram_id))
+    if trader_id:
+        clauses.append("trader_id = %s")
+        params.append(str(trader_id).strip())
+    if not clauses:
+        return None
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT user_id, username, first_name, trader_id,
+                       COALESCE(pocket_registered, 0) AS pocket_registered,
+                       COALESCE(pocket_deposited, 0) AS pocket_deposited,
+                       COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                       pocket_registered_at
+                FROM users
+                WHERE {' OR '.join(clauses)}
+                ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
+                LIMIT 1
+                """,
+                tuple(params + [int(telegram_id or 0)]),
+            )
+            return await cur.fetchone()
+
+
+@app.post("/affiliate/check-user-globally")
+async def affiliate_check_user_globally(
+    payload: Dict[str, Any],
+    x_affiliate_secret: str = Header(default="", alias="X-Affiliate-Secret"),
+):
+    require_affiliate_api_secret(x_affiliate_secret)
+    validate_affiliate_bot_id(payload.get("bot_id"))
+    return affiliate_api_response(
+        True,
+        "ok",
+        "Global user check completed",
+        {"tg_user_id": payload.get("tg_user_id"), "matches": [], "has_registered_match": False},
+    )
+
+
+@app.post("/affiliate/check-registration")
+async def affiliate_check_registration(
+    payload: Dict[str, Any],
+    x_affiliate_secret: str = Header(default="", alias="X-Affiliate-Secret"),
+):
+    require_affiliate_api_secret(x_affiliate_secret)
+    validate_affiliate_bot_id(payload.get("bot_id"))
+    telegram_id = int(payload.get("tg_user_id") or 0)
+    trader_id = str(payload.get("trader_id") or "").strip()
+    if not telegram_id or not trader_id:
+        return affiliate_api_response(False, "invalid_request", "Telegram ID and trader ID are required")
+    user = await get_affiliate_user(telegram_id=telegram_id, trader_id=trader_id)
+    if (
+        not user
+        or int(user.get("user_id") or 0) != telegram_id
+        or str(user.get("trader_id") or "").strip() != trader_id
+    ):
+        return affiliate_api_response(False, "user_not_found", "Registration was not found")
+    if not int(user.get("pocket_registered") or 0):
+        return affiliate_api_response(False, "registration_not_confirmed", "Registration is not confirmed")
+    return affiliate_api_response(
+        True,
+        "registered",
+        "Registration confirmed",
+        {
+            "bot_id": AFFILIATE_BOT_ID,
+            "tg_user_id": telegram_id,
+            "trader_id": trader_id,
+            "registration_status": 1,
+            "reg_date": user.get("pocket_registered_at"),
+        },
+    )
+
+
+@app.post("/affiliate/check-deposit")
+async def affiliate_check_deposit(
+    payload: Dict[str, Any],
+    x_affiliate_secret: str = Header(default="", alias="X-Affiliate-Secret"),
+):
+    require_affiliate_api_secret(x_affiliate_secret)
+    validate_affiliate_bot_id(payload.get("bot_id"))
+    telegram_id = int(payload.get("tg_user_id") or 0)
+    user = await get_affiliate_user(telegram_id=telegram_id)
+    if not user or not str(user.get("trader_id") or "").strip():
+        return affiliate_api_response(False, "no_trader_id", "Trader ID was not found")
+    deposit_sum = float(user.get("pocket_deposit_amount") or 0)
+    data = {
+        "tg_user_id": telegram_id,
+        "trader_id": user.get("trader_id"),
+        "sum_deposits": deposit_sum,
+        "min_deposit": AI_CHAT_MIN_DEPOSIT,
+        "shortage": max(0.0, AI_CHAT_MIN_DEPOSIT - deposit_sum),
+        "deposit_status": int(user.get("pocket_deposited") or 0),
+    }
+    if not int(user.get("pocket_deposited") or 0) or deposit_sum < AI_CHAT_MIN_DEPOSIT:
+        code = "no_deposits" if deposit_sum <= 0 else "below_threshold"
+        return affiliate_api_response(False, code, "Deposit is not confirmed", data)
+    return affiliate_api_response(True, "confirmed", "Deposit confirmed", data)
+
+
+@app.get("/affiliate/user-info")
+async def affiliate_user_info(
+    bot_id: str = Query(...),
+    trader_id: str = Query(...),
+    x_affiliate_secret: str = Header(default="", alias="X-Affiliate-Secret"),
+):
+    require_affiliate_api_secret(x_affiliate_secret)
+    validate_affiliate_bot_id(bot_id)
+    user = await get_affiliate_user(trader_id=str(trader_id or "").strip())
+    if not user:
+        return affiliate_api_response(False, "user_not_found", "User was not found")
+    return affiliate_api_response(
+        True,
+        "ok",
+        "User information loaded",
+        {
+            "client_id": user.get("trader_id"),
+            "reg_date": user.get("pocket_registered_at"),
+            "deposits_sum": float(user.get("pocket_deposit_amount") or 0),
+            "registration_status": int(user.get("pocket_registered") or 0),
+            "deposit_status": int(user.get("pocket_deposited") or 0),
+        },
+    )
 
 
 def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
