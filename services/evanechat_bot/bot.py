@@ -103,6 +103,7 @@ KV_CACHE_LOADED_AT: datetime | None = None
 pending_reply_tasks: dict[int, asyncio.Task] = {}
 pending_reply_buffers: dict[int, dict] = {}
 manual_takeover_until: dict[int, datetime] = {}
+video_note_prepare_locks: dict[str, asyncio.Lock] = {}
 work_enabled_manual: bool = True
 
 work_start: time | None = None
@@ -2257,6 +2258,67 @@ async def mark_funnel_media_sent(tg_user_id: int, media_key: str, telegram_file_
             )
 
 
+async def prepare_square_video_note(source_path: str) -> str | None:
+    """Конвертирует исходный MP4 в квадратный H.264 для Telegram video note."""
+    source_path = os.path.abspath(source_path)
+    output_dir = os.path.join(os.path.dirname(source_path), ".video_notes")
+    output_path = os.path.join(output_dir, os.path.basename(source_path))
+    lock = video_note_prepare_locks.setdefault(output_path, asyncio.Lock())
+
+    async with lock:
+        try:
+            if (
+                os.path.isfile(output_path)
+                and os.path.getmtime(output_path) >= os.path.getmtime(source_path)
+            ):
+                return output_path
+        except OSError:
+            pass
+
+        os.makedirs(output_dir, exist_ok=True)
+        temp_path = f"{output_path}.tmp.mp4"
+        filter_graph = (
+            "crop=w='min(iw,ih)':h='min(iw,ih)':"
+            "x='(iw-ow)/2':y='(ih-oh)*0.15',scale=512:512:flags=lanczos"
+        )
+        command = (
+            "ffmpeg", "-y", "-v", "error", "-i", source_path,
+            "-map", "0:v:0", "-map", "0:a?", "-t", "59",
+            "-vf", filter_graph,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k",
+            "-movflags", "+faststart", temp_path,
+        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await process.communicate()
+            if process.returncode != 0:
+                logging.error(
+                    "[funnel media] ffmpeg failed for %s: %s",
+                    source_path,
+                    stderr.decode("utf-8", "replace")[-2000:],
+                )
+                return None
+            os.replace(temp_path, output_path)
+            return output_path
+        except FileNotFoundError:
+            logging.error("[funnel media] ffmpeg is not installed")
+            return None
+        except Exception as exc:
+            logging.exception("[funnel media] conversion failed for %s: %s", source_path, exc)
+            return None
+        finally:
+            if os.path.isfile(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+
 async def send_funnel_video_note(
     tg_user_id: int,
     business_id: str,
@@ -2275,6 +2337,10 @@ async def send_funnel_video_note(
         logging.error("[funnel media] file missing for %s: %s", media_key, file_path)
         return None
 
+    video_note_path = await prepare_square_video_note(file_path)
+    if not video_note_path:
+        return None
+
     async def send(video_note):
         return await bot.send_video_note(
             chat_id=tg_user_id,
@@ -2288,16 +2354,25 @@ async def send_funnel_video_note(
     if cached_file_id:
         try:
             sent = await send(cached_file_id)
+            if not sent.video_note:
+                logging.warning(
+                    "[funnel media] cached file_id is not a video note for %s; uploading normalized file",
+                    media_key,
+                )
+                sent = None
         except Exception as exc:
             logging.warning("[funnel media] cached file_id failed for %s: %s", media_key, exc)
     if sent is None:
         try:
-            sent = await send(FSInputFile(file_path))
+            sent = await send(FSInputFile(video_note_path))
         except Exception as exc:
             logging.exception("[funnel media] upload failed for %s: %s", media_key, exc)
             return None
 
     telegram_file_id = sent.video_note.file_id if sent.video_note else None
+    if not telegram_file_id:
+        logging.error("[funnel media] Telegram returned no video_note for %s", media_key)
+        return None
     await mark_funnel_media_sent(tg_user_id, media_key, telegram_file_id)
     await save_message(sent.chat.id, "out", f"[Кружок {media_key.upper()}]", is_business=True)
     return sent
