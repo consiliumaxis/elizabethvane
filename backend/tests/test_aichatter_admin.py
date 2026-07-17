@@ -69,6 +69,8 @@ class AichatterAdminTest(unittest.TestCase):
 
         self.assertIn("split_funnel_reply", bot)
         self.assertIn("send_ai_reply_with_funnel_media", bot)
+        self.assertIn("get_funnel_routing_prompt", bot)
+        self.assertIn("ORDER BY sort_order, id", bot)
         self.assertIn("bot.send_video_note", bot)
         self.assertIn("business_connection_id=business_id", bot)
         self.assertIn("funnel_media_sent", bot)

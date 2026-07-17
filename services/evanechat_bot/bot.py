@@ -1015,6 +1015,36 @@ async def get_user_status_flags(tg_user_id: int) -> tuple[int, int, str | None]:
 
     return reg_status, dep_status, country
 
+
+async def get_funnel_routing_prompt() -> str:
+    settings = await load_kv_settings()
+    if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
+        return "Отправка кружков сейчас отключена: не используй теги [SEND:id]."
+    assert db_pool is not None
+    async with db_pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
+        await cur.execute(
+            """
+            SELECT media_key, block_code, title, description
+            FROM funnel_media
+            WHERE enabled = 1
+            ORDER BY sort_order, id
+            """
+        )
+        rows = await cur.fetchall()
+    if not rows:
+        return "Отправка кружков сейчас отключена: не используй теги [SEND:id]."
+    lines = [
+        "Управляемая карта кружков из админцентра (порядок строк — порядок воронки):",
+        "Используй только перечисленные ID, не перепрыгивай этапы без причины и не отправляй больше одного кружка за ответ.",
+    ]
+    for index, row in enumerate(rows, start=1):
+        description = " ".join(str(row.get("description") or "").split())
+        lines.append(
+            f"{index}. [SEND:{row['media_key']}] · блок {row['block_code']} · "
+            f"{row['title']}" + (f" — {description}" if description else "")
+        )
+    return "\n".join(lines)
+
 async def is_user_bot_active(tg_user_id: int) -> bool:
     """
     Проверяем, не отключён ли автоответчик для этого пользователя.
@@ -1771,6 +1801,8 @@ async def generate_ai_reply(
                 ),
             },
         ]
+
+        messages.append({"role": "system", "content": await get_funnel_routing_prompt()})
 
         if long_memory:
             messages.append({
