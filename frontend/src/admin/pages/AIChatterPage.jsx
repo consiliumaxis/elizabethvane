@@ -1,0 +1,397 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { apiAdminFetchJson } from '../../lib/api';
+
+const SECTIONS = [
+  { id: 'overview', label: 'Обзор' },
+  { id: 'settings', label: 'Настройки' },
+  { id: 'users', label: 'Диалоги' },
+  { id: 'triggers', label: 'Триггеры' },
+  { id: 'postbacks', label: 'Постбеки' },
+  { id: 'admins', label: 'Админы' },
+];
+
+const EMPTY_SETTINGS = {
+  system_enabled: true,
+  work_start: '22:00',
+  work_end: '10:00',
+  bot_name: 'Elizabeth Vane',
+  company_code: '',
+  min_deposit: 10,
+  check_company: true,
+  ai_enabled: true,
+  ai_model: 'gpt-4.1',
+  system_prompt: '',
+  planner_system_prompt: '',
+  postback_log_chat_id: '',
+  log_registrations: true,
+  log_deposits: true,
+  log_withdrawals: true,
+  log_commissions: true,
+  log_system_errors: false,
+  commission_mode: 'auto',
+};
+
+const formatDate = (value) => {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString('ru-RU');
+};
+
+const formatMoney = (value) => Number(value || 0).toLocaleString('ru-RU', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+function Toggle({ checked, onChange, label, hint }) {
+  return (
+    <label className="aichatter-toggle-row">
+      <input type="checkbox" checked={Boolean(checked)} onChange={(event) => onChange(event.target.checked)} />
+      <span>
+        <strong>{label}</strong>
+        {hint && <small>{hint}</small>}
+      </span>
+    </label>
+  );
+}
+
+export default function AIChatterPage() {
+  const [section, setSection] = useState('overview');
+  const [overview, setOverview] = useState({ counts: {}, settings: EMPTY_SETTINGS });
+  const [settings, setSettings] = useState(EMPTY_SETTINGS);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const [users, setUsers] = useState([]);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const [userSearch, setUserSearch] = useState('');
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [messages, setMessages] = useState([]);
+
+  const [triggers, setTriggers] = useState([]);
+  const [triggerInput, setTriggerInput] = useState('');
+  const [admins, setAdmins] = useState([]);
+  const [adminInput, setAdminInput] = useState('');
+  const [postbacks, setPostbacks] = useState([]);
+  const [postbackFilter, setPostbackFilter] = useState('');
+  const [statistics, setStatistics] = useState({ daily: [], manual_commissions: [] });
+  const [statsDays, setStatsDays] = useState(7);
+  const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
+  const [manualAmount, setManualAmount] = useState('');
+
+  const flash = (message) => {
+    setSuccess(message);
+    window.setTimeout(() => setSuccess(''), 2500);
+  };
+
+  const loadOverview = useCallback(async () => {
+    const result = await apiAdminFetchJson('/api/admin/aichatter/overview');
+    const nextSettings = { ...EMPTY_SETTINGS, ...(result.settings || {}) };
+    setOverview({ counts: result.counts || {}, settings: nextSettings });
+    setSettings(nextSettings);
+  }, []);
+
+  const loadUsers = useCallback(async (search = userSearch) => {
+    const params = new URLSearchParams({ search, page: '1', limit: '100' });
+    const result = await apiAdminFetchJson(`/api/admin/aichatter/users?${params}`);
+    setUsers(result.users || []);
+    setUsersTotal(result.total || 0);
+  }, [userSearch]);
+
+  const loadTriggers = useCallback(async () => {
+    const result = await apiAdminFetchJson('/api/admin/aichatter/triggers');
+    setTriggers(result.phrases || []);
+  }, []);
+
+  const loadAdmins = useCallback(async () => {
+    const result = await apiAdminFetchJson('/api/admin/aichatter/admins');
+    setAdmins(result.admins || []);
+  }, []);
+
+  const loadPostbacks = useCallback(async () => {
+    const params = new URLSearchParams({ page: '1', limit: '100' });
+    if (postbackFilter) params.set('event_code', postbackFilter);
+    const result = await apiAdminFetchJson(`/api/admin/aichatter/postbacks?${params}`);
+    setPostbacks(result.events || []);
+  }, [postbackFilter]);
+
+  const loadStatistics = useCallback(async (days) => {
+    const result = await apiAdminFetchJson(`/api/admin/aichatter/statistics?days=${days}`);
+    setStatistics({ daily: result.daily || [], manual_commissions: result.manual_commissions || [] });
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      Promise.all([loadOverview(), loadTriggers(), loadAdmins(), loadStatistics(7)])
+        .catch((requestError) => setError(requestError.message || 'Не удалось загрузить АИЧАТТЕР'))
+        .finally(() => setLoading(false));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadOverview, loadTriggers, loadAdmins, loadStatistics]);
+
+  const selectSection = async (nextSection) => {
+    setSection(nextSection);
+    try {
+      if (nextSection === 'users') await loadUsers();
+      if (nextSection === 'postbacks') await loadPostbacks();
+    } catch (requestError) {
+      setError(requestError.message || 'Не удалось загрузить данные');
+    }
+  };
+
+  const changeStatsDays = async (days) => {
+    setStatsDays(days);
+    try {
+      await loadStatistics(days);
+    } catch (requestError) {
+      setError(requestError.message || 'Не удалось загрузить статистику');
+    }
+  };
+
+  const counts = overview.counts || {};
+  const dailyTotals = useMemo(() => statistics.daily.reduce((acc, row) => ({
+    registrations: acc.registrations + Number(row.registrations_count || 0),
+    firstDeposits: acc.firstDeposits + Number(row.first_deposit_total || 0),
+    deposits: acc.deposits + Number(row.deposit_total || 0),
+    commissions: acc.commissions + Number(row.commission_total || 0),
+  }), { registrations: 0, firstDeposits: 0, deposits: 0, commissions: 0 }), [statistics.daily]);
+
+  const updateField = (field, value) => setSettings((current) => ({ ...current, [field]: value }));
+
+  const saveSettings = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const result = await apiAdminFetchJson('/api/admin/aichatter/settings', {
+        method: 'PUT',
+        body: JSON.stringify(settings),
+      });
+      const next = { ...EMPTY_SETTINGS, ...(result.settings || {}) };
+      setSettings(next);
+      setOverview((current) => ({ ...current, settings: next }));
+      flash('Настройки сохранены. Бот применит их в течение 10 секунд.');
+    } catch (requestError) {
+      setError(requestError.message || 'Не удалось сохранить настройки');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openConversation = async (user) => {
+    setSelectedUser(user);
+    setMessages([]);
+    try {
+      const result = await apiAdminFetchJson(`/api/admin/aichatter/users/${user.tg_user_id}/messages?limit=200`);
+      setMessages(result.messages || []);
+    } catch (requestError) {
+      setError(requestError.message || 'Не удалось загрузить переписку');
+    }
+  };
+
+  const toggleUser = async (user) => {
+    try {
+      await apiAdminFetchJson(`/api/admin/aichatter/users/${user.tg_user_id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ bot_active: !user.bot_active }),
+      });
+      await loadUsers();
+      if (selectedUser?.tg_user_id === user.tg_user_id) {
+        setSelectedUser((current) => ({ ...current, bot_active: !current.bot_active }));
+      }
+      flash(user.bot_active ? 'Бот отключён для пользователя' : 'Бот включён для пользователя');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
+  const saveTriggers = async (next) => {
+    try {
+      const result = await apiAdminFetchJson('/api/admin/aichatter/triggers', {
+        method: 'PUT',
+        body: JSON.stringify({ phrases: next }),
+      });
+      setTriggers(result.phrases || []);
+      flash('Триггеры обновлены');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
+  const addTriggers = () => {
+    const additions = triggerInput.split(',').map((item) => item.trim()).filter(Boolean);
+    const existing = new Set(triggers.map((item) => item.toLocaleLowerCase()));
+    const next = [...triggers];
+    additions.forEach((item) => {
+      if (!existing.has(item.toLocaleLowerCase())) next.push(item);
+    });
+    setTriggerInput('');
+    saveTriggers(next);
+  };
+
+  const addAdmin = async () => {
+    const telegramId = Number(adminInput);
+    if (!Number.isInteger(telegramId) || telegramId <= 0) {
+      setError('Укажи корректный Telegram ID');
+      return;
+    }
+    try {
+      await apiAdminFetchJson('/api/admin/aichatter/admins', {
+        method: 'POST',
+        body: JSON.stringify({ telegram_id: telegramId }),
+      });
+      setAdminInput('');
+      await loadAdmins();
+      flash('Администратор добавлен');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
+  const removeAdmin = async (telegramId) => {
+    try {
+      await apiAdminFetchJson(`/api/admin/aichatter/admins/${telegramId}`, { method: 'DELETE' });
+      await loadAdmins();
+      flash('Администратор удалён');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
+  const saveManualCommission = async () => {
+    const amount = Number(manualAmount);
+    if (!manualDate || !Number.isFinite(amount) || amount < 0) {
+      setError('Укажи дату и корректную сумму');
+      return;
+    }
+    try {
+      await apiAdminFetchJson('/api/admin/aichatter/statistics/manual-commission', {
+        method: 'PUT',
+        body: JSON.stringify({ stat_date: manualDate, amount }),
+      });
+      setManualAmount('');
+      await loadStatistics(statsDays);
+      flash('Ручная комиссия сохранена');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
+  if (loading) return <div className="admin-card admin-muted">Загрузка АИЧАТТЕР…</div>;
+
+  return (
+    <div className="aichatter-layout">
+      <section className="admin-card aichatter-hero">
+        <div>
+          <div className="admin-badge">@EVanechat_bot</div>
+          <h2 className="admin-subtitle">AI-менеджер Elizabeth Vane</h2>
+          <p className="admin-muted">Настройки применяются к работающему боту и общей базе aichat.</p>
+        </div>
+        <div className={`aichatter-status ${settings.system_enabled && settings.ai_enabled ? 'online' : 'paused'}`}>
+          {settings.system_enabled && settings.ai_enabled ? 'Работает' : 'Приостановлен'}
+        </div>
+      </section>
+
+      <nav className="admin-card aichatter-nav">
+        {SECTIONS.map((item) => (
+          <button key={item.id} className={`admin-btn-outline ${section === item.id ? 'active' : ''}`} onClick={() => selectSection(item.id)}>
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      {error && <div className="admin-error">{error}</div>}
+      {success && <div className="admin-success">{success}</div>}
+
+      {section === 'overview' && (
+        <div className="aichatter-stack">
+          <section className="admin-kpi-grid aichatter-kpi-grid">
+            {[
+              ['Пользователи', counts.users_total || 0],
+              ['Активен бот', counts.users_active || 0],
+              ['Сообщения', counts.messages_total || 0],
+              ['Регистрации', counts.registrations || 0],
+              ['Депозиты', counts.deposits || 0],
+              ['Триггеры', counts.triggers_total || 0],
+              ['Администраторы', counts.admins_total || 0],
+            ].map(([label, value]) => (
+              <div className="admin-kpi-chip" key={label}><div className="admin-kpi-label">{label}</div><div className="admin-kpi-value">{value}</div></div>
+            ))}
+          </section>
+          <section className="admin-card">
+            <div className="aichatter-section-head">
+              <div><h3 className="admin-section-title">Статистика</h3><div className="admin-muted">Последние {statsDays} дней</div></div>
+              <select className="admin-input compact" value={statsDays} onChange={(event) => changeStatsDays(Number(event.target.value))}>
+                <option value={1}>Сегодня</option><option value={7}>7 дней</option><option value={14}>14 дней</option><option value={30}>30 дней</option>
+              </select>
+            </div>
+            <div className="aichatter-summary-grid">
+              <div><span>Регистрации</span><strong>{dailyTotals.registrations}</strong></div>
+              <div><span>Первый депозит</span><strong>{formatMoney(dailyTotals.firstDeposits)}</strong></div>
+              <div><span>Депозиты</span><strong>{formatMoney(dailyTotals.deposits)}</strong></div>
+              <div><span>Комиссия</span><strong>{formatMoney(dailyTotals.commissions)}</strong></div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {section === 'settings' && (
+        <div className="aichatter-stack">
+          <section className="admin-card">
+            <h3 className="admin-section-title">Работа бота</h3>
+            <div className="aichatter-toggle-grid">
+              <Toggle checked={settings.system_enabled} onChange={(value) => updateField('system_enabled', value)} label="Система включена" hint="Глобально разрешает ответы бота" />
+              <Toggle checked={settings.ai_enabled} onChange={(value) => updateField('ai_enabled', value)} label="ИИ включён" hint="Разрешает запросы к OpenAI" />
+              <Toggle checked={settings.check_company} onChange={(value) => updateField('check_company', value)} label="Проверять компанию" hint="Проверка партнёрской компании при регистрации" />
+            </div>
+            <div className="admin-grid aichatter-form-grid">
+              <label>Начало работы<input className="admin-input" type="time" value={settings.work_start || ''} onChange={(event) => updateField('work_start', event.target.value)} /></label>
+              <label>Конец работы<input className="admin-input" type="time" value={settings.work_end || ''} onChange={(event) => updateField('work_end', event.target.value)} /></label>
+              <label>Имя менеджера<input className="admin-input" value={settings.bot_name} onChange={(event) => updateField('bot_name', event.target.value)} /></label>
+              <label>Код компании<input className="admin-input" value={settings.company_code} onChange={(event) => updateField('company_code', event.target.value)} /></label>
+              <label>Минимальный депозит<input className="admin-input" type="number" min="0" value={settings.min_deposit} onChange={(event) => updateField('min_deposit', Number(event.target.value))} /></label>
+              <label>Модель OpenAI<input className="admin-input" value={settings.ai_model} onChange={(event) => updateField('ai_model', event.target.value)} /></label>
+            </div>
+          </section>
+          <section className="admin-card">
+            <h3 className="admin-section-title">Промпты</h3>
+            <label>Основной промпт<textarea className="admin-textarea aichatter-prompt" value={settings.system_prompt} onChange={(event) => updateField('system_prompt', event.target.value)} /></label>
+            <label>Промпт планировщика<textarea className="admin-textarea aichatter-prompt small" value={settings.planner_system_prompt} onChange={(event) => updateField('planner_system_prompt', event.target.value)} /></label>
+          </section>
+          <section className="admin-card">
+            <h3 className="admin-section-title">Постбеки и логирование</h3>
+            <div className="admin-grid aichatter-form-grid">
+              <label>Chat ID для логов<input className="admin-input" value={settings.postback_log_chat_id} onChange={(event) => updateField('postback_log_chat_id', event.target.value)} /></label>
+              <label>Режим комиссии<select className="admin-input" value={settings.commission_mode} onChange={(event) => updateField('commission_mode', event.target.value)}><option value="auto">Авто</option><option value="manual">Ручной</option><option value="auto_plus">Авто+</option></select></label>
+            </div>
+            <div className="aichatter-toggle-grid">
+              <Toggle checked={settings.log_registrations} onChange={(value) => updateField('log_registrations', value)} label="Регистрации" />
+              <Toggle checked={settings.log_deposits} onChange={(value) => updateField('log_deposits', value)} label="Депозиты" />
+              <Toggle checked={settings.log_withdrawals} onChange={(value) => updateField('log_withdrawals', value)} label="Выводы" />
+              <Toggle checked={settings.log_commissions} onChange={(value) => updateField('log_commissions', value)} label="Комиссии" />
+              <Toggle checked={settings.log_system_errors} onChange={(value) => updateField('log_system_errors', value)} label="Системные ошибки" />
+            </div>
+          </section>
+          <button className="admin-btn aichatter-save" disabled={saving} onClick={saveSettings}>{saving ? 'Сохранение…' : 'Сохранить все настройки'}</button>
+        </div>
+      )}
+
+      {section === 'users' && (
+        <div className="aichatter-stack">
+          <section className="admin-card">
+            <div className="aichatter-section-head"><div><h3 className="admin-section-title">Пользователи и диалоги</h3><div className="admin-muted">Найдено: {usersTotal}</div></div></div>
+            <div className="aichatter-inline-form"><input className="admin-input" placeholder="ID, username, имя или Trader ID" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && loadUsers()} /><button className="admin-btn" onClick={() => loadUsers()}>Найти</button></div>
+            <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Пользователь</th><th>Этап</th><th>Статус</th><th>Сообщения</th><th /></tr></thead><tbody>{users.map((user) => <tr key={user.tg_user_id}><td><strong>{user.first_name || 'Без имени'}</strong><br /><span className="admin-muted">@{user.username || '—'} · {user.tg_user_id}</span></td><td>{user.stage || 'new'}<br /><span className="admin-muted">Trader: {user.trader_id || '—'}</span></td><td><span className={`aichatter-pill ${user.bot_active ? 'ok' : 'off'}`}>{user.bot_active ? 'Бот включён' : 'Отключён'}</span><br /><span className="admin-muted">R: {user.registration_status ? 'да' : 'нет'} · D: {user.deposit_status ? 'да' : 'нет'}</span></td><td>{user.messages_count || 0}</td><td><button className="admin-btn-outline" onClick={() => openConversation(user)}>Открыть</button></td></tr>)}</tbody></table></div>
+          </section>
+          {selectedUser && <section className="admin-card"><div className="aichatter-section-head"><div><h3 className="admin-section-title">Диалог с {selectedUser.first_name || selectedUser.tg_user_id}</h3><div className="admin-muted">{selectedUser.notes || 'Без заметок'}</div></div><button className={`admin-btn-outline ${selectedUser.bot_active ? 'danger' : ''}`} onClick={() => toggleUser(selectedUser)}>{selectedUser.bot_active ? 'Отключить бота' : 'Включить бота'}</button></div><div className="aichatter-conversation">{messages.length ? messages.map((message) => <div key={message.id} className={`aichatter-message ${message.direction === 'out' ? 'out' : 'in'}`}><div>{message.text || '—'}</div><small>{message.is_business ? 'Business · ' : ''}{formatDate(message.created_at)}</small></div>) : <div className="admin-muted">Сообщений пока нет</div>}</div></section>}
+        </div>
+      )}
+
+      {section === 'triggers' && <section className="admin-card"><h3 className="admin-section-title">Стоп-триггеры</h3><p className="admin-muted">Если клиент использует одну из фраз, бот останавливает автоматический диалог и уведомляет администраторов.</p><div className="aichatter-inline-form"><input className="admin-input" placeholder="Несколько фраз через запятую" value={triggerInput} onChange={(event) => setTriggerInput(event.target.value)} /><button className="admin-btn" onClick={addTriggers}>Добавить</button></div><div className="aichatter-tags">{triggers.map((trigger) => <button key={trigger} title="Удалить" onClick={() => saveTriggers(triggers.filter((item) => item !== trigger))}>{trigger}<span>×</span></button>)}</div></section>}
+
+      {section === 'postbacks' && <div className="aichatter-stack"><section className="admin-card"><div className="aichatter-section-head"><h3 className="admin-section-title">События postback</h3><div className="aichatter-inline-form compact"><select className="admin-input compact" value={postbackFilter} onChange={(event) => setPostbackFilter(event.target.value)}><option value="">Все события</option><option value="reg">Регистрация</option><option value="dep1">Первый депозит</option><option value="dep">Депозит</option><option value="wdr">Вывод</option><option value="commission">Комиссия</option></select><button className="admin-btn-outline" onClick={loadPostbacks}>Обновить</button></div></div><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Дата</th><th>Событие</th><th>Пользователь</th><th>Trader ID</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>{postbacks.map((item) => <tr key={item.id}><td>{formatDate(item.created_at)}</td><td>{item.event_code}</td><td>{item.tg_user_id || '—'}</td><td>{item.trader_id || '—'}</td><td>{formatMoney(item.commission || item.sumdep || item.wdr_sum)}</td><td>{item.status || '—'}</td></tr>)}</tbody></table></div></section><section className="admin-card"><h3 className="admin-section-title">Ручная комиссия</h3><div className="aichatter-inline-form"><input className="admin-input" type="date" value={manualDate} onChange={(event) => setManualDate(event.target.value)} /><input className="admin-input" type="number" min="0" step="0.01" placeholder="Сумма" value={manualAmount} onChange={(event) => setManualAmount(event.target.value)} /><button className="admin-btn" onClick={saveManualCommission}>Сохранить</button></div>{statistics.manual_commissions.length > 0 && <div className="aichatter-manual-list">{statistics.manual_commissions.map((item) => <span key={item.stat_date}>{String(item.stat_date).slice(0, 10)}: <strong>{formatMoney(item.amount)}</strong></span>)}</div>}</section></div>}
+
+      {section === 'admins' && <section className="admin-card"><h3 className="admin-section-title">Администраторы AI-бота</h3><p className="admin-muted">Эти пользователи получают доступ к команде /admin в Telegram-боте.</p><div className="aichatter-inline-form"><input className="admin-input" inputMode="numeric" placeholder="Telegram ID" value={adminInput} onChange={(event) => setAdminInput(event.target.value)} /><button className="admin-btn" onClick={addAdmin}>Добавить</button></div><div className="admin-list">{admins.length ? admins.map((item) => <div className="admin-list-row" key={item.tg_user_id}><div><strong>{item.tg_user_id}</strong><div className="admin-muted">Добавлен: {formatDate(item.created_at)}</div></div><button className="admin-btn-outline danger" onClick={() => removeAdmin(item.tg_user_id)}>Удалить</button></div>) : <div className="admin-muted">Дополнительных администраторов пока нет. Администраторы Elizabeth уже подключены через серверную конфигурацию.</div>}</div></section>}
+    </div>
+  );
+}

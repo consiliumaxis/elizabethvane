@@ -32,7 +32,7 @@ from aiogram.types import (
 )
 from aiogram.dispatcher.router import Router
 
-from db import init_db
+from db import init_db, to_time
 from flows.vip import send_vip_onboarding_flow
 from flows.existing_account import send_existing_account_flow
 from flows.greeting import send_greeting_flow
@@ -1902,6 +1902,44 @@ async def work_monitor(bot: Bot):
         await asyncio.sleep(30)
 
 
+async def runtime_settings_refresh_worker():
+    global work_start, work_end, work_enabled_manual
+    global ai_system_prompt, ai_enabled, ai_model, bot_name
+    global KV_CACHE, KV_CACHE_LOADED_AT
+
+    while True:
+        await asyncio.sleep(10)
+        if db_pool is None:
+            continue
+        try:
+            async with db_pool.acquire() as conn, conn.cursor() as cur:
+                await cur.execute("SELECT work_start, work_end, is_enabled FROM settings WHERE id = 1")
+                settings_row = await cur.fetchone()
+                await cur.execute(
+                    "SELECT system_prompt, enabled, model FROM ai_settings WHERE id = 1"
+                )
+                ai_row = await cur.fetchone()
+                await cur.execute("SELECT svalue FROM kv_settings WHERE skey = 'BOT_NAME'")
+                name_row = await cur.fetchone()
+
+            if settings_row:
+                work_start = to_time(settings_row[0]) if settings_row[0] is not None else None
+                work_end = to_time(settings_row[1]) if settings_row[1] is not None else None
+                work_enabled_manual = bool(settings_row[2])
+            if ai_row:
+                ai_system_prompt = ai_row[0] or ""
+                ai_enabled = bool(ai_row[1])
+                ai_model = ai_row[2] or "gpt-4.1"
+            if name_row:
+                bot_name = name_row[0] or "Elizabeth Vane"
+
+            KV_CACHE = {}
+            KV_CACHE_LOADED_AT = None
+            await refresh_admin_ids_cache()
+        except Exception as exc:
+            logging.warning("Runtime settings refresh failed: %s", exc)
+
+
 # ================== ОБРАБОТЧИКИ БИЗНЕС-СОБЫТИЙ ==================
 
 
@@ -2611,6 +2649,7 @@ async def main():
 
     asyncio.create_task(work_monitor(bot))
     asyncio.create_task(backfill_missing_trader_ids_from_messages())
+    asyncio.create_task(runtime_settings_refresh_worker())
 
     try:
         await dp.start_polling(bot)

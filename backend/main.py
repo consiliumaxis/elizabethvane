@@ -163,6 +163,10 @@ except ModuleNotFoundError:
         normalize_min_deposit,
         system_policy_grants_signal_access,
     )
+try:
+    from backend.aichatter_admin import create_aichatter_admin_router
+except ModuleNotFoundError:
+    from aichatter_admin import create_aichatter_admin_router
 
 load_dotenv()
 
@@ -326,6 +330,9 @@ async def get_admin_user(
     # Telegram WebApp initData already proves the user identity; keep old
     # admin buttons working even if their URL token was rotated by a deploy.
     return user
+
+
+app.include_router(create_aichatter_admin_router(get_admin_user))
 
 
 async def get_stream_settings_row():
