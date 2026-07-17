@@ -101,6 +101,20 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS funnel_media", db)
         self.assertIn("CREATE TABLE IF NOT EXISTS funnel_media_sent", db)
 
+    def test_business_messages_are_marked_read(self):
+        bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
+
+        self.assertIn("class ReadBusinessMessage", bot)
+        self.assertIn('__api_method__ = "readBusinessMessage"', bot)
+        self.assertIn("await mark_business_message_read(msg, bot)", bot)
+
+    def test_cold_stage_has_deterministic_media_fallback(self):
+        bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
+
+        self.assertIn("get_next_unsent_funnel_media_key", bot)
+        self.assertIn('get_next_unsent_funnel_media_key(tg_user_id, "A")', bot)
+        self.assertIn("inserted required cold-stage media", bot)
+
     def test_funnel_default_order_is_semantic_not_alphabetical(self):
         source = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
         expected = [

@@ -18,6 +18,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.filters import Command
+from aiogram.methods.base import TelegramMethod
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -108,6 +109,17 @@ work_start: time | None = None
 work_end: time | None = None
 
 router = Router()
+
+
+class ReadBusinessMessage(TelegramMethod[bool]):
+    """Совместимость readBusinessMessage с закреплённой версией aiogram."""
+
+    __returning__ = bool
+    __api_method__ = "readBusinessMessage"
+
+    business_connection_id: str
+    chat_id: int
+    message_id: int
 
 def build_register_link(tg_user_id: int) -> str:
     parts = urlsplit(REGISTER_BASE_URL)
@@ -1046,6 +1058,30 @@ async def get_funnel_routing_prompt() -> str:
         )
     return "\n".join(lines)
 
+
+async def get_next_unsent_funnel_media_key(tg_user_id: int, block_code: str) -> str | None:
+    settings = await load_kv_settings()
+    if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
+        return None
+    assert db_pool is not None
+    async with db_pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT fm.media_key
+            FROM funnel_media fm
+            LEFT JOIN funnel_media_sent fms
+              ON fms.media_key = fm.media_key AND fms.tg_user_id = %s
+            WHERE fm.enabled = 1
+              AND fm.block_code = %s
+              AND fms.media_key IS NULL
+            ORDER BY fm.sort_order, fm.id
+            LIMIT 1
+            """,
+            (tg_user_id, block_code),
+        )
+        row = await cur.fetchone()
+    return str(row[0]) if row else None
+
 async def is_user_bot_active(tg_user_id: int) -> bool:
     """
     Проверяем, не отключён ли автоответчик для этого пользователя.
@@ -1844,6 +1880,17 @@ async def generate_ai_reply(
 
         reply = (resp.choices[0].message.content or "").strip()
 
+        selected_media_key, _, _ = split_funnel_reply(reply)
+        if stage == STAGE_NEW and not selected_media_key:
+            selected_media_key = await get_next_unsent_funnel_media_key(tg_user_id, "A")
+            if selected_media_key:
+                reply = f"[SEND:{selected_media_key}]\n\n{reply}"
+                logging.info(
+                    "[funnel media] inserted required cold-stage media %s for user %s",
+                    selected_media_key,
+                    tg_user_id,
+                )
+
         # обновляем этап воронки на основе диалога
         try:
             await update_user_stage_from_exchange(
@@ -1985,6 +2032,27 @@ async def runtime_settings_refresh_worker():
 # ================== ОБРАБОТЧИКИ БИЗНЕС-СОБЫТИЙ ==================
 
 
+async def mark_business_message_read(msg: Message, bot: Bot):
+    business_id = msg.business_connection_id
+    if not business_id:
+        return
+    try:
+        await bot(
+            ReadBusinessMessage(
+                business_connection_id=business_id,
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
+            )
+        )
+    except Exception as exc:
+        logging.warning(
+            "[business read] failed for chat=%s message=%s: %s",
+            msg.chat.id,
+            msg.message_id,
+            exc,
+        )
+
+
 @router.business_connection()
 async def on_business_connection(connection: BusinessConnection):
     print(
@@ -2014,6 +2082,7 @@ async def on_business_message(msg: Message, bot: Bot):
     if await has_recent_matching_outgoing_business_message(msg.chat.id, msg.text or ""):
         return
 
+    await mark_business_message_read(msg, bot)
     await save_user_from_message(msg)
     await save_message(msg.chat.id, "in", msg.text or "", is_business=True)
     await passive_sync_user_context(msg.chat.id, incoming_text=msg.text or "")
@@ -2040,6 +2109,8 @@ async def on_business_voice(msg: Message, bot: Bot):
     message_kind = get_business_message_kind(msg, bot)
     if message_kind != "incoming":
         return
+
+    await mark_business_message_read(msg, bot)
 
     if not await is_user_bot_active(tg_id):
         await save_message(
