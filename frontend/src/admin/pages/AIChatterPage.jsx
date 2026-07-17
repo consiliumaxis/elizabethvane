@@ -8,7 +8,6 @@ const SECTIONS = [
   { id: 'users', label: 'Диалоги' },
   { id: 'triggers', label: 'Триггеры' },
   { id: 'postbacks', label: 'Постбеки' },
-  { id: 'admins', label: 'Админы' },
 ];
 
 const AI_MODEL_OPTIONS = [
@@ -94,8 +93,6 @@ export default function AIChatterPage() {
 
   const [triggers, setTriggers] = useState([]);
   const [triggerInput, setTriggerInput] = useState('');
-  const [admins, setAdmins] = useState([]);
-  const [adminInput, setAdminInput] = useState('');
   const [postbacks, setPostbacks] = useState([]);
   const [postbackFilter, setPostbackFilter] = useState('');
   const [statistics, setStatistics] = useState({ daily: [], manual_commissions: [] });
@@ -130,11 +127,6 @@ export default function AIChatterPage() {
     setTriggers(result.phrases || []);
   }, []);
 
-  const loadAdmins = useCallback(async () => {
-    const result = await apiAdminFetchJson('/api/admin/aichatter/admins');
-    setAdmins(result.admins || []);
-  }, []);
-
   const loadPostbacks = useCallback(async () => {
     const params = new URLSearchParams({ page: '1', limit: '100' });
     if (postbackFilter) params.set('event_code', postbackFilter);
@@ -154,12 +146,12 @@ export default function AIChatterPage() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      Promise.all([loadOverview(), loadTriggers(), loadAdmins(), loadStatistics(7)])
+      Promise.all([loadOverview(), loadTriggers(), loadStatistics(7)])
         .catch((requestError) => setError(requestError.message || 'Не удалось загрузить АИЧАТТЕР'))
         .finally(() => setLoading(false));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadOverview, loadTriggers, loadAdmins, loadStatistics]);
+  }, [loadOverview, loadTriggers, loadStatistics]);
 
   const selectSection = async (nextSection) => {
     setSection(nextSection);
@@ -259,35 +251,6 @@ export default function AIChatterPage() {
     });
     setTriggerInput('');
     saveTriggers(next);
-  };
-
-  const addAdmin = async () => {
-    const telegramId = Number(adminInput);
-    if (!Number.isInteger(telegramId) || telegramId <= 0) {
-      setError('Укажи корректный Telegram ID');
-      return;
-    }
-    try {
-      await apiAdminFetchJson('/api/admin/aichatter/admins', {
-        method: 'POST',
-        body: JSON.stringify({ telegram_id: telegramId }),
-      });
-      setAdminInput('');
-      await loadAdmins();
-      flash('Администратор добавлен');
-    } catch (requestError) {
-      setError(requestError.message);
-    }
-  };
-
-  const removeAdmin = async (telegramId) => {
-    try {
-      await apiAdminFetchJson(`/api/admin/aichatter/admins/${telegramId}`, { method: 'DELETE' });
-      await loadAdmins();
-      flash('Администратор удалён');
-    } catch (requestError) {
-      setError(requestError.message);
-    }
   };
 
   const saveManualCommission = async () => {
@@ -410,7 +373,6 @@ export default function AIChatterPage() {
               ['Регистрации', counts.registrations || 0],
               ['Депозиты', counts.deposits || 0],
               ['Триггеры', counts.triggers_total || 0],
-              ['Администраторы', counts.admins_total || 0],
             ].map(([label, value]) => (
               <div className="admin-kpi-chip" key={label}><div className="admin-kpi-label">{label}</div><div className="admin-kpi-value">{value}</div></div>
             ))}
@@ -547,7 +509,6 @@ export default function AIChatterPage() {
 
       {section === 'postbacks' && <div className="aichatter-stack"><section className="admin-card"><div className="aichatter-section-head"><h3 className="admin-section-title">События postback</h3><div className="aichatter-inline-form compact"><select className="admin-input compact" value={postbackFilter} onChange={(event) => setPostbackFilter(event.target.value)}><option value="">Все события</option><option value="reg">Регистрация</option><option value="dep1">Первый депозит</option><option value="dep">Депозит</option><option value="wdr">Вывод</option><option value="commission">Комиссия</option></select><button className="admin-btn-outline" onClick={loadPostbacks}>Обновить</button></div></div><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Дата</th><th>Событие</th><th>Пользователь</th><th>Trader ID</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>{postbacks.map((item) => <tr key={item.id}><td>{formatDate(item.created_at)}</td><td>{item.event_code}</td><td>{item.tg_user_id || '—'}</td><td>{item.trader_id || '—'}</td><td>{formatMoney(item.commission || item.sumdep || item.wdr_sum)}</td><td>{item.status || '—'}</td></tr>)}</tbody></table></div></section><section className="admin-card"><h3 className="admin-section-title">Ручная комиссия</h3><div className="aichatter-inline-form"><input className="admin-input" type="date" value={manualDate} onChange={(event) => setManualDate(event.target.value)} /><input className="admin-input" type="number" min="0" step="0.01" placeholder="Сумма" value={manualAmount} onChange={(event) => setManualAmount(event.target.value)} /><button className="admin-btn" onClick={saveManualCommission}>Сохранить</button></div>{statistics.manual_commissions.length > 0 && <div className="aichatter-manual-list">{statistics.manual_commissions.map((item) => <span key={item.stat_date}>{String(item.stat_date).slice(0, 10)}: <strong>{formatMoney(item.amount)}</strong></span>)}</div>}</section></div>}
 
-      {section === 'admins' && <section className="admin-card"><h3 className="admin-section-title">Администраторы AI-бота</h3><p className="admin-muted">Эти пользователи получают доступ к команде /admin в Telegram-боте.</p><div className="aichatter-inline-form"><input className="admin-input" inputMode="numeric" placeholder="Telegram ID" value={adminInput} onChange={(event) => setAdminInput(event.target.value)} /><button className="admin-btn" onClick={addAdmin}>Добавить</button></div><div className="admin-list">{admins.length ? admins.map((item) => <div className="admin-list-row" key={item.tg_user_id}><div><strong>{item.tg_user_id}</strong><div className="admin-muted">Добавлен: {formatDate(item.created_at)}</div></div><button className="admin-btn-outline danger" onClick={() => removeAdmin(item.tg_user_id)}>Удалить</button></div>) : <div className="admin-muted">Дополнительных администраторов пока нет. Администраторы Elizabeth уже подключены через серверную конфигурацию.</div>}</div></section>}
     </div>
   );
 }
