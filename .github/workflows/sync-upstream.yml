@@ -1,0 +1,35 @@
+name: Sync Upstream
+
+# Автосинхронизация форка consiliumaxis/elizabethvane с upstream
+# Elizabet-Eric-project/elizabethvane для веток main и test.
+# Upstream публичный -> используется стандартный secrets.GITHUB_TOKEN.
+# Собственная разработка ведётся в ветках feature/* и этой синхронизацией не затрагивается.
+
+on:
+  schedule:
+    # Каждые 2 часа (UTC). GitHub может запускать cron с задержкой 10-15 минут.
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync main
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        with:
+          target_sync_branch: main
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          upstream_sync_branch: main
+          upstream_sync_repo: Elizabet-Eric-project/elizabethvane
+
+  sync-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync test
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        with:
+          target_sync_branch: test
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          upstream_sync_branch: test
+          upstream_sync_repo: Elizabet-Eric-project/elizabethvane
