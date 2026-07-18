@@ -15,6 +15,11 @@ jobs:
   sync-main:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
       - name: Sync main
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
         with:
@@ -26,6 +31,11 @@ jobs:
   sync-test:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          ref: test
+          fetch-depth: 0
       - name: Sync test
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
         with:
