@@ -4,6 +4,7 @@ import UsersPage from './pages/UsersPage';
 import BroadcastPage from './pages/BroadcastPage';
 import SettingsPage from './pages/SettingsPage';
 import StrategiesPage from './pages/StrategiesPage';
+import AIChatterPage from './pages/AIChatterPage';
 import './admin.css';
 
 const TABS = [
@@ -12,6 +13,7 @@ const TABS = [
   { id: 'broadcast', label: 'Рассылка' },
   { id: 'settings', label: 'Настройки' },
   { id: 'strategies', label: 'Стратегии' },
+  { id: 'aichatter', label: 'АИЧАТТЕР' },
 ];
 
 export default function AdminApp({ adminUser, authError }) {
@@ -63,6 +65,7 @@ export default function AdminApp({ adminUser, authError }) {
         {activeTab === 'broadcast' && <BroadcastPage />}
         {activeTab === 'settings' && <SettingsPage adminUser={adminUser} />}
         {activeTab === 'strategies' && <StrategiesPage />}
+        {activeTab === 'aichatter' && <AIChatterPage />}
       </main>
     </div>
   );
