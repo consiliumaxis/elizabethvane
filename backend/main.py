@@ -5939,9 +5939,26 @@ async def save_quiz_answer(user_id: int, step: str, answer: str, skip_flow: bool
 
     if not saved:
         return None, False
-    for item in completed_steps:
-        value = normalized_answer if item == normalized_step else "Skip"
-        asyncio.create_task(send_aio_field_value(user_id, get_aio_question_field(item), value))
+    aio_fields = [
+        (
+            get_aio_question_field(item),
+            normalized_answer if item == normalized_step else "Skip",
+        )
+        for item in completed_steps
+    ]
+    aio_results = await asyncio.gather(
+        *(send_aio_field_value(user_id, field_name, value) for field_name, value in aio_fields),
+        return_exceptions=True,
+    )
+    for (field_name, _), result in zip(aio_fields, aio_results):
+        if isinstance(result, Exception):
+            print(f"[AIO] Quiz field {field_name} failed for user {user_id}: {result}")
+            continue
+        if result.get("status") != "sent":
+            print(
+                f"[AIO] Quiz field {field_name} was not delivered for user {user_id}: "
+                f"{result.get('reason') or result.get('error') or result.get('response_body') or result}"
+            )
     return next_step, True
 
 
