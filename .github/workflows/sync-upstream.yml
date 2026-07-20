@@ -9,8 +9,8 @@ name: Sync Upstream
 
 on:
   schedule:
-    # Каждые 2 часа (UTC). GitHub может запускать cron с задержкой 10-15 минут.
-    - cron: '0 */2 * * *'
+    # Каждые 30 минут (UTC). GitHub может запускать cron с задержкой 10-15 минут.
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 permissions:
