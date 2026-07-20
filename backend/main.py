@@ -5386,7 +5386,12 @@ async def send_channel_gate(chat_id: int):
     settings = await get_support_links_row()
     keyboard_rows = [
         [InlineKeyboardButton(text="Open channel", url=settings["channel_url"])],
-        [InlineKeyboardButton(text="Go to trading", callback_data=FUNNEL_CONTINUE_CALLBACK)],
+        [
+            InlineKeyboardButton(
+                text="I’ve subscribed — go to trading",
+                callback_data=FUNNEL_CHECK_CHANNEL_CALLBACK,
+            )
+        ],
     ]
     await bot.send_message(
         chat_id=chat_id,
@@ -5667,6 +5672,19 @@ async def handle_funnel_continue(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda callback: callback.data == FUNNEL_CHECK_CHANNEL_CALLBACK)
 async def handle_funnel_check_channel(callback: types.CallbackQuery):
+    if callback.from_user and db_pool:
+        user_id = int(callback.from_user.id)
+        async with db_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE user_onboarding
+                    SET channel_subscribed_at = COALESCE(channel_subscribed_at, NOW())
+                    WHERE user_id = %s
+                    """,
+                    (user_id,),
+                )
+        await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)
     await handle_funnel_continue(callback)
 
 class AIChatRequest(BaseModel):

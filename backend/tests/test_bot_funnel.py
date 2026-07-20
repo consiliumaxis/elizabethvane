@@ -112,6 +112,21 @@ class BotFunnelTest(unittest.TestCase):
         self.assertIn("await send_main_menu", callback_handler)
         self.assertIn("await start_ai_chatter_from_callback(callback)", callback_handler)
 
+    def test_subscription_confirmation_sends_event_before_trading(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn('text="I’ve subscribed — go to trading"', source)
+        self.assertIn("callback_data=FUNNEL_CHECK_CHANNEL_CALLBACK", source)
+        subscription_handler = source.split("async def handle_funnel_check_channel", 1)[1].split(
+            "class AIChatRequest", 1
+        )[0]
+        self.assertIn("channel_subscribed_at = COALESCE(channel_subscribed_at, NOW())", subscription_handler)
+        self.assertIn("await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)", subscription_handler)
+        self.assertLess(
+            subscription_handler.index("await send_aio_postback_event"),
+            subscription_handler.index("await handle_funnel_continue"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
