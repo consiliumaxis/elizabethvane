@@ -99,7 +99,7 @@ ELIZABETH_BOT_PROFILE: dict = {
     "work_start": None,
     "work_end": None,
     "system_enabled": True,
-    "work_24_7": False,
+    "work_24_7": True,
     "ai_system_prompt": "",
     "planner_system_prompt": "",
     "ai_enabled": True,
@@ -108,7 +108,6 @@ ELIZABETH_BOT_PROFILE: dict = {
     "openai_api_key": OPENAI_API_KEY,
     "ai_client": AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None,
     "funnel_media_enabled": True,
-    "registration_base_url": REGISTER_BASE_URL,
 }
 
 db_pool: aiomysql.Pool | None = None
@@ -228,8 +227,6 @@ active_register_base_url = REGISTER_BASE_URL
 
 def build_register_link(tg_user_id: int, delivery_scope: str = "business") -> str:
     base_url = active_register_base_url
-    if is_elizabeth_bot_scope(delivery_scope):
-        base_url = ELIZABETH_BOT_PROFILE.get("registration_base_url") or active_register_base_url
     parts = urlsplit(base_url)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query["click_id"] = str(tg_user_id)
@@ -2259,7 +2256,7 @@ async def runtime_settings_refresh_worker():
                     "work_start": to_time(bot_settings_row[0]) if bot_settings_row[0] is not None else None,
                     "work_end": to_time(bot_settings_row[1]) if bot_settings_row[1] is not None else None,
                     "system_enabled": bool(bot_settings_row[2]),
-                    "work_24_7": bot_kv.get("ELIZABETH_BOT_WORK_24_7", "0") == "1",
+                    "work_24_7": True,
                     "ai_system_prompt": bot_ai_row[0] or "",
                     "planner_system_prompt": bot_ai_row[1] or "",
                     "ai_enabled": bool(bot_ai_row[2]),
@@ -2268,7 +2265,6 @@ async def runtime_settings_refresh_worker():
                     "openai_api_key": next_bot_key,
                     "ai_client": bot_client,
                     "funnel_media_enabled": bot_kv.get("ELIZABETH_BOT_FUNNEL_MEDIA_ENABLED", "1") == "1",
-                    "registration_base_url": bot_kv.get("ELIZABETH_BOT_REGISTER_BASE_URL") or REGISTER_BASE_URL,
                 }
 
             KV_CACHE = {}
@@ -3487,7 +3483,7 @@ async def main():
             "work_start": to_time(bot_settings_row[0]) if bot_settings_row[0] is not None else None,
             "work_end": to_time(bot_settings_row[1]) if bot_settings_row[1] is not None else None,
             "system_enabled": bool(bot_settings_row[2]),
-            "work_24_7": bot_kv.get("ELIZABETH_BOT_WORK_24_7", "0") == "1",
+            "work_24_7": True,
             "ai_system_prompt": bot_ai_row[0] or "",
             "planner_system_prompt": bot_ai_row[1] or "",
             "ai_enabled": bool(bot_ai_row[2]),
@@ -3496,7 +3492,6 @@ async def main():
             "openai_api_key": bot_key,
             "ai_client": AsyncOpenAI(api_key=bot_key) if bot_key else None,
             "funnel_media_enabled": bot_kv.get("ELIZABETH_BOT_FUNNEL_MEDIA_ENABLED", "1") == "1",
-            "registration_base_url": bot_kv.get("ELIZABETH_BOT_REGISTER_BASE_URL") or REGISTER_BASE_URL,
         })
 
     bot = Bot(

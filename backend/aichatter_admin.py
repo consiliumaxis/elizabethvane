@@ -436,6 +436,33 @@ async def sync_aichatter_pocket_event(
     return {"status": "synchronized", "event_code": event_code}
 
 
+async def sync_shared_ai_access_settings(
+    *,
+    registration_url: Optional[str] = None,
+    min_deposit: Optional[object] = None,
+    openai_api_key: Optional[str] = None,
+) -> None:
+    """Propagate system-wide settings into the separate aichat runtime database."""
+    pool = await _get_pool()
+    await _ensure_ai_settings_schema(pool)
+    async with pool.acquire() as conn, conn.cursor() as cur:
+        if registration_url is not None:
+            normalized_url = str(registration_url or "").strip()
+            await _set_kv(cur, "REGISTER_BASE_URL", normalized_url)
+            await _set_kv(cur, "ELIZABETH_BOT_REGISTER_BASE_URL", normalized_url)
+        if min_deposit is not None:
+            normalized_deposit = str(min_deposit)
+            await _set_kv(cur, "MIN_DEPOSIT_THRESHOLD", normalized_deposit)
+            await _set_kv(cur, "ELIZABETH_BOT_MIN_DEPOSIT_THRESHOLD", normalized_deposit)
+        if openai_api_key is not None:
+            normalized_key = str(openai_api_key or "").strip()
+            if normalized_key:
+                await cur.execute(
+                    "UPDATE ai_settings SET openai_api_key = %s WHERE id IN (1, 2)",
+                    (normalized_key,),
+                )
+
+
 async def _ensure_ai_settings_schema(pool):
     async with pool.acquire() as conn, conn.cursor() as cur:
         await cur.execute(
@@ -542,7 +569,7 @@ async def _load_settings(pool, profile: str = "chatter") -> Dict[str, Any]:
         "work_end": _time_text(settings.get("work_end")),
         "bot_name": kv.get("BOT_NAME", "Elizabeth Vane"),
         "min_deposit": float(kv.get("MIN_DEPOSIT_THRESHOLD") or 0),
-        "work_24_7": kv.get("WORK_24_7", "0") == "1",
+        "work_24_7": True if cfg["name"] == "elizabeth_bot" else kv.get("WORK_24_7", "0") == "1",
         "postback_log_chat_id": kv.get("POSTBACK_LOG_CHAT_ID", ""),
         "log_registrations": kv.get("LOG_REGISTRATIONS", "1") == "1",
         "log_deposits": kv.get("LOG_DEPOSITS", "1") == "1",
@@ -624,6 +651,10 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
         await _ensure_ai_settings_schema(pool)
         cfg = _profile_config(profile)
         data = payload.model_dump(exclude_unset=True)
+        if cfg["name"] == "elizabeth_bot":
+            data.pop("work_start", None)
+            data.pop("work_end", None)
+            data["work_24_7"] = True
         for key in ("work_start", "work_end"):
             if key in data and data[key] is not None and not _TIME_RE.fullmatch(data[key]):
                 raise HTTPException(status_code=400, detail=f"{key} must use HH:MM format")

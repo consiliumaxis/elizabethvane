@@ -79,22 +79,24 @@ class AichatterAdminTest(unittest.TestCase):
 
     def test_registration_link_is_managed_at_runtime(self):
         backend = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
-        frontend = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
+        frontend = (PROJECT_ROOT / "frontend/src/admin/pages/SettingsPage.jsx").read_text(encoding="utf-8")
         bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
 
         self.assertIn("REGISTER_BASE_URL", backend)
-        self.assertIn("registration_base_url", frontend)
+        self.assertIn("systemRegistrationUrl", frontend)
+        self.assertIn("sync_shared_ai_access_settings", backend)
         self.assertIn("active_register_base_url", bot)
 
     def test_openai_key_is_managed_without_returning_the_secret(self):
         backend = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
-        frontend = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
+        frontend = (PROJECT_ROOT / "frontend/src/admin/pages/SettingsPage.jsx").read_text(encoding="utf-8")
         bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
 
         self.assertIn("openai_api_key: Optional[str]", backend)
         self.assertIn('"openai_api_key": ""', backend)
         self.assertIn('"openai_key_configured"', backend)
         self.assertIn('type="password"', frontend)
+        self.assertIn("openAiKeyConfigured", frontend)
         self.assertIn("OpenAI client reconfigured from admin settings", bot)
 
     def test_funnel_media_uses_video_notes_in_both_delivery_modes_and_prevents_repeats(self):

@@ -276,6 +276,8 @@ export default function SettingsPage({ adminUser }) {
   const [activeSection, setActiveSection] = useState('menu');
   const [model, setModel] = useState('gpt-4o-mini');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [openAiApiKey, setOpenAiApiKey] = useState('');
+  const [openAiKeyConfigured, setOpenAiKeyConfigured] = useState(false);
   const [admins, setAdmins] = useState([]);
   const [grantId, setGrantId] = useState('');
 
@@ -298,6 +300,7 @@ export default function SettingsPage({ adminUser }) {
 
   const [systemAccessPolicy, setSystemAccessPolicy] = useState('registration_deposit');
   const [systemMinDeposit, setSystemMinDeposit] = useState('0.00');
+  const [systemRegistrationUrl, setSystemRegistrationUrl] = useState('');
   const [channelId, setChannelId] = useState('-1003584421739');
   const [channelUrl, setChannelUrl] = useState('');
   const [checkSubscriptionEnabled, setCheckSubscriptionEnabled] = useState(true);
@@ -323,6 +326,8 @@ export default function SettingsPage({ adminUser }) {
       const ai = settingsRes?.settings?.ai || {};
       setModel(ai.model || 'gpt-4o-mini');
       setSystemPrompt(ai.system_prompt || '');
+      setOpenAiApiKey('');
+      setOpenAiKeyConfigured(Boolean(ai.openai_key_configured));
       setAdmins(adminsRes.admins || []);
 
       const streams = settingsRes?.settings?.streams || {};
@@ -392,13 +397,15 @@ export default function SettingsPage({ adminUser }) {
         : 'registration_deposit';
       setSystemAccessPolicy(nextPolicy);
       setSystemMinDeposit(access.min_deposit_amount !== null && access.min_deposit_amount !== undefined ? String(access.min_deposit_amount) : '0.00');
+      setSystemRegistrationUrl(access.registration_url || '');
     } catch (e) {
       setError(e.message || 'Не удалось загрузить настройки');
     }
   }, []);
 
   useEffect(() => {
-    loadAll();
+    const timer = window.setTimeout(() => loadAll(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadAll]);
 
   useEffect(() => {
@@ -529,6 +536,7 @@ export default function SettingsPage({ adminUser }) {
         ai: {
           model: model.trim(),
           system_prompt: systemPrompt,
+          openai_api_key: openAiApiKey.trim(),
         },
       };
 
@@ -575,6 +583,7 @@ export default function SettingsPage({ adminUser }) {
         payload.system_access = {
           policy: systemAccessPolicy,
           min_deposit_amount: systemAccessPolicy === 'registration_deposit' ? minDeposit : 0,
+          registration_url: systemRegistrationUrl.trim(),
         };
       }
 
@@ -585,6 +594,8 @@ export default function SettingsPage({ adminUser }) {
 
       if (source === 'ai') {
         setStatus('Настройки AI чата сохранены');
+        setOpenAiApiKey('');
+        await loadAll();
       } else if (source === 'streams') {
         setStatus('Настройки стримов сохранены');
       } else if (source === 'support') {
@@ -819,6 +830,21 @@ export default function SettingsPage({ adminUser }) {
         <div className="admin-field">
           <label className="admin-label">Модель</label>
           <input className="admin-input" value={model} onChange={(e) => setModel(e.target.value)} />
+        </div>
+
+        <div className="admin-field">
+          <label className="admin-label">OpenAI API-ключ</label>
+          <input
+            className="admin-input"
+            type="password"
+            autoComplete="off"
+            value={openAiApiKey}
+            onChange={(e) => setOpenAiApiKey(e.target.value)}
+            placeholder={openAiKeyConfigured ? 'Ключ настроен — введите новый только для замены' : 'sk-proj-…'}
+          />
+          <div className="admin-muted">
+            {openAiKeyConfigured ? 'Ключ сохранён и скрыт. Его используют AI-чат, EL CHATTER и основной бот Elizabeth.' : 'Ключ ещё не настроен.'}
+          </div>
         </div>
 
         <div className="admin-field">
@@ -1222,6 +1248,20 @@ export default function SettingsPage({ adminUser }) {
             </div>
           </div>
         ) : null}
+
+        <div className="admin-field">
+          <label className="admin-label">Ссылка регистрации на Pocket Option</label>
+          <input
+            className="admin-input"
+            type="url"
+            value={systemRegistrationUrl}
+            onChange={(e) => setSystemRegistrationUrl(e.target.value)}
+            placeholder="https://pocketoption.com/..."
+          />
+          <div className="admin-muted">
+            Одна общая ссылка для переписки от аккаунта и основного бота. К ней автоматически добавляется click_id пользователя.
+          </div>
+        </div>
 
         <div className="admin-row-actions">
           <button className="admin-btn" onClick={() => saveSettings('access')} disabled={saving}>

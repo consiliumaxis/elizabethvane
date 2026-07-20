@@ -169,9 +169,17 @@ except ModuleNotFoundError:
         system_policy_grants_signal_access,
     )
 try:
-    from backend.aichatter_admin import create_aichatter_admin_router, sync_aichatter_pocket_event
+    from backend.aichatter_admin import (
+        create_aichatter_admin_router,
+        sync_aichatter_pocket_event,
+        sync_shared_ai_access_settings,
+    )
 except ModuleNotFoundError:
-    from aichatter_admin import create_aichatter_admin_router, sync_aichatter_pocket_event
+    from aichatter_admin import (
+        create_aichatter_admin_router,
+        sync_aichatter_pocket_event,
+        sync_shared_ai_access_settings,
+    )
 
 load_dotenv()
 
@@ -1448,6 +1456,7 @@ def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str,
     return {
         "policy": policy,
         "min_deposit_amount": str(min_deposit),
+        "registration_url": str((row or {}).get("registration_url") or "").strip(),
         "updated_at": (row or {}).get("updated_at"),
         "updated_by": (row or {}).get("updated_by"),
     }
@@ -1455,7 +1464,7 @@ def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str,
 
 async def get_system_access_settings_row() -> Dict[str, Any]:
     default_settings = serialize_system_access_settings(
-        {"policy": ACCESS_POLICY_REGISTRATION_DEPOSIT, "min_deposit_amount": "0"}
+        {"policy": ACCESS_POLICY_REGISTRATION_DEPOSIT, "min_deposit_amount": "0", "registration_url": ""}
     )
     if not db_pool:
         return default_settings
@@ -1464,7 +1473,7 @@ async def get_system_access_settings_row() -> Dict[str, Any]:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
                     """
-                    SELECT policy, min_deposit_amount, updated_at, updated_by
+                    SELECT policy, min_deposit_amount, registration_url, updated_at, updated_by
                     FROM admin_system_access_settings
                     WHERE id = 1
                     LIMIT 1
@@ -3009,6 +3018,7 @@ async def admin_settings(admin=Depends(get_admin_user)):
     support_links = await get_support_links_row()
     pocket_settings = await get_pocket_api_settings_row()
     system_access_settings = await get_system_access_settings_row()
+    shared_ai_settings = await get_admin_analysis_settings()
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("SELECT id, system_prompt, model, updated_at FROM ai_settings WHERE id = 1")
@@ -3033,6 +3043,8 @@ async def admin_settings(admin=Depends(get_admin_user)):
             stream_strategies = await cur.fetchall()
     if not ai_settings:
         ai_settings = {"id": 1, "system_prompt": "You are a helpful trading assistant.", "model": "gpt-4o-mini", "updated_at": None}
+    ai_settings["openai_api_key"] = ""
+    ai_settings["openai_key_configured"] = bool(shared_ai_settings.get("gpt_api_key"))
     return {
         "status": "success",
         "settings": {
@@ -3056,11 +3068,18 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
     system_access_data = data.get("system_access") or {}
     system_prompt = (ai_data.get("system_prompt") or "").strip()
     model = (ai_data.get("model") or "").strip()
+    openai_api_key = (ai_data.get("openai_api_key") or "").strip()
 
     if not system_prompt:
         raise HTTPException(status_code=400, detail="system_prompt is required")
     if not model:
         raise HTTPException(status_code=400, detail="model is required")
+    if openai_api_key:
+        validation = await analysis_ai_service.validate_openai_api_key(openai_api_key, model=model)
+        if not validation.get("ok"):
+            raise HTTPException(status_code=400, detail=validation.get("error") or "OpenAI key is invalid")
+
+    shared_sync: Dict[str, Any] = {}
 
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -3074,6 +3093,12 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                 """,
                 (system_prompt, model),
             )
+            if openai_api_key:
+                await cur.execute(
+                    "UPDATE admin_analysis_settings SET gpt_api_key = %s, updated_by = %s WHERE id = 1",
+                    (openai_api_key, int(admin["user_id"])),
+                )
+                shared_sync["openai_api_key"] = openai_api_key
             if isinstance(streams_data, dict) and streams_data:
                 is_enabled = 1 if bool(streams_data.get("is_enabled")) else 0
                 scope = str(streams_data.get("scope") or "all").strip().lower()
@@ -3290,19 +3315,34 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
             if isinstance(system_access_data, dict) and system_access_data:
                 access_policy = normalize_access_policy(system_access_data.get("policy"))
                 min_deposit = normalize_min_deposit(system_access_data.get("min_deposit_amount"))
+                registration_url = str(system_access_data.get("registration_url") or "").strip()
+                if registration_url:
+                    parsed_registration_url = urlsplit(registration_url)
+                    if parsed_registration_url.scheme not in {"http", "https"} or not parsed_registration_url.netloc:
+                        raise HTTPException(status_code=400, detail="registration_url must be a full HTTP(S) URL")
                 if access_policy != ACCESS_POLICY_REGISTRATION_DEPOSIT:
                     min_deposit = normalize_min_deposit(0)
                 await cur.execute(
                     """
-                    INSERT INTO admin_system_access_settings (id, policy, min_deposit_amount, updated_by)
-                    VALUES (1, %s, %s, %s)
+                    INSERT INTO admin_system_access_settings
+                        (id, policy, min_deposit_amount, registration_url, updated_by)
+                    VALUES (1, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         policy = VALUES(policy),
                         min_deposit_amount = VALUES(min_deposit_amount),
+                        registration_url = VALUES(registration_url),
                         updated_by = VALUES(updated_by)
                     """,
-                    (access_policy, str(min_deposit), int(admin["user_id"])),
+                    (access_policy, str(min_deposit), registration_url or None, int(admin["user_id"])),
                 )
+                shared_sync["registration_url"] = registration_url
+                shared_sync["min_deposit"] = str(min_deposit)
+    if shared_sync:
+        try:
+            await sync_shared_ai_access_settings(**shared_sync)
+        except Exception as exc:
+            print(f"Shared AI/access settings sync failed: {exc}")
+            raise HTTPException(status_code=502, detail="Settings saved, but AI Chatter synchronization failed")
     return {"status": "success"}
 
 

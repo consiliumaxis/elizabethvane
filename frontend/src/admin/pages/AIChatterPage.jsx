@@ -216,9 +216,18 @@ export default function AIChatterPage() {
     setSaving(true);
     setError('');
     try {
+      const settingsPayload = { ...settings };
+      delete settingsPayload.min_deposit;
+      delete settingsPayload.registration_base_url;
+      delete settingsPayload.openai_api_key;
+      if (profile === 'elizabeth_bot') {
+        settingsPayload.work_24_7 = true;
+        delete settingsPayload.work_start;
+        delete settingsPayload.work_end;
+      }
       const result = await apiAdminFetchJson(`/api/admin/aichatter/settings?profile=${profile}`, {
         method: 'PUT',
-        body: JSON.stringify(settings),
+        body: JSON.stringify(settingsPayload),
       });
       const next = { ...EMPTY_SETTINGS, ...(result.settings || {}) };
       setSettings(next);
@@ -472,16 +481,15 @@ export default function AIChatterPage() {
             <div className="aichatter-toggle-grid">
               <Toggle checked={settings.system_enabled} onChange={(value) => updateField('system_enabled', value)} label="Система включена" hint="Глобально разрешает ответы бота" />
               <Toggle checked={settings.ai_enabled} onChange={(value) => updateField('ai_enabled', value)} label="ИИ включён" hint="Разрешает запросы к OpenAI" />
-              <Toggle checked={settings.work_24_7} onChange={(value) => updateField('work_24_7', value)} label="Работает круглосуточно" hint="Игнорирует рабочие часы и отвечает 24/7 во всех подключённых чатах" />
+              {isMainBotProfile
+                ? <div className="aichatter-toggle-row"><span><strong>Работает круглосуточно</strong><small>Основной бот всегда отвечает 24/7</small></span></div>
+                : <Toggle checked={settings.work_24_7} onChange={(value) => updateField('work_24_7', value)} label="Работает круглосуточно" hint="Игнорирует рабочие часы и отвечает 24/7 в переписке от аккаунта" />}
             </div>
             <div className="admin-grid aichatter-form-grid">
-              <label>Начало работы<input className="admin-input" type="time" disabled={settings.work_24_7} value={settings.work_start || ''} onChange={(event) => updateField('work_start', event.target.value)} /><small className="admin-muted">{settings.work_24_7 ? 'Не используется: включён режим 24/7' : 'Время начала автоматических ответов'}</small></label>
-              <label>Конец работы<input className="admin-input" type="time" disabled={settings.work_24_7} value={settings.work_end || ''} onChange={(event) => updateField('work_end', event.target.value)} /><small className="admin-muted">{settings.work_24_7 ? 'Не используется: включён режим 24/7' : 'Время окончания автоматических ответов'}</small></label>
+              {!isMainBotProfile && <label>Начало работы<input className="admin-input" type="time" disabled={settings.work_24_7} value={settings.work_start || ''} onChange={(event) => updateField('work_start', event.target.value)} /><small className="admin-muted">{settings.work_24_7 ? 'Не используется: включён режим 24/7' : 'Время начала автоматических ответов'}</small></label>}
+              {!isMainBotProfile && <label>Конец работы<input className="admin-input" type="time" disabled={settings.work_24_7} value={settings.work_end || ''} onChange={(event) => updateField('work_end', event.target.value)} /><small className="admin-muted">{settings.work_24_7 ? 'Не используется: включён режим 24/7' : 'Время окончания автоматических ответов'}</small></label>}
               <label>Имя менеджера<input className="admin-input" value={settings.bot_name} onChange={(event) => updateField('bot_name', event.target.value)} /></label>
-              <label>Минимальный депозит<input className="admin-input" type="number" min="0" value={settings.min_deposit} onChange={(event) => updateField('min_deposit', Number(event.target.value))} /></label>
-              <label>Ссылка регистрации Pocket<input className="admin-input" type="url" value={settings.registration_base_url || ''} onChange={(event) => updateField('registration_base_url', event.target.value)} placeholder="https://pocketoption.com/..." /><small className="admin-muted">К ссылке автоматически добавляется click_id пользователя.</small></label>
               <label>Модель OpenAI<select className="admin-input" value={settings.ai_model} onChange={(event) => updateField('ai_model', event.target.value)}>{!AI_MODEL_OPTIONS.some((item) => item.value === settings.ai_model) && <option value={settings.ai_model}>{settings.ai_model} — текущая</option>}{AI_MODEL_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-              <label>OpenAI API-ключ<input className="admin-input" type="password" autoComplete="off" value={settings.openai_api_key || ''} onChange={(event) => updateField('openai_api_key', event.target.value)} placeholder={settings.openai_key_configured ? 'Ключ настроен — введите новый для замены' : 'sk-proj-…'} /><small className="admin-muted">{settings.openai_key_configured ? 'Ключ настроен и скрыт. Пустое поле сохраняет текущий ключ.' : 'Ключ ещё не настроен.'}</small></label>
             </div>
           </section>
           <section className="admin-card">
