@@ -40,6 +40,7 @@ from flows.greeting import send_greeting_flow
 from service.funnel import update_user_stage_from_exchange
 from service.funnel_media import split_funnel_reply
 from service.keyword_trigger import handle_keyword_trigger
+from service.telegram_context import business_connection_kwargs
 from admin.admin import (
     router as admin_router,
     setup_admin,
@@ -335,18 +336,18 @@ async def check_user_globally_via_affiliate(tg_user_id: int) -> list[dict]:
 
 async def send_cross_project_hold_and_notify(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     bot: Bot,
     match: dict,
 ):
-    hold_text = "Брат, буквально пару минут и вернусь к тебе 🤝"
+    hold_text = "I’ll get back to you in just a couple of minutes 🤝"
     try:
         sent = await bot.send_message(
             chat_id=tg_user_id,
             text=hold_text,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
         )
-        await save_message(sent.chat.id, "out", hold_text, is_business=True)
+        await save_message(sent.chat.id, "out", hold_text, is_business=bool(business_id))
     except Exception as exc:
         logging.warning("[cross_project] failed to send hold message to %s: %s", tg_user_id, exc)
 
@@ -387,31 +388,31 @@ async def send_cross_project_hold_and_notify(
 
 async def send_platform_account_question(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     bot: Bot,
 ):
-    text = "Есть ли у тебя уже аккаунт на торговой площадке?"
+    text = "Do you already have an account on the trading platform?"
     sent = await bot.send_message(
         chat_id=tg_user_id,
-        business_connection_id=business_id,
+        **business_connection_kwargs(business_id),
         text=text,
     )
-    await save_message(sent.chat.id, "out", text, is_business=True)
+    await save_message(sent.chat.id, "out", text, is_business=bool(business_id))
     await set_user_state(tg_user_id, STAGE_WAITING_PLATFORM_ACCOUNT, "Ждём ответ про наличие аккаунта")
 
 
 async def send_existing_account_trader_id_request(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     bot: Bot,
 ):
-    text = "Супер, можешь пожалуйста выслать его, добавлю тебя в команду 🤝"
+    text = "Great! Please send me your Trader ID so I can add you to the team 🤝"
     sent = await bot.send_message(
         chat_id=tg_user_id,
-        business_connection_id=business_id,
+        **business_connection_kwargs(business_id),
         text=text,
     )
-    await save_message(sent.chat.id, "out", text, is_business=True)
+    await save_message(sent.chat.id, "out", text, is_business=bool(business_id))
     await set_user_state(
         tg_user_id,
         STAGE_WAITING_EXISTING_ACCOUNT_TRADER_ID,
@@ -421,29 +422,29 @@ async def send_existing_account_trader_id_request(
 
 async def send_registration_start_message(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     bot: Bot,
 ):
     reg_link = build_register_link(tg_user_id)
     text = (
-        "Отлично, тогда идём дальше.\n\n"
-        "Для старта нужно пройти регистрацию по моей ссылке, а после этого прислать мне свой Trader ID 🤝"
+        "Great, let’s move on.\n\n"
+        "To get started, register using my link and then send me your Trader ID 🤝"
     )
     reply_markup = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
-                text="🔗 Зарегистрироваться по моей ссылке",
+                text="🔗 Register using my link",
                 url=reg_link,
             )
         ]]
     )
     sent = await bot.send_message(
         chat_id=tg_user_id,
-        business_connection_id=business_id,
+        **business_connection_kwargs(business_id),
         text=text,
         reply_markup=reply_markup,
     )
-    await save_message(sent.chat.id, "out", text, is_business=True)
+    await save_message(sent.chat.id, "out", text, is_business=bool(business_id))
     await set_user_state(
         tg_user_id,
         STAGE_REG_LINK_SENT,
@@ -1508,17 +1509,17 @@ async def check_registration_via_affiliate(
     # ====== company_mismatch (как было) ======
     if code == "company_mismatch":
         # 1. Пытаемся объяснить клиенту, но не роняем функцию при ошибке
-        if bot and business_id:
+        if bot:
             txt = (
-                "Сейчас все проверю и вернусь с ответом 🤝"
+                "I’ll check everything now and get back to you with an answer 🤝"
             )
             try:
                 sent = await bot.send_message(
                     chat_id=tg_user_id,
                     text=txt,
-                    business_connection_id=business_id,
+                    **business_connection_kwargs(business_id),
                 )
-                await save_message(sent.chat.id, "out", txt, is_business=True)
+                await save_message(sent.chat.id, "out", txt, is_business=bool(business_id))
             except Exception as e:
                 logging.warning(
                     "[company_mismatch] Не удалось отправить сообщение клиенту "
@@ -1583,19 +1584,19 @@ async def check_registration_via_affiliate(
 
     # ====== НОВОЕ: user_not_found ======
     if code == "user_not_found":
-        if bot and business_id:
+        if bot:
             try:
                 intro_text = (
-                    "По этому ID кабинет не найден.\n\n"
-                    "Скорее всего, аккаунт зарегистрирован не по моей ссылке. "
-                    "Тогда давай сразу сделаем новый аккаунт по моей ссылке, а после регистрации ты пришлёшь мне свой Trader ID 🤝"
+                    "I couldn’t find an account with this ID.\n\n"
+                    "The account was most likely not registered using my link. "
+                    "Let’s create a new account through my link, and then send me your Trader ID after registration 🤝"
                 )
                 sent = await bot.send_message(
                     chat_id=tg_user_id,
                     text=intro_text,
-                    business_connection_id=business_id,
+                    **business_connection_kwargs(business_id),
                 )
-                await save_message(sent.chat.id, "out", intro_text, is_business=True)
+                await save_message(sent.chat.id, "out", intro_text, is_business=bool(business_id))
                 await send_registration_start_message(tg_user_id, business_id, bot)
             except Exception as e:
                 logging.warning(
@@ -1608,15 +1609,15 @@ async def check_registration_via_affiliate(
     # ====== НОВОЕ: pocket_error / unknown_bot_id ======
     if code in ("unknown_bot_id", "pocket_error"):
         # 1) Пишем клиенту
-        if bot and business_id:
-            txt = "Спасибо, подожди пожалуйста, я проверю и вернусь"
+        if bot:
+            txt = "Thank you. Please wait while I check this, and I’ll get back to you."
             try:
                 sent = await bot.send_message(
                     chat_id=tg_user_id,
                     text=txt,
-                    business_connection_id=business_id,
+                    **business_connection_kwargs(business_id),
                 )
-                await save_message(sent.chat.id, "out", txt, is_business=True)
+                await save_message(sent.chat.id, "out", txt, is_business=bool(business_id))
             except Exception as e:
                 logging.warning(
                     "[reg_error_msg] Не удалось отправить сообщение клиенту "
@@ -2206,22 +2207,57 @@ async def on_business_voice(msg: Message, bot: Bot):
 # ================== ОБЫЧНЫЕ СООБЩЕНИЯ БОТУ ==================
 
 
-@router.message(F.text.regexp(r"(?i)^привет$"))
-async def on_regular_message(msg: Message):
-    global session_clients, session_out_messages
-
+@router.message(Command("start"), F.chat.type == "private")
+async def on_regular_start(msg: Message, bot: Bot):
     await save_user_from_message(msg)
-    await save_message(msg.chat.id, "in", msg.text or "", is_business=False)
+    await save_message(msg.chat.id, "in", msg.text or "/start", is_business=False)
+    await passive_sync_user_context(msg.chat.id, incoming_text="Hello")
 
-    if not is_bot_active_now():
+    if not is_bot_active_now() or not await is_user_bot_active(msg.chat.id):
         return
 
-    reply_text = "Привет (обычный чат, не бизнес)"
-    sent = await msg.answer(reply_text)
-    await save_message(sent.chat.id, "out", reply_text, is_business=False)
+    await send_business_ai_reply(msg.chat.id, None, "Hello", bot)
 
-    session_clients.add(sent.chat.id)
-    session_out_messages += 1
+
+@router.message(F.voice, F.chat.type == "private")
+async def on_regular_voice(msg: Message, bot: Bot):
+    await save_user_from_message(msg)
+
+    if not is_bot_active_now() or not await is_user_bot_active(msg.chat.id):
+        await save_message(
+            msg.chat.id,
+            "in",
+            "(голосовое сообщение, получено при выключенном боте)",
+            is_business=False,
+        )
+        return
+
+    text = await transcribe_voice_to_text(msg, bot)
+    if not text:
+        await save_message(
+            msg.chat.id,
+            "in",
+            "(не удалось расшифровать голосовое сообщение)",
+            is_business=False,
+        )
+        return
+
+    await save_message(msg.chat.id, "in", f"(голосовое) {text}", is_business=False)
+    await passive_sync_user_context(msg.chat.id, incoming_text=text)
+    await send_business_ai_reply(msg.chat.id, None, text, bot)
+
+
+@router.message(F.text, ~F.text.startswith("/"), F.chat.type == "private")
+async def on_regular_message(msg: Message, bot: Bot):
+    await save_user_from_message(msg)
+    text = msg.text or ""
+    await save_message(msg.chat.id, "in", text, is_business=False)
+    await passive_sync_user_context(msg.chat.id, incoming_text=text)
+
+    if not is_bot_active_now() or not await is_user_bot_active(msg.chat.id):
+        return
+
+    await send_business_ai_reply(msg.chat.id, None, text, bot)
 
 
 async def transcribe_voice_to_text(msg: Message, bot: Bot) -> str | None:
@@ -2361,7 +2397,7 @@ async def prepare_square_video_note(source_path: str) -> str | None:
 
 async def send_funnel_video_note(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     media_key: str,
     bot: Bot,
     reply_markup=None,
@@ -2385,7 +2421,7 @@ async def send_funnel_video_note(
         return await bot.send_video_note(
             chat_id=tg_user_id,
             video_note=video_note,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             reply_markup=reply_markup,
         )
 
@@ -2414,13 +2450,18 @@ async def send_funnel_video_note(
         logging.error("[funnel media] Telegram returned no video_note for %s", media_key)
         return None
     await mark_funnel_media_sent(tg_user_id, media_key, telegram_file_id)
-    await save_message(sent.chat.id, "out", f"[Кружок {media_key.upper()}]", is_business=True)
+    await save_message(
+        sent.chat.id,
+        "out",
+        f"[Кружок {media_key.upper()}]",
+        is_business=bool(business_id),
+    )
     return sent
 
 
 async def send_ai_reply_with_funnel_media(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     reply_text: str,
     bot: Bot,
     reply_markup=None,
@@ -2430,11 +2471,11 @@ async def send_ai_reply_with_funnel_media(
         sent = await bot.send_message(
             chat_id=tg_user_id,
             text=reply_text,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML,
         )
-        await save_message(sent.chat.id, "out", reply_text, is_business=True)
+        await save_message(sent.chat.id, "out", reply_text, is_business=bool(business_id))
         return sent.chat.id, 1
 
     sent_chat_id = None
@@ -2444,10 +2485,10 @@ async def send_ai_reply_with_funnel_media(
         sent = await bot.send_message(
             chat_id=tg_user_id,
             text=before,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             parse_mode=ParseMode.HTML,
         )
-        await save_message(sent.chat.id, "out", before, is_business=True)
+        await save_message(sent.chat.id, "out", before, is_business=bool(business_id))
         sent_chat_id, sent_count = sent.chat.id, sent_count + 1
 
     if not is_manual_takeover_active(tg_user_id):
@@ -2465,18 +2506,18 @@ async def send_ai_reply_with_funnel_media(
         sent = await bot.send_message(
             chat_id=tg_user_id,
             text=after,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML,
         )
-        await save_message(sent.chat.id, "out", after, is_business=True)
+        await save_message(sent.chat.id, "out", after, is_business=bool(business_id))
         sent_chat_id, sent_count = sent.chat.id, sent_count + 1
 
     return sent_chat_id, sent_count
     
 async def send_business_ai_reply(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     user_text: str,
     bot: Bot,
 ):
@@ -2534,15 +2575,15 @@ async def send_business_ai_reply(
 
             if code == "registered":
                 confirm_text = (
-                    "Отлично, аккаунт вижу 🤝\n\nТеперь нужно пополнить баланс, "
-                    "и после этого мы продолжим дальше. Точные условия и сумму подскажет твой личный менеджер."
+                    "Great, I can see your account 🤝\n\nNow you need to fund your balance, "
+                    "and then we’ll continue. Your personal manager will explain the exact terms and amount."
                 )
                 sent = await bot.send_message(
                     chat_id=tg_user_id,
-                    business_connection_id=business_id,
+                    **business_connection_kwargs(business_id),
                     text=confirm_text,
                 )
-                await save_message(sent.chat.id, "out", confirm_text, is_business=True)
+                await save_message(sent.chat.id, "out", confirm_text, is_business=bool(business_id))
                 _, notes = await get_user_state(tg_user_id)
                 new_notes = (notes or "") + ("\n" if notes else "") + "Trader ID подтвержден сразу после вопроса про наличие аккаунта"
                 await set_user_state(tg_user_id, STAGE_WAITING_DEPOSIT, new_notes)
@@ -2565,13 +2606,13 @@ async def send_business_ai_reply(
             asyncio.create_task(update_user_memory(tg_user_id))
             return
 
-        clarify_text = "Напиши, пожалуйста, просто да или нет 🤝"
+        clarify_text = "Please reply with just yes or no 🤝"
         sent = await bot.send_message(
             chat_id=tg_user_id,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             text=clarify_text,
         )
-        await save_message(sent.chat.id, "out", clarify_text, is_business=True)
+        await save_message(sent.chat.id, "out", clarify_text, is_business=bool(business_id))
         session_clients.add(tg_user_id)
         session_out_messages += 1
         return
@@ -2579,13 +2620,13 @@ async def send_business_ai_reply(
     if stage == STAGE_WAITING_EXISTING_ACCOUNT_TRADER_ID:
         trader_id = extract_trader_id(user_text)
         if not trader_id:
-            reminder_text = "Пришли, пожалуйста, только Trader ID без лишнего текста 🤝"
+            reminder_text = "Please send only your Trader ID, without any additional text 🤝"
             sent = await bot.send_message(
                 chat_id=tg_user_id,
-                business_connection_id=business_id,
+                **business_connection_kwargs(business_id),
                 text=reminder_text,
             )
-            await save_message(sent.chat.id, "out", reminder_text, is_business=True)
+            await save_message(sent.chat.id, "out", reminder_text, is_business=bool(business_id))
             session_clients.add(tg_user_id)
             session_out_messages += 1
             return
@@ -2608,15 +2649,15 @@ async def send_business_ai_reply(
 
         if code == "registered":
             confirm_text = (
-                "Отлично, аккаунт вижу 🤝\n\nТеперь нужно пополнить баланс, "
-                "и после этого мы продолжим дальше. Точные условия и сумму подскажет твой личный менеджер."
+                "Great, I can see your account 🤝\n\nNow you need to fund your balance, "
+                "and then we’ll continue. Your personal manager will explain the exact terms and amount."
             )
             sent = await bot.send_message(
                 chat_id=tg_user_id,
-                business_connection_id=business_id,
+                **business_connection_kwargs(business_id),
                 text=confirm_text,
             )
-            await save_message(sent.chat.id, "out", confirm_text, is_business=True)
+            await save_message(sent.chat.id, "out", confirm_text, is_business=bool(business_id))
             _, notes = await get_user_state(tg_user_id)
             new_notes = (notes or "") + ("\n" if notes else "") + "Trader ID подтвержден после кросс-проверки"
             await set_user_state(tg_user_id, STAGE_WAITING_DEPOSIT, new_notes)
@@ -2826,7 +2867,7 @@ async def send_business_ai_reply(
         reply_markup = InlineKeyboardMarkup(
             inline_keyboard=[[
                 InlineKeyboardButton(
-                    text="🔗 Регистрация на Pocket Option",
+                    text="🔗 Register on Pocket Option",
                     url=reg_link,
                 )
             ]]
@@ -2847,7 +2888,7 @@ async def send_business_ai_reply(
             await bot.send_chat_action(
                 chat_id=tg_user_id,
                 action=ChatAction.TYPING,
-                business_connection_id=business_id,
+                **business_connection_kwargs(business_id),
             )
         except Exception:
             pass
@@ -2985,9 +3026,6 @@ async def main():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
-    # обычный роутер с бизнес-логикой
-    dp.include_router(router)
-
     # функция, чтобы админка могла обновлять промпт в памяти
     def set_ai_system_prompt(new_value: str) -> None:
         global ai_system_prompt
@@ -3011,8 +3049,10 @@ async def main():
     )
     await refresh_admin_ids_cache()
 
-    # подключаем админский роутер
+    # Сначала подключаем админские FSM-хендлеры, чтобы обычный AI-чат
+    # не перехватывал текст, который администратор вводит в формах.
     dp.include_router(admin_router)
+    dp.include_router(router)
 
     asyncio.create_task(work_monitor(bot))
     asyncio.create_task(backfill_missing_trader_ids_from_messages())

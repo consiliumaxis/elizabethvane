@@ -7,6 +7,7 @@ from typing import Optional, List
 from aiogram import Bot
 from config import AFFILIATE_API_SECRET, AFFILIATE_BASE_URL, AFFILIATE_BOT_ID
 from db import get_keyword_triggers
+from service.telegram_context import business_connection_kwargs
 
 
 def normalize(text: str) -> str:
@@ -23,7 +24,7 @@ def find_keyword_trigger(user_text: str, phrases: List[str]) -> Optional[str]:
 async def handle_keyword_trigger(
     *,
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     user_text: str,
     bot: Bot,
     save_message,
@@ -49,13 +50,13 @@ async def handle_keyword_trigger(
     await disable_bot_for_user(tg_user_id, reason)
 
     try:
-        text = "Бро, скоро вернусь к тебе с ответом 🔥"
+        text = "I’ll get back to you with an answer shortly 🔥"
         await bot.send_message(
             chat_id=tg_user_id,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             text=text,
         )
-        await save_message(tg_user_id, "out", text, is_business=True)
+        await save_message(tg_user_id, "out", text, is_business=bool(business_id))
     except Exception as e:
         logging.warning("[keyword_trigger] reply failed: %s", e)
 
