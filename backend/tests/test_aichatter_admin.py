@@ -195,7 +195,8 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn("{ id: 'funnel', label: 'Воронка' }", source)
         self.assertIn("saveFunnel", source)
         self.assertIn("uploadFunnelMedia", source)
-        self.assertIn("Кружки и порядок", source)
+        self.assertIn("Маршрутизация тегов и кружков", source)
+        self.assertIn("Когда AI должен отправить этот кружок", source)
 
 
 if __name__ == "__main__":

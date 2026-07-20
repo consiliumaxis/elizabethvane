@@ -1634,6 +1634,48 @@
   white-space: nowrap;
 }
 
+.aichatter-funnel-explainer {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.aichatter-funnel-explainer > div {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  border: 1px solid rgba(143, 106, 46, 0.2);
+  border-radius: 13px;
+  padding: 12px;
+  background: rgba(255, 252, 246, 0.82);
+}
+
+.aichatter-funnel-explainer strong,
+.aichatter-field-label > span,
+.aichatter-field-caption {
+  color: var(--text-main);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.aichatter-funnel-explainer span,
+.aichatter-field-label > small {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.aichatter-funnel-explainer code,
+.aichatter-field-label code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.aichatter-field-label {
+  display: grid;
+  gap: 6px;
+}
+
 .aichatter-funnel-list {
   display: grid;
   gap: 10px;
@@ -1645,9 +1687,10 @@
   grid-template-columns: 52px minmax(0, 1fr);
   gap: 10px;
   border: 1px solid rgba(143, 106, 46, 0.2);
-  border-radius: 14px;
-  padding: 11px;
-  background: rgba(255, 252, 246, 0.8);
+  border-radius: 16px;
+  padding: 13px;
+  background: linear-gradient(145deg, rgba(255, 253, 248, 0.98), rgba(249, 242, 231, 0.78));
+  box-shadow: 0 8px 24px rgba(72, 48, 14, 0.05);
 }
 
 .aichatter-funnel-item.disabled {
@@ -1688,7 +1731,53 @@
 
 .aichatter-funnel-fields {
   display: grid;
-  gap: 8px;
+  gap: 14px;
+}
+
+.aichatter-funnel-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(143, 106, 46, 0.16);
+}
+
+.aichatter-funnel-card-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.aichatter-funnel-card-head > div > strong {
+  color: var(--text-main);
+  font-size: 1rem;
+}
+
+.aichatter-funnel-eyebrow {
+  color: var(--accent-strong);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.aichatter-funnel-card-head .aichatter-toggle-row {
+  flex: 0 0 auto;
+  padding: 7px 9px;
+}
+
+.aichatter-funnel-config-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.75fr) minmax(240px, 1.25fr);
+  gap: 12px;
+}
+
+.aichatter-funnel-config-grid > label {
+  align-content: start;
+  border: 1px solid rgba(143, 106, 46, 0.16);
+  border-radius: 12px;
+  padding: 11px;
+  background: rgba(255, 255, 255, 0.54);
 }
 
 .aichatter-funnel-row,
@@ -1705,6 +1794,8 @@
 }
 
 .aichatter-funnel-key {
+  display: inline-flex;
+  width: fit-content;
   border-radius: 8px;
   padding: 7px 9px;
   color: #fffaf1;
@@ -1715,8 +1806,21 @@
 }
 
 .aichatter-funnel-description {
-  min-height: 72px;
+  min-height: 96px;
   resize: vertical;
+}
+
+.aichatter-funnel-file-row {
+  justify-content: space-between;
+  border-top: 1px solid rgba(143, 106, 46, 0.16);
+  padding-top: 12px;
+}
+
+.aichatter-funnel-file-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .aichatter-funnel-file-row .admin-muted {
@@ -1747,6 +1851,10 @@
   .aichatter-toggle-grid,
   .aichatter-form-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aichatter-funnel-explainer {
+    grid-template-columns: 1fr;
   }
 
   .aichatter-section-head {
@@ -1781,6 +1889,10 @@
     grid-template-columns: 1fr;
   }
 
+  .aichatter-funnel-config-grid {
+    grid-template-columns: 1fr;
+  }
+
   .aichatter-funnel-order {
     flex-direction: row;
     justify-content: flex-start;
@@ -1789,6 +1901,16 @@
   .aichatter-funnel-row .aichatter-toggle-row {
     width: 100%;
     margin-left: 0;
+  }
+
+  .aichatter-funnel-card-head,
+  .aichatter-funnel-file-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .aichatter-funnel-card-head .aichatter-toggle-row {
+    width: 100%;
   }
 }
 

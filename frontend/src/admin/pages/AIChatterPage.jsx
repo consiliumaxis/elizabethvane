@@ -31,6 +31,14 @@ const FUNNEL_BLOCKS = {
   C: 'Копитрейдинг',
 };
 
+const FUNNEL_BLOCK_HINTS = {
+  A: 'Первое знакомство, доверие и прогрев нового клиента.',
+  W: 'Объяснение продукта, сигналов и механики работы.',
+  E: 'Регистрация, депозит и ответы на сомнения до пополнения.',
+  R: 'Сопровождение после депозита и первые торговые действия.',
+  C: 'Копитрейдинг, дополнительные сценарии и возврат клиента.',
+};
+
 const EMPTY_SETTINGS = {
   system_enabled: true,
   work_start: '22:00',
@@ -479,20 +487,29 @@ export default function AIChatterPage() {
           <section className="admin-card">
             <div className="aichatter-section-head">
               <div>
-                <h3 className="admin-section-title">Сценарий воронки</h3>
-                <p className="admin-muted">ИИ вызывает кружок тегом [SEND:id]. Клиент получает видео и текстовое резюме из промпта.</p>
+                <h3 className="admin-section-title">AI-чаттер и видеокружки</h3>
+                <p className="admin-muted">Настройки относятся к отдельному сервису AI-чаттера. Он отвечает и в личном чате, и через основного бота Elizabeth, когда сообщение передано ему через AI-шлюз.</p>
               </div>
               <Toggle checked={settings.funnel_media_enabled} onChange={(value) => updateField('funnel_media_enabled', value)} label="Кружки включены" hint="Глобальное включение отправки" />
             </div>
-            <label>Основной промпт воронки<textarea className="admin-textarea aichatter-prompt" value={settings.system_prompt} onChange={(event) => updateField('system_prompt', event.target.value)} /></label>
-            <button className="admin-btn" disabled={saving} onClick={saveSettings}>{saving ? 'Сохранение…' : 'Сохранить сценарий'}</button>
+            <div className="aichatter-funnel-explainer">
+              <div><strong>1. Промпт управляет диалогом</strong><span>AI определяет этап клиента и выбирает технический тег, например <code>[SEND:a1]</code>.</span></div>
+              <div><strong>2. Тег выбирает MP4</strong><span>По тегу сервис находит файл ниже и преобразует его в Telegram-видеокружок.</span></div>
+              <div><strong>3. Клиент получает ответ</strong><span>Сначала уходит кружок, затем текст AI. Один и тот же шаг повторно не отправляется.</span></div>
+            </div>
+            <label className="aichatter-field-label">
+              <span>Основной системный промпт AI-чаттера</span>
+              <small>Здесь задаются характер Элизабет, логика продажи, язык ответа и правила выбора тегов <code>[SEND:id]</code>. Названия и инструкции карточек ниже автоматически добавляются к этому промпту — копировать их сюда не нужно.</small>
+              <textarea className="admin-textarea aichatter-prompt" value={settings.system_prompt} onChange={(event) => updateField('system_prompt', event.target.value)} placeholder="Основные правила диалога AI-чаттера…" />
+            </label>
+            <button className="admin-btn" disabled={saving} onClick={saveSettings}>{saving ? 'Сохранение…' : 'Сохранить промпт AI-чаттера'}</button>
           </section>
 
           <section className="admin-card">
             <div className="aichatter-section-head">
               <div>
-                <h3 className="admin-section-title">Кружки и порядок</h3>
-                <p className="admin-muted">Порядок задан по логике A → W → E → R → C. Кнопками можно менять фактическую последовательность независимо от имени файла.</p>
+                <h3 className="admin-section-title">Маршрутизация тегов и кружков</h3>
+                <p className="admin-muted">Каждая карточка связывает инструкцию для AI, технический тег и один MP4-файл. Порядок карточек задаёт рекомендуемую последовательность A → W → E → R → C.</p>
               </div>
               <div className="aichatter-funnel-total">{funnelItems.filter((item) => item.file_exists).length}/{funnelItems.length} загружено</div>
             </div>
@@ -506,18 +523,45 @@ export default function AIChatterPage() {
                     <button type="button" disabled={index === funnelItems.length - 1} onClick={() => moveFunnelItem(index, 1)} title="Опустить">↓</button>
                   </div>
                   <div className="aichatter-funnel-fields">
-                    <div className="aichatter-funnel-row">
-                      <span className="aichatter-funnel-key">[SEND:{item.media_key}]</span>
-                      <select className="admin-input compact" value={item.block_code} onChange={(event) => updateFunnelItem(item.media_key, { block_code: event.target.value })}>
-                        {Object.entries(FUNNEL_BLOCKS).map(([code, label]) => <option key={code} value={code}>{code} · {label}</option>)}
-                      </select>
-                      <Toggle checked={item.enabled} onChange={(value) => updateFunnelItem(item.media_key, { enabled: value })} label="Активен" />
+                    <div className="aichatter-funnel-card-head">
+                      <div>
+                        <span className="aichatter-funnel-eyebrow">Шаг {index + 1} · {FUNNEL_BLOCKS[item.block_code] || item.block_code}</span>
+                        <strong>{item.title || `Кружок ${item.media_key}`}</strong>
+                      </div>
+                      <Toggle checked={item.enabled} onChange={(value) => updateFunnelItem(item.media_key, { enabled: value })} label={item.enabled ? 'Шаг активен' : 'Шаг выключен'} />
                     </div>
-                    <input className="admin-input" value={item.title} onChange={(event) => updateFunnelItem(item.media_key, { title: event.target.value })} placeholder="Название шага" />
-                    <textarea className="admin-textarea aichatter-funnel-description" value={item.description || ''} onChange={(event) => updateFunnelItem(item.media_key, { description: event.target.value })} placeholder="Когда и зачем отправлять этот кружок" />
+
+                    <div className="aichatter-funnel-config-grid">
+                      <label className="aichatter-field-label">
+                        <span>Технический тег в ответе AI</span>
+                        <small>AI вставляет этот тег, чтобы отправить именно данный MP4. Тег формируется из имени файла и не редактируется.</small>
+                        <code className="aichatter-funnel-key">[SEND:{item.media_key}]</code>
+                      </label>
+                      <label className="aichatter-field-label">
+                        <span>Этап диалога</span>
+                        <small>{FUNNEL_BLOCK_HINTS[item.block_code] || 'Техническая группа шага воронки.'}</small>
+                        <select className="admin-input" value={item.block_code} onChange={(event) => updateFunnelItem(item.media_key, { block_code: event.target.value })}>
+                          {Object.entries(FUNNEL_BLOCKS).map(([code, label]) => <option key={code} value={code}>{code} · {label}</option>)}
+                        </select>
+                      </label>
+                    </div>
+
+                    <label className="aichatter-field-label">
+                      <span>Название шага для AI и администратора</span>
+                      <small>Коротко опишите смысл ролика. Это название автоматически попадает в техническую подсказку AI.</small>
+                      <input className="admin-input" value={item.title} onChange={(event) => updateFunnelItem(item.media_key, { title: event.target.value })} placeholder="Например: Первое знакомство с Элизабет" />
+                    </label>
+                    <label className="aichatter-field-label">
+                      <span>Когда AI должен отправить этот кружок</span>
+                      <small>Напишите конкретное условие: на каком этапе, после какой реплики клиента и с какой целью выбирать этот тег. Это не текст сообщения клиенту, а внутренняя инструкция для AI.</small>
+                      <textarea className="admin-textarea aichatter-funnel-description" value={item.description || ''} onChange={(event) => updateFunnelItem(item.media_key, { description: event.target.value })} placeholder="Например: отправить при первом знакомстве, когда клиент ещё не знает Элизабет и не видел презентацию…" />
+                    </label>
                     <div className="aichatter-funnel-file-row">
-                      <span className={`aichatter-pill ${item.file_exists ? 'ok' : 'off'}`}>{item.file_exists ? `${item.file_name} · ${formatBytes(item.file_size)}` : 'Файл не загружен'}</span>
-                      <span className="admin-muted">Отправлен клиентам: {item.sent_count || 0}</span>
+                      <div className="aichatter-funnel-file-meta">
+                        <span className="aichatter-field-caption">MP4-файл для Telegram-кружка</span>
+                        <span className={`aichatter-pill ${item.file_exists ? 'ok' : 'off'}`}>{item.file_exists ? `${item.file_name} · ${formatBytes(item.file_size)}` : 'Файл не загружен'}</span>
+                        <small className="admin-muted">Уникальных отправок клиентам: {item.sent_count || 0}</small>
+                      </div>
                       <label className="admin-btn-outline aichatter-file-button">
                         {uploadingKey === item.media_key ? 'Загрузка…' : item.file_exists ? 'Заменить MP4' : 'Загрузить MP4'}
                         <input type="file" accept="video/mp4,.mp4" disabled={Boolean(uploadingKey)} onChange={(event) => uploadFunnelMedia(item.media_key, event.target.files?.[0])} />
