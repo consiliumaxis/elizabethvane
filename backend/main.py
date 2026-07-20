@@ -116,6 +116,7 @@ except ModuleNotFoundError:
     )
 try:
     from backend.bot_funnel import (
+        CHATTERFY_START_EVENT,
         CHANNEL_SUBSCRIBE_EVENT,
         QUIZ_COMPLETE_EVENT,
         get_aio_question_field,
@@ -133,6 +134,7 @@ try:
     )
 except ModuleNotFoundError:
     from bot_funnel import (
+        CHATTERFY_START_EVENT,
         CHANNEL_SUBSCRIBE_EVENT,
         QUIZ_COMPLETE_EVENT,
         get_aio_question_field,
@@ -1907,6 +1909,29 @@ async def send_aio_user_fields(user_id: int, first_name: str = "", username: str
                 results.append({"url": request_url, "status": "failed", "error": str(exc)[:4000]})
 
     return {"status": "sent", "count": len(results), "results": results}
+
+
+class AIChatterDialogStartRequest(BaseModel):
+    user_id: int
+    first_name: str = ""
+    username: str = ""
+
+
+@app.post("/api/internal/aichatter/dialog-start")
+async def receive_ai_chatter_dialog_start(
+    payload: AIChatterDialogStartRequest,
+    x_ai_chatter_secret: str = Header(default="", alias="X-AI-Chatter-Secret"),
+):
+    """Accept the first-dialog signal from the isolated AI Chatter service."""
+    if not AI_CHATTER_GATEWAY_SECRET:
+        raise HTTPException(status_code=503, detail="AI Chatter integration is not configured")
+    if not secrets.compare_digest(x_ai_chatter_secret, AI_CHATTER_GATEWAY_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid AI Chatter secret")
+    if payload.user_id <= 0:
+        raise HTTPException(status_code=400, detail="user_id must be positive")
+
+    event_result = await send_aio_postback_event(payload.user_id, CHATTERFY_START_EVENT)
+    return {"status": "ok", "event": event_result}
 
 
 async def send_aio_field_value(user_id: int, field_name: str, field_value: object) -> Dict[str, Any]:

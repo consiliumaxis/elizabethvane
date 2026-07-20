@@ -56,6 +56,7 @@ from config import (
     AI_CHATTER_GATEWAY_HOST,
     AI_CHATTER_GATEWAY_PORT,
     AI_CHATTER_GATEWAY_SECRET,
+    AI_CHATTER_AIO_EVENT_URL,
     OPENAI_API_KEY,
     DB_CONFIG,
     LOG_CHANNEL_ID,
@@ -119,6 +120,48 @@ work_start: time | None = None
 work_end: time | None = None
 
 router = Router()
+
+
+async def notify_aio_dialog_start(
+    tg_user_id: int,
+    first_name: str = "",
+    username: str = "",
+):
+    if not AI_CHATTER_AIO_EVENT_URL or not AI_CHATTER_GATEWAY_SECRET:
+        logging.warning("[AIO] dialog-start integration is not configured")
+        return
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                AI_CHATTER_AIO_EVENT_URL,
+                headers={"X-AI-Chatter-Secret": AI_CHATTER_GATEWAY_SECRET},
+                json={
+                    "user_id": int(tg_user_id),
+                    "first_name": str(first_name or ""),
+                    "username": str(username or ""),
+                },
+            )
+        if response.status_code >= 400:
+            logging.warning(
+                "[AIO] start_chatterfy failed for user=%s: HTTP %s %s",
+                tg_user_id,
+                response.status_code,
+                response.text[:500],
+            )
+        else:
+            logging.info("[AIO] start_chatterfy accepted for user=%s", tg_user_id)
+    except Exception as exc:
+        logging.warning("[AIO] start_chatterfy request failed for user=%s: %s", tg_user_id, exc)
+
+
+def schedule_aio_dialog_start(
+    tg_user_id: int,
+    first_name: str = "",
+    username: str = "",
+):
+    task = asyncio.create_task(notify_aio_dialog_start(tg_user_id, first_name, username))
+    gateway_tasks.add(task)
+    task.add_done_callback(gateway_task_done)
 
 
 class ReadBusinessMessage(TelegramMethod[bool]):
@@ -2164,6 +2207,11 @@ async def on_business_message(msg: Message, bot: Bot):
     await save_user_from_message(msg)
     await save_message(msg.chat.id, "in", msg.text or "", is_business=True)
     await passive_sync_user_context(msg.chat.id, incoming_text=msg.text or "")
+    schedule_aio_dialog_start(
+        msg.chat.id,
+        msg.from_user.first_name if msg.from_user else "",
+        msg.from_user.username if msg.from_user else "",
+    )
 
     if not await is_user_bot_active(msg.chat.id):
         return
@@ -2189,6 +2237,11 @@ async def on_business_voice(msg: Message, bot: Bot):
         return
 
     await mark_business_message_read(msg, bot)
+    schedule_aio_dialog_start(
+        tg_id,
+        msg.from_user.first_name if msg.from_user else "",
+        msg.from_user.username if msg.from_user else "",
+    )
 
     if not await is_user_bot_active(tg_id):
         await save_message(
@@ -2249,6 +2302,11 @@ async def on_regular_start(msg: Message, bot: Bot):
     await save_user_from_message(msg)
     await save_message(msg.chat.id, "in", msg.text or "/start", is_business=False)
     await passive_sync_user_context(msg.chat.id, incoming_text="Hello")
+    schedule_aio_dialog_start(
+        msg.chat.id,
+        msg.from_user.first_name if msg.from_user else "",
+        msg.from_user.username if msg.from_user else "",
+    )
 
     if not is_bot_active_now() or not await is_user_bot_active(msg.chat.id):
         return
@@ -2259,6 +2317,11 @@ async def on_regular_start(msg: Message, bot: Bot):
 @router.message(F.voice, F.chat.type == "private")
 async def on_regular_voice(msg: Message, bot: Bot):
     await save_user_from_message(msg)
+    schedule_aio_dialog_start(
+        msg.chat.id,
+        msg.from_user.first_name if msg.from_user else "",
+        msg.from_user.username if msg.from_user else "",
+    )
 
     if not is_bot_active_now() or not await is_user_bot_active(msg.chat.id):
         await save_message(
@@ -2290,6 +2353,11 @@ async def on_regular_message(msg: Message, bot: Bot):
     text = msg.text or ""
     await save_message(msg.chat.id, "in", text, is_business=False)
     await passive_sync_user_context(msg.chat.id, incoming_text=text)
+    schedule_aio_dialog_start(
+        msg.chat.id,
+        msg.from_user.first_name if msg.from_user else "",
+        msg.from_user.username if msg.from_user else "",
+    )
 
     if not is_bot_active_now() or not await is_user_bot_active(msg.chat.id):
         return
@@ -3053,6 +3121,11 @@ async def send_business_ai_reply(
 async def process_gateway_message(payload: dict, delivery_bot: Bot):
     tg_user_id = int(payload["user_id"])
     await save_gateway_user(
+        tg_user_id,
+        str(payload.get("first_name") or ""),
+        str(payload.get("username") or ""),
+    )
+    schedule_aio_dialog_start(
         tg_user_id,
         str(payload.get("first_name") or ""),
         str(payload.get("username") or ""),

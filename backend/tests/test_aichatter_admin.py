@@ -135,6 +135,19 @@ class AichatterAdminTest(unittest.TestCase):
         )[0]
         self.assertNotIn("is_bot_active_now()", gateway_handler)
 
+    def test_every_ai_chatter_entry_path_reports_dialog_start_to_aio(self):
+        backend = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+        bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
+        config = (PROJECT_ROOT / "services/evanechat_bot/config.py").read_text(encoding="utf-8")
+
+        self.assertIn('@app.post("/api/internal/aichatter/dialog-start")', backend)
+        self.assertIn("secrets.compare_digest(x_ai_chatter_secret, AI_CHATTER_GATEWAY_SECRET)", backend)
+        self.assertIn("send_aio_postback_event(payload.user_id, CHATTERFY_START_EVENT)", backend)
+        self.assertIn("AI_CHATTER_AIO_EVENT_URL", config)
+        self.assertIn("async def notify_aio_dialog_start", bot)
+        self.assertIn('headers={"X-AI-Chatter-Secret": AI_CHATTER_GATEWAY_SECRET}', bot)
+        self.assertGreaterEqual(bot.count("schedule_aio_dialog_start("), 7)
+
     def test_business_messages_are_marked_read(self):
         bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
 
