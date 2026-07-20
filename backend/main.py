@@ -2221,6 +2221,10 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "invalid_deposit_amount", telegram_id, source_ip)
         return {"status": "skipped", "reason": "invalid_deposit_amount", "log_id": log_id}
 
+    if event_slug == POCKET_DEPOSIT_EVENT and not normalized.get("provider_event_id"):
+        minute_bucket = datetime.utcnow().strftime("%Y%m%d%H%M")
+        normalized["unique_key"] = f"{normalized.get('unique_key')}:{minute_bucket}"[:191]
+
     safe_payload = {
         key: ("***" if str(key).lower() in {"secret", "token", "signature"} else value)
         for key, value in payload.items()
@@ -2235,6 +2239,25 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                     await conn.rollback()
                     log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "user_not_found", telegram_id, source_ip)
                     return {"status": "skipped", "reason": "user_not_found", "log_id": log_id}
+
+                if event_slug == POCKET_DEPOSIT_EVENT and not normalized.get("provider_event_id"):
+                    await cur.execute(
+                        """
+                        SELECT id, status
+                        FROM pocket_postback_events
+                        WHERE event_slug = %s AND payload_fingerprint = %s
+                          AND created_at >= NOW() - INTERVAL 2 MINUTE
+                        ORDER BY id DESC LIMIT 1
+                        """,
+                        (event_slug, normalized.get("payload_fingerprint")),
+                    )
+                    recent_duplicate = await cur.fetchone()
+                    if recent_duplicate:
+                        await conn.rollback()
+                        return {
+                            "status": "duplicate", "reason": "recent_exact_duplicate",
+                            "log_id": recent_duplicate.get("id"),
+                        }
 
                 await cur.execute(
                     """

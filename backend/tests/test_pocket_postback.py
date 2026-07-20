@@ -53,6 +53,8 @@ class PocketPostbackSourceTest(unittest.TestCase):
         self.assertIn("telegram_id = normalized.get(\"telegram_id\")", source)
         self.assertIn("WHERE user_id = %s", source)
         self.assertIn("SELECT id, status FROM pocket_postback_events WHERE unique_key", source)
+        self.assertIn("recent_exact_duplicate", source)
+        self.assertIn("INTERVAL 2 MINUTE", source)
         self.assertIn("sync_aichatter_pocket_event", source)
 
 

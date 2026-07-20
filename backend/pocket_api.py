@@ -138,8 +138,8 @@ def normalize_pocket_postback_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     if provider_event_id:
         unique_key = _normalize_pocket_text(f"{event_slug or 'unknown'}:provider:{provider_event_id}", 191)
     elif event_slug == POCKET_DEPOSIT_EVENT:
-        # Without a provider transaction id, prefer preventing double credit on retries.
-        # Configure transaction_id in Pocket to preserve distinct same-value deposits.
+        # The handler applies a short exact-payload duplicate window and a minute bucket.
+        # A provider transaction id remains the strongest permanent idempotency key.
         unique_key = _normalize_pocket_text(f"dep:fingerprint:{payload_fingerprint}", 191)
     else:
         unique_key = _normalize_pocket_text(f"{event_slug or 'unknown'}:{click_id or 'unknown'}:{unique_source}", 191)
