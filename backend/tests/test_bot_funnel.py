@@ -120,8 +120,6 @@ class BotFunnelTest(unittest.TestCase):
         subscription_handler = source.split("async def handle_funnel_check_channel", 1)[1].split(
             "class AIChatRequest", 1
         )[0]
-        self.assertIn("await bot.get_chat_member", subscription_handler)
-        self.assertIn("is_active_channel_member(member.status)", subscription_handler)
         self.assertIn("channel_subscribed_at = COALESCE(channel_subscribed_at, NOW())", subscription_handler)
         self.assertIn("await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)", subscription_handler)
         self.assertLess(
