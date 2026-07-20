@@ -1,11 +1,20 @@
 import unittest
+from datetime import time, timedelta
 from pathlib import Path
+
+from backend.admin_time import time_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class AichatterAdminTest(unittest.TestCase):
+    def test_work_hours_are_serialized_for_html_time_inputs(self):
+        self.assertEqual(time_text(timedelta(hours=9)), "09:00")
+        self.assertEqual(time_text(time(9, 30)), "09:30")
+        self.assertEqual(time_text("9:45:00"), "09:45")
+        self.assertEqual(time_text("23:59:00"), "23:59")
+
     def test_router_exposes_complete_admin_surface(self):
         source = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
 

@@ -10,6 +10,11 @@ import aiomysql
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
+try:
+    from backend.admin_time import time_text as _time_text
+except ModuleNotFoundError:
+    from admin_time import time_text as _time_text
+
 
 _pool = None
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -522,12 +527,6 @@ async def _ensure_ai_settings_schema(pool):
                 """,
                 (f"ELIZABETH_BOT_{key}", key),
             )
-
-
-def _time_text(value) -> Optional[str]:
-    if value is None:
-        return None
-    return str(value)[:5]
 
 
 def _split_phrases(raw: str) -> list[str]:
