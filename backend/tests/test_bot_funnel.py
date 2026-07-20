@@ -127,6 +127,12 @@ class BotFunnelTest(unittest.TestCase):
             subscription_handler.index("await handle_funnel_continue"),
         )
 
+    def test_aio_funnel_events_are_deduplicated_per_telegram_user(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn('default_unique_key = f"{normalized_event_slug}:{user_id}"', source)
+        self.assertIn("unique_key=normalized_unique_key", source)
+
 
 if __name__ == "__main__":
     unittest.main()

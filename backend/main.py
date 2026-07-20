@@ -1780,7 +1780,8 @@ async def send_aio_postback_event(
     if not normalized_event_slug:
         return {"status": "skipped", "reason": "invalid_event_slug"}
 
-    normalized_unique_key = str(unique_key or normalized_event_slug).strip()[:128] or normalized_event_slug
+    default_unique_key = f"{normalized_event_slug}:{user_id}"
+    normalized_unique_key = str(unique_key or default_unique_key).strip()[:128] or default_unique_key
     normalized_currency = str(currency or "").strip().upper()[:8] or None
     normalized_revenue = normalize_aio_revenue(revenue)
 
@@ -1797,7 +1798,7 @@ async def send_aio_postback_event(
                 normalized_event_slug,
                 revenue=normalized_revenue,
                 currency=normalized_currency,
-                unique_key=None if normalized_unique_key == normalized_event_slug else normalized_unique_key,
+                unique_key=normalized_unique_key,
             )
 
             await cur.execute(
