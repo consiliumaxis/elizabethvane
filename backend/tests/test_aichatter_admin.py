@@ -128,6 +128,7 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn('gateway_app.router.add_post("/incoming", incoming)', bot)
         self.assertIn('delivery_scope = "elizabeth_bot"', bot)
         self.assertIn("send_intro_funnel_media_if_needed", bot)
+        self.assertIn("allow_funnel_media=not intro_media_sent", bot)
         self.assertIn("delivery_scope VARCHAR(32) NOT NULL", db)
         gateway_handler = bot.split("async def process_gateway_message", 1)[1].split(
             "def gateway_task_done", 1

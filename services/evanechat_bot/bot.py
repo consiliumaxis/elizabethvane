@@ -1800,6 +1800,7 @@ async def generate_ai_reply(
     bot: Bot,
     plan: dict | None = None,
     delivery_scope: str = "business",
+    allow_funnel_media: bool = True,
 ) -> str:
 
     global ai_system_prompt, ai_enabled, ai_model
@@ -1954,7 +1955,7 @@ async def generate_ai_reply(
         reply = await ensure_english_reply(reply, ai_model)
 
         selected_media_key, _, _ = split_funnel_reply(reply)
-        if stage == STAGE_NEW and not selected_media_key:
+        if allow_funnel_media and stage == STAGE_NEW and not selected_media_key:
             selected_media_key = await get_next_unsent_funnel_media_key(
                 tg_user_id,
                 "A",
@@ -2636,6 +2637,7 @@ async def send_business_ai_reply(
     user_text: str,
     bot: Bot,
     delivery_scope: str | None = None,
+    allow_funnel_media: bool = True,
 ):
 
     global session_clients, session_out_messages
@@ -2980,7 +2982,13 @@ async def send_business_ai_reply(
         bot,
         plan,
         delivery_scope=delivery_scope,
+        allow_funnel_media=allow_funnel_media,
     )
+    if not allow_funnel_media:
+        _media_key, before_media, after_media = split_funnel_reply(reply_text)
+        reply_text = "\n\n".join(part for part in (before_media, after_media) if part).strip()
+        if not reply_text:
+            reply_text = "Hi! I’m here and ready to help. What would you like to know first?"
 
     # 4. Кнопка + ссылка на регистрацию, если планировщик запросил
     reply_markup = None
@@ -3066,8 +3074,13 @@ async def process_gateway_message(payload: dict, delivery_bot: Bot):
         return
 
     delivery_scope = "elizabeth_bot"
+    intro_media_sent = False
     if bool(payload.get("is_start")):
-        await send_intro_funnel_media_if_needed(tg_user_id, delivery_bot, delivery_scope)
+        intro_media_sent = await send_intro_funnel_media_if_needed(
+            tg_user_id,
+            delivery_bot,
+            delivery_scope,
+        )
 
     await send_business_ai_reply(
         tg_user_id,
@@ -3075,6 +3088,7 @@ async def process_gateway_message(payload: dict, delivery_bot: Bot):
         text,
         delivery_bot,
         delivery_scope=delivery_scope,
+        allow_funnel_media=not intro_media_sent,
     )
 
 
