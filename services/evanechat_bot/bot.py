@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import hmac
 import json
 import logging
@@ -94,6 +95,22 @@ else:
     ai_client: AsyncOpenAI | None = AsyncOpenAI(api_key=OPENAI_API_KEY)
 active_openai_api_key: str = OPENAI_API_KEY
 
+ELIZABETH_BOT_PROFILE: dict = {
+    "work_start": None,
+    "work_end": None,
+    "system_enabled": True,
+    "work_24_7": False,
+    "ai_system_prompt": "",
+    "planner_system_prompt": "",
+    "ai_enabled": True,
+    "ai_model": os.getenv("AI_MODEL", "gpt-4.1"),
+    "bot_name": "Elizabeth Vane",
+    "openai_api_key": OPENAI_API_KEY,
+    "ai_client": AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None,
+    "funnel_media_enabled": True,
+    "registration_base_url": REGISTER_BASE_URL,
+}
+
 db_pool: aiomysql.Pool | None = None
 
 ai_system_prompt: str = ""
@@ -121,6 +138,37 @@ work_start: time | None = None
 work_end: time | None = None
 
 router = Router()
+current_delivery_scope = contextvars.ContextVar("current_delivery_scope", default="business")
+
+
+def is_elizabeth_bot_scope(delivery_scope: str | None) -> bool:
+    return delivery_scope == "elizabeth_bot"
+
+
+def ai_profile(delivery_scope: str | None = None) -> dict:
+    if is_elizabeth_bot_scope(delivery_scope):
+        return ELIZABETH_BOT_PROFILE
+    return {
+        "work_start": work_start,
+        "work_end": work_end,
+        "system_enabled": work_enabled_manual,
+        "work_24_7": work_24_7,
+        "ai_system_prompt": ai_system_prompt,
+        "planner_system_prompt": None,
+        "ai_enabled": ai_enabled,
+        "ai_model": ai_model,
+        "bot_name": bot_name,
+        "ai_client": ai_client,
+        "funnel_media_enabled": None,
+    }
+
+
+def funnel_table(delivery_scope: str | None = None) -> str:
+    return "elizabeth_bot_funnel_media" if is_elizabeth_bot_scope(delivery_scope) else "funnel_media"
+
+
+def funnel_media_dir(delivery_scope: str | None = None) -> str:
+    return os.path.join(FUNNEL_MEDIA_DIR, "elizabeth_bot") if is_elizabeth_bot_scope(delivery_scope) else FUNNEL_MEDIA_DIR
 
 
 async def notify_aio_dialog_start(
@@ -178,14 +226,17 @@ class ReadBusinessMessage(TelegramMethod[bool]):
 active_register_base_url = REGISTER_BASE_URL
 
 
-def build_register_link(tg_user_id: int) -> str:
-    parts = urlsplit(active_register_base_url)
+def build_register_link(tg_user_id: int, delivery_scope: str = "business") -> str:
+    base_url = active_register_base_url
+    if is_elizabeth_bot_scope(delivery_scope):
+        base_url = ELIZABETH_BOT_PROFILE.get("registration_base_url") or active_register_base_url
+    parts = urlsplit(base_url)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query["click_id"] = str(tg_user_id)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
-def inject_register_link_into_text(reply_text: str, tg_user_id: int) -> str:
-    reg_link = build_register_link(tg_user_id)
+def inject_register_link_into_text(reply_text: str, tg_user_id: int, delivery_scope: str = "business") -> str:
+    reg_link = build_register_link(tg_user_id, delivery_scope)
 
     pattern = r"(?i)pocket\s*option"
 
@@ -776,7 +827,9 @@ async def update_user_memory(tg_user_id: int):
     прошлых сообщений и старой сводки.
     Делается отдельно от основного ответа, чтобы не тормозить диалог.
     """
-    if not ai_client:
+    profile = ai_profile(current_delivery_scope.get())
+    profile_client = profile["ai_client"]
+    if not profile_client:
         return
 
     # Берём побольше контекста — допустим, последние 50 сообщений
@@ -819,7 +872,8 @@ async def update_user_memory(tg_user_id: int):
 
     try:
         resp = await call_chat_with_retry(
-            model=ai_model,
+            model=profile["ai_model"],
+            client=profile_client,
             messages=[
                 {
                     "role": "system",
@@ -852,10 +906,14 @@ async def update_user_memory(tg_user_id: int):
             (tg_user_id, new_memory),
         )
         
-async def get_planner_prompt() -> str:
+async def get_planner_prompt(delivery_scope: str = "business") -> str:
     assert db_pool is not None
+    settings_id = 2 if is_elizabeth_bot_scope(delivery_scope) else 1
     async with db_pool.acquire() as conn, conn.cursor() as cur:
-        await cur.execute("SELECT planner_system_prompt FROM ai_settings LIMIT 1")
+        await cur.execute(
+            "SELECT planner_system_prompt FROM ai_settings WHERE id = %s",
+            (settings_id,),
+        )
         row = await cur.fetchone()
         return row[0] if row and row[0] else ""
 
@@ -867,6 +925,7 @@ async def plan_conversation(
     dep_status: int,
     country: str | None,
     long_memory: str | None,
+    delivery_scope: str = "business",
 ) -> dict:
     """
     Дополнительный ИИ-планировщик на gpt-4.1-mini.
@@ -875,7 +934,9 @@ async def plan_conversation(
     - возвращает список actions
     - формирует main_prompt для основного ИИ
     """
-    if not ai_client:
+    profile = ai_profile(delivery_scope)
+    profile_client = profile["ai_client"]
+    if not profile_client:
         return {
             "intent": "DEFAULT",
             "actions": [],
@@ -907,11 +968,11 @@ async def plan_conversation(
     )
 
     # 4) системный промт
-    sys = await get_planner_prompt()
+    sys = await get_planner_prompt(delivery_scope)
 
     # 5) user-message для планнер-модели
     user_content = (
-        f"Имя менеджера: {bot_name}\n"
+        f"Имя менеджера: {profile['bot_name']}\n"
         f"Текущий этап воронки (stage): {stage}\n"
         f"registration_status: {reg_status}\n"
         f"deposit_status: {dep_status}\n"
@@ -925,6 +986,7 @@ async def plan_conversation(
     try:
         resp = await call_chat_with_retry(
             model="gpt-4.1-mini",
+            client=profile_client,
             temperature=0.0,
             messages=[
                 {"role": "system", "content": sys},
@@ -1103,16 +1165,22 @@ async def get_user_status_flags(tg_user_id: int) -> tuple[int, int, str | None]:
     return reg_status, dep_status, country
 
 
-async def get_funnel_routing_prompt() -> str:
-    settings = await load_kv_settings()
-    if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
+async def get_funnel_routing_prompt(delivery_scope: str = "business") -> str:
+    profile = ai_profile(delivery_scope)
+    if is_elizabeth_bot_scope(delivery_scope):
+        enabled = bool(profile["funnel_media_enabled"])
+    else:
+        settings = await load_kv_settings()
+        enabled = settings.get("FUNNEL_MEDIA_ENABLED", "1") == "1"
+    if not enabled:
         return "Отправка кружков сейчас отключена: не используй теги [SEND:id]."
+    table = funnel_table(delivery_scope)
     assert db_pool is not None
     async with db_pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
         await cur.execute(
-            """
+            f"""
             SELECT media_key, block_code, title, description
-            FROM funnel_media
+            FROM {table}
             WHERE enabled = 1
             ORDER BY sort_order, id
             """
@@ -1138,15 +1206,21 @@ async def get_next_unsent_funnel_media_key(
     block_code: str,
     delivery_scope: str = "business",
 ) -> str | None:
-    settings = await load_kv_settings()
-    if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
+    profile = ai_profile(delivery_scope)
+    if is_elizabeth_bot_scope(delivery_scope):
+        enabled = bool(profile["funnel_media_enabled"])
+    else:
+        settings = await load_kv_settings()
+        enabled = settings.get("FUNNEL_MEDIA_ENABLED", "1") == "1"
+    if not enabled:
         return None
+    table = funnel_table(delivery_scope)
     assert db_pool is not None
     async with db_pool.acquire() as conn, conn.cursor() as cur:
         await cur.execute(
-            """
+            f"""
             SELECT fm.media_key
-            FROM funnel_media fm
+            FROM {table} fm
             LEFT JOIN funnel_media_sent fms
               ON fms.media_key = fm.media_key
              AND fms.tg_user_id = %s
@@ -1162,17 +1236,15 @@ async def get_next_unsent_funnel_media_key(
         row = await cur.fetchone()
     return str(row[0]) if row else None
 
-async def is_user_bot_active(tg_user_id: int) -> bool:
+async def is_user_bot_active(tg_user_id: int, delivery_scope: str = "business") -> bool:
     """
     Проверяем, не отключён ли автоответчик для этого пользователя.
     По умолчанию считаем, что включён.
     """
     assert db_pool is not None
     async with db_pool.acquire() as conn, conn.cursor() as cur:
-        await cur.execute(
-            "SELECT bot_active FROM users WHERE tg_user_id = %s",
-            (tg_user_id,),
-        )
+        column = "elizabeth_bot_active" if is_elizabeth_bot_scope(delivery_scope) else "bot_active"
+        await cur.execute(f"SELECT {column} FROM users WHERE tg_user_id = %s", (tg_user_id,))
         row = await cur.fetchone()
 
     if not row or row[0] is None:
@@ -1180,15 +1252,16 @@ async def is_user_bot_active(tg_user_id: int) -> bool:
     return bool(row[0])
 
 
-async def disable_bot_for_user(tg_user_id: int, reason: str):
+async def disable_bot_for_user(tg_user_id: int, reason: str, delivery_scope: str = "business"):
     assert db_pool is not None
     short_reason = (reason or "")[:250]
+    active_column = "elizabeth_bot_active" if is_elizabeth_bot_scope(delivery_scope) else "bot_active"
 
     async with db_pool.acquire() as conn, conn.cursor() as cur:
         await cur.execute(
-            """
+            f"""
             UPDATE users
-            SET bot_active = 0,
+            SET {active_column} = 0,
                 bot_block_reason = %s,
                 bot_blocked_at = NOW()
             WHERE tg_user_id = %s
@@ -1415,7 +1488,7 @@ async def backfill_missing_trader_ids_from_messages(
     )
         
 async def call_chat_with_retry(messages, model: str, temperature: float = 0.4,
-                               max_retries: int = 4):
+                               max_retries: int = 4, client=None):
     """
     Обёртка для chat.completions с ретраями при rate_limit_exceeded (429).
     """
@@ -1428,7 +1501,10 @@ async def call_chat_with_retry(messages, model: str, temperature: float = 0.4,
             # Не передаём параметр, чтобы одна настройка модели работала для 4.x и 5.x.
             if not model.lower().startswith("gpt-5"):
                 request["temperature"] = temperature
-            resp = await ai_client.chat.completions.create(**request)
+            active_client = client or ai_client
+            if not active_client:
+                raise RuntimeError("OpenAI client is not configured")
+            resp = await active_client.chat.completions.create(**request)
             return resp
 
         except Exception as e:
@@ -1463,7 +1539,7 @@ async def call_chat_with_retry(messages, model: str, temperature: float = 0.4,
     raise last_err if last_err else RuntimeError("OpenAI rate limit, retries exhausted")
 
 
-async def ensure_english_reply(reply_text: str, model: str) -> str:
+async def ensure_english_reply(reply_text: str, model: str, client=None) -> str:
     """Гарантирует английский ответ даже при русской истории и инструкциях планировщика."""
     text = (reply_text or "").strip()
     if not re.search(r"[А-Яа-яЁё]", text):
@@ -1471,6 +1547,7 @@ async def ensure_english_reply(reply_text: str, model: str) -> str:
     try:
         response = await call_chat_with_retry(
             model=model,
+            client=client,
             temperature=0.0,
             messages=[
                 {
@@ -1850,9 +1927,12 @@ async def generate_ai_reply(
     allow_funnel_media: bool = True,
 ) -> str:
 
-    global ai_system_prompt, ai_enabled, ai_model
+    profile = ai_profile(delivery_scope)
+    profile_client = profile["ai_client"]
+    profile_model = profile["ai_model"]
+    profile_name = profile["bot_name"]
     fallback_text = "Простите, сейчас большая нагрузка, вернусь к вам через пару минут 🙏"
-    if not ai_client or not ai_enabled:
+    if not profile_client or not profile["ai_enabled"]:
         # уведомляем админов
         for admin_id in RUNTIME_ADMIN_IDS:
             try:
@@ -1928,7 +2008,7 @@ async def generate_ai_reply(
 
         state_description = (
             f"Информация о клиенте:\n"
-            f"- Имя бота: {bot_name}\n"
+            f"- Имя бота: {profile_name}\n"
             f"- Этап воронки: {stage}\n"
             f"- Подсказка по этапу: {stage_hint}\n"
             f"- Заметки: {notes or 'нет заметок'}\n\n"
@@ -1936,11 +2016,11 @@ async def generate_ai_reply(
         )
 
         messages: list[dict] = [
-            {"role": "system", "content": ai_system_prompt},
+            {"role": "system", "content": profile["ai_system_prompt"]},
             {
                 "role": "system",
                 "content": (
-                    f"Тебя зовут {bot_name}. Если клиент спрашивает, как тебя зовут или кто ты, "
+                    f"Тебя зовут {profile_name}. Если клиент спрашивает, как тебя зовут или кто ты, "
                     "используй это имя и отвечай от первого лица."
                 ),
             },
@@ -1953,7 +2033,7 @@ async def generate_ai_reply(
             },
         ]
 
-        messages.append({"role": "system", "content": await get_funnel_routing_prompt()})
+        messages.append({"role": "system", "content": await get_funnel_routing_prompt(delivery_scope)})
 
         if long_memory:
             messages.append({
@@ -1994,12 +2074,13 @@ async def generate_ai_reply(
 
         resp = await call_chat_with_retry(
             messages=messages,
-            model=ai_model,
+            model=profile_model,
             temperature=0.4,
+            client=profile_client,
         )
 
         reply = (resp.choices[0].message.content or "").strip()
-        reply = await ensure_english_reply(reply, ai_model)
+        reply = await ensure_english_reply(reply, profile_model, profile_client)
 
         selected_media_key, _, _ = split_funnel_reply(reply)
         if allow_funnel_media and stage == STAGE_NEW and not selected_media_key:
@@ -2053,10 +2134,11 @@ async def generate_ai_reply(
 # ================== ЛОГИКА ВРЕМЕНИ РАБОТЫ ==================
 
 
-def is_bot_active_now() -> bool:
-    if not work_enabled_manual:
+def is_bot_active_now(delivery_scope: str = "business") -> bool:
+    profile = ai_profile(delivery_scope)
+    if not profile["system_enabled"]:
         return False
-    return work_24_7 or is_in_schedule_now()
+    return profile["work_24_7"] or is_in_schedule_now(delivery_scope)
 
 async def update_work_enabled(enabled: bool):
     global work_enabled_manual
@@ -2111,11 +2193,11 @@ async def runtime_settings_refresh_worker():
     global work_start, work_end, work_enabled_manual, work_24_7
     global ai_system_prompt, ai_enabled, ai_model, bot_name
     global KV_CACHE, KV_CACHE_LOADED_AT
-    global ai_client, active_openai_api_key, active_register_base_url
+    global ai_client, active_openai_api_key, active_register_base_url, ELIZABETH_BOT_PROFILE
 
     while True:
-        await asyncio.sleep(10)
         if db_pool is None:
+            await asyncio.sleep(1)
             continue
         try:
             async with db_pool.acquire() as conn, conn.cursor() as cur:
@@ -2131,6 +2213,19 @@ async def runtime_settings_refresh_worker():
                 register_url_row = await cur.fetchone()
                 await cur.execute("SELECT svalue FROM kv_settings WHERE skey = 'WORK_24_7'")
                 work_24_7_row = await cur.fetchone()
+                await cur.execute("SELECT work_start, work_end, is_enabled FROM settings WHERE id = 2")
+                bot_settings_row = await cur.fetchone()
+                await cur.execute(
+                    "SELECT system_prompt, planner_system_prompt, enabled, model, openai_api_key "
+                    "FROM ai_settings WHERE id = 2"
+                )
+                bot_ai_row = await cur.fetchone()
+                await cur.execute(
+                    "SELECT skey, svalue FROM kv_settings WHERE skey IN "
+                    "('ELIZABETH_BOT_BOT_NAME', 'ELIZABETH_BOT_WORK_24_7', "
+                    "'ELIZABETH_BOT_FUNNEL_MEDIA_ENABLED', 'ELIZABETH_BOT_REGISTER_BASE_URL')"
+                )
+                bot_kv = {row[0]: str(row[1] or "") for row in await cur.fetchall()}
 
             if settings_row:
                 work_start = to_time(settings_row[0]) if settings_row[0] is not None else None
@@ -2154,12 +2249,34 @@ async def runtime_settings_refresh_worker():
                 active_register_base_url = str(register_url_row[0]).strip()
             if work_24_7_row:
                 work_24_7 = str(work_24_7_row[0] or "0").strip() == "1"
+            if bot_settings_row and bot_ai_row:
+                next_bot_key = (bot_ai_row[4] or OPENAI_API_KEY or "").strip()
+                current_bot_key = str(ELIZABETH_BOT_PROFILE.get("openai_api_key") or "")
+                bot_client = ELIZABETH_BOT_PROFILE.get("ai_client")
+                if next_bot_key != current_bot_key:
+                    bot_client = AsyncOpenAI(api_key=next_bot_key) if next_bot_key else None
+                ELIZABETH_BOT_PROFILE = {
+                    "work_start": to_time(bot_settings_row[0]) if bot_settings_row[0] is not None else None,
+                    "work_end": to_time(bot_settings_row[1]) if bot_settings_row[1] is not None else None,
+                    "system_enabled": bool(bot_settings_row[2]),
+                    "work_24_7": bot_kv.get("ELIZABETH_BOT_WORK_24_7", "0") == "1",
+                    "ai_system_prompt": bot_ai_row[0] or "",
+                    "planner_system_prompt": bot_ai_row[1] or "",
+                    "ai_enabled": bool(bot_ai_row[2]),
+                    "ai_model": bot_ai_row[3] or "gpt-4.1",
+                    "bot_name": bot_kv.get("ELIZABETH_BOT_BOT_NAME") or "Elizabeth Vane",
+                    "openai_api_key": next_bot_key,
+                    "ai_client": bot_client,
+                    "funnel_media_enabled": bot_kv.get("ELIZABETH_BOT_FUNNEL_MEDIA_ENABLED", "1") == "1",
+                    "registration_base_url": bot_kv.get("ELIZABETH_BOT_REGISTER_BASE_URL") or REGISTER_BASE_URL,
+                }
 
             KV_CACHE = {}
             KV_CACHE_LOADED_AT = None
             await refresh_admin_ids_cache()
         except Exception as exc:
             logging.warning("Runtime settings refresh failed: %s", exc)
+        await asyncio.sleep(10)
 
 
 # ================== ОБРАБОТЧИКИ БИЗНЕС-СОБЫТИЙ ==================
@@ -2408,15 +2525,16 @@ async def transcribe_voice_to_text(msg: Message, bot: Bot) -> str | None:
         return None
 
 
-async def transcribe_voice_file_id(file_id: str, bot: Bot) -> str | None:
-    if not ai_client or not file_id:
+async def transcribe_voice_file_id(file_id: str, bot: Bot, delivery_scope: str = "business") -> str | None:
+    profile_client = ai_profile(delivery_scope)["ai_client"]
+    if not profile_client or not file_id:
         return None
     buf = BytesIO()
     try:
         await bot.download(file_id, buf)
         buf.seek(0)
         buf.name = "voice.ogg"
-        result = await ai_client.audio.transcriptions.create(
+        result = await profile_client.audio.transcriptions.create(
             model="gpt-4o-transcribe",
             file=buf,
         )
@@ -2432,15 +2550,21 @@ async def get_funnel_media_for_user(
     media_key: str,
     delivery_scope: str = "business",
 ) -> dict | None:
-    settings = await load_kv_settings()
-    if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
+    profile = ai_profile(delivery_scope)
+    if is_elizabeth_bot_scope(delivery_scope):
+        enabled = bool(profile["funnel_media_enabled"])
+    else:
+        settings = await load_kv_settings()
+        enabled = settings.get("FUNNEL_MEDIA_ENABLED", "1") == "1"
+    if not enabled:
         return None
+    table = funnel_table(delivery_scope)
     assert db_pool is not None
     async with db_pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
         await cur.execute(
-            """
+            f"""
             SELECT media_key, title, file_name, telegram_file_id
-            FROM funnel_media
+            FROM {table}
             WHERE media_key = %s AND enabled = 1
             LIMIT 1
             """,
@@ -2470,6 +2594,7 @@ async def mark_funnel_media_sent(
     delivery_scope: str = "business",
 ):
     assert db_pool is not None
+    table = funnel_table(delivery_scope)
     async with db_pool.acquire() as conn, conn.cursor() as cur:
         await cur.execute(
             """
@@ -2480,7 +2605,7 @@ async def mark_funnel_media_sent(
         )
         if telegram_file_id:
             await cur.execute(
-                "UPDATE funnel_media SET telegram_file_id = %s WHERE media_key = %s",
+                f"UPDATE {table} SET telegram_file_id = %s WHERE media_key = %s",
                 (telegram_file_id, media_key),
             )
 
@@ -2560,7 +2685,7 @@ async def send_funnel_video_note(
         return None
 
     file_name = os.path.basename(str(media.get("file_name") or ""))
-    media_root = os.path.abspath(FUNNEL_MEDIA_DIR)
+    media_root = os.path.abspath(funnel_media_dir(delivery_scope))
     file_path = os.path.abspath(os.path.join(media_root, file_name))
     if os.path.commonpath((media_root, file_path)) != media_root or not os.path.isfile(file_path):
         logging.error("[funnel media] file missing for %s: %s", media_key, file_path)
@@ -2722,9 +2847,10 @@ async def send_business_ai_reply(
 
     global session_clients, session_out_messages
     delivery_scope = delivery_scope or ("business" if business_id else "evanechat_bot")
+    current_delivery_scope.set(delivery_scope)
 
     # 0. Если бот для этого пользователя уже отключён – ничего не делаем
-    if not await is_user_bot_active(tg_user_id):
+    if not await is_user_bot_active(tg_user_id, delivery_scope):
         return
 
     if is_manual_takeover_active(tg_user_id):
@@ -2874,9 +3000,12 @@ async def send_business_ai_reply(
         db_pool=db_pool,
         notify_admins=notify_admins,
         get_user_status_flags=get_user_status_flags,
-        disable_bot_for_user=disable_bot_for_user,
+        disable_bot_for_user=lambda user_id, reason: disable_bot_for_user(
+            user_id, reason, delivery_scope
+        ),
         get_trader_id_for_user=get_trader_id_for_user,
         update_user_memory=update_user_memory,
+        delivery_scope=delivery_scope,
     ):
         return
         
@@ -2900,6 +3029,7 @@ async def send_business_ai_reply(
         dep_status=dep_status,
         country=country,
         long_memory=long_memory,
+        delivery_scope=delivery_scope,
     )
 
     if stage == STAGE_NAME_KNOWN and reg_status == 0:
@@ -3037,7 +3167,7 @@ async def send_business_ai_reply(
                 save_message=save_message,
                 set_user_state=set_user_state,
                 bad_stage=STAGE_ACCOUNT_ID_BAD,
-                build_register_link=build_register_link,
+                build_register_link=lambda user_id: build_register_link(user_id, delivery_scope),
             )
             existing_flow_started = True
 
@@ -3073,8 +3203,8 @@ async def send_business_ai_reply(
     # 4. Кнопка + ссылка на регистрацию, если планировщик запросил
     reply_markup = None
     if add_register_button:
-        reply_text = inject_register_link_into_text(reply_text, tg_user_id)
-        reg_link = build_register_link(tg_user_id)
+        reply_text = inject_register_link_into_text(reply_text, tg_user_id, delivery_scope)
+        reg_link = build_register_link(tg_user_id, delivery_scope)
         reply_markup = InlineKeyboardMarkup(
             inline_keyboard=[[
                 InlineKeyboardButton(
@@ -3146,14 +3276,14 @@ async def process_gateway_message(payload: dict, delivery_bot: Bot):
     text = str(payload.get("text") or "").strip()
     voice_file_id = str(payload.get("voice_file_id") or "").strip()
     if voice_file_id and not text:
-        text = await transcribe_voice_file_id(voice_file_id, delivery_bot) or ""
+        text = await transcribe_voice_file_id(voice_file_id, delivery_bot, "elizabeth_bot") or ""
     if not text:
         logging.info("[gateway] ignored empty message from user=%s", tg_user_id)
         return
 
     await save_message(tg_user_id, "in", text, is_business=False)
     await passive_sync_user_context(tg_user_id, incoming_text=text)
-    if not is_bot_active_now() or not await is_user_bot_active(tg_user_id):
+    if not is_bot_active_now("elizabeth_bot") or not await is_user_bot_active(tg_user_id, "elizabeth_bot"):
         return
 
     delivery_scope = "elizabeth_bot"
@@ -3302,23 +3432,27 @@ def schedule_business_reply(msg: Message, bot: Bot):
         delayed_business_reply(tg_id, bot, delay=10.0)
     )
     
-def is_in_schedule_now() -> bool:
+def is_in_schedule_now(delivery_scope: str = "business") -> bool:
     """Только проверка по времени (без ручного рубильника)."""
-    if work_start is None or work_end is None:
+    profile = ai_profile(delivery_scope)
+    profile_start = profile["work_start"]
+    profile_end = profile["work_end"]
+    if profile_start is None or profile_end is None:
         return True
 
     now = datetime.now(MSK_TZ).time()
 
-    if work_start <= work_end:
-        return work_start <= now < work_end
+    if profile_start <= profile_end:
+        return profile_start <= now < profile_end
     else:
-        return now >= work_start or now < work_end
+        return now >= profile_start or now < profile_end
 
     
 # ================== ЗАПУСК ==================
 async def main():
     global db_pool, work_start, work_end, work_enabled_manual, work_24_7
     global ai_system_prompt, ai_enabled, ai_model, bot_name
+    global ELIZABETH_BOT_PROFILE
 
     if not API_TOKEN:
         raise RuntimeError("API_TOKEN is required")
@@ -3335,6 +3469,35 @@ async def main():
     ) = await init_db()
     initial_kv_settings = await load_kv_settings()
     work_24_7 = initial_kv_settings.get("WORK_24_7", "0") == "1"
+    async with db_pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute("SELECT work_start, work_end, is_enabled FROM settings WHERE id = 2")
+        bot_settings_row = await cur.fetchone()
+        await cur.execute(
+            "SELECT system_prompt, planner_system_prompt, enabled, model, openai_api_key "
+            "FROM ai_settings WHERE id = 2"
+        )
+        bot_ai_row = await cur.fetchone()
+        await cur.execute(
+            "SELECT skey, svalue FROM kv_settings WHERE skey LIKE 'ELIZABETH_BOT_%'"
+        )
+        bot_kv = {row[0]: str(row[1] or "") for row in await cur.fetchall()}
+    if bot_settings_row and bot_ai_row:
+        bot_key = (bot_ai_row[4] or OPENAI_API_KEY or "").strip()
+        ELIZABETH_BOT_PROFILE.update({
+            "work_start": to_time(bot_settings_row[0]) if bot_settings_row[0] is not None else None,
+            "work_end": to_time(bot_settings_row[1]) if bot_settings_row[1] is not None else None,
+            "system_enabled": bool(bot_settings_row[2]),
+            "work_24_7": bot_kv.get("ELIZABETH_BOT_WORK_24_7", "0") == "1",
+            "ai_system_prompt": bot_ai_row[0] or "",
+            "planner_system_prompt": bot_ai_row[1] or "",
+            "ai_enabled": bool(bot_ai_row[2]),
+            "ai_model": bot_ai_row[3] or "gpt-4.1",
+            "bot_name": bot_kv.get("ELIZABETH_BOT_BOT_NAME") or "Elizabeth Vane",
+            "openai_api_key": bot_key,
+            "ai_client": AsyncOpenAI(api_key=bot_key) if bot_key else None,
+            "funnel_media_enabled": bot_kv.get("ELIZABETH_BOT_FUNNEL_MEDIA_ENABLED", "1") == "1",
+            "registration_base_url": bot_kv.get("ELIZABETH_BOT_REGISTER_BASE_URL") or REGISTER_BASE_URL,
+        })
 
     bot = Bot(
         API_TOKEN,

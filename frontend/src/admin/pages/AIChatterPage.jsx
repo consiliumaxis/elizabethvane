@@ -93,6 +93,7 @@ function Toggle({ checked, onChange, label, hint }) {
 }
 
 export default function AIChatterPage() {
+  const [profile, setProfile] = useState('chatter');
   const [section, setSection] = useState('overview');
   const [overview, setOverview] = useState({ counts: {}, settings: EMPTY_SETTINGS });
   const [settings, setSettings] = useState(EMPTY_SETTINGS);
@@ -127,23 +128,23 @@ export default function AIChatterPage() {
   };
 
   const loadOverview = useCallback(async () => {
-    const result = await apiAdminFetchJson('/api/admin/aichatter/overview');
+    const result = await apiAdminFetchJson(`/api/admin/aichatter/overview?profile=${profile}`);
     const nextSettings = { ...EMPTY_SETTINGS, ...(result.settings || {}) };
     setOverview({ counts: result.counts || {}, settings: nextSettings });
     setSettings(nextSettings);
-  }, []);
+  }, [profile]);
 
   const loadUsers = useCallback(async (search = userSearch) => {
-    const params = new URLSearchParams({ search, page: '1', limit: '100' });
+    const params = new URLSearchParams({ search, profile, page: '1', limit: '100' });
     const result = await apiAdminFetchJson(`/api/admin/aichatter/users?${params}`);
     setUsers(result.users || []);
     setUsersTotal(result.total || 0);
-  }, [userSearch]);
+  }, [userSearch, profile]);
 
   const loadTriggers = useCallback(async () => {
-    const result = await apiAdminFetchJson('/api/admin/aichatter/triggers');
+    const result = await apiAdminFetchJson(`/api/admin/aichatter/triggers?profile=${profile}`);
     setTriggers(result.phrases || []);
-  }, []);
+  }, [profile]);
 
   const loadPostbacks = useCallback(async () => {
     const params = new URLSearchParams({ page: '1', limit: '100' });
@@ -160,9 +161,9 @@ export default function AIChatterPage() {
   }, []);
 
   const loadFunnel = useCallback(async () => {
-    const result = await apiAdminFetchJson('/api/admin/aichatter/funnel');
+    const result = await apiAdminFetchJson(`/api/admin/aichatter/funnel?profile=${profile}`);
     setFunnelItems(result.items || []);
-  }, []);
+  }, [profile]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -172,6 +173,14 @@ export default function AIChatterPage() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [loadOverview, loadTriggers, loadStatistics]);
+
+  useEffect(() => {
+    if (section !== 'funnel') return undefined;
+    const timer = window.setTimeout(() => {
+      loadFunnel().catch((requestError) => setError(requestError.message || 'Не удалось загрузить воронку'));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [profile, section, loadFunnel]);
 
   const selectSection = async (nextSection) => {
     setSection(nextSection);
@@ -207,7 +216,7 @@ export default function AIChatterPage() {
     setSaving(true);
     setError('');
     try {
-      const result = await apiAdminFetchJson('/api/admin/aichatter/settings', {
+      const result = await apiAdminFetchJson(`/api/admin/aichatter/settings?profile=${profile}`, {
         method: 'PUT',
         body: JSON.stringify(settings),
       });
@@ -235,7 +244,7 @@ export default function AIChatterPage() {
 
   const toggleUser = async (user) => {
     try {
-      await apiAdminFetchJson(`/api/admin/aichatter/users/${user.tg_user_id}`, {
+      await apiAdminFetchJson(`/api/admin/aichatter/users/${user.tg_user_id}?profile=${profile}`, {
         method: 'PATCH',
         body: JSON.stringify({ bot_active: !user.bot_active }),
       });
@@ -275,7 +284,7 @@ export default function AIChatterPage() {
 
   const saveTriggers = async (next) => {
     try {
-      const result = await apiAdminFetchJson('/api/admin/aichatter/triggers', {
+      const result = await apiAdminFetchJson(`/api/admin/aichatter/triggers?profile=${profile}`, {
         method: 'PUT',
         body: JSON.stringify({ phrases: next }),
       });
@@ -336,7 +345,7 @@ export default function AIChatterPage() {
     setFunnelSaving(true);
     setError('');
     try {
-      const result = await apiAdminFetchJson('/api/admin/aichatter/funnel', {
+      const result = await apiAdminFetchJson(`/api/admin/aichatter/funnel?profile=${profile}`, {
         method: 'PUT',
         body: JSON.stringify({
           items: funnelItems.map((item, index) => ({
@@ -367,7 +376,7 @@ export default function AIChatterPage() {
     setUploadingKey(mediaKey);
     setError('');
     try {
-      await apiAdminFetchJson(`/api/admin/aichatter/funnel/${encodeURIComponent(mediaKey)}/media`, {
+      await apiAdminFetchJson(`/api/admin/aichatter/funnel/${encodeURIComponent(mediaKey)}/media?profile=${profile}`, {
         method: 'PUT',
         headers: { 'Content-Type': file.type || 'video/mp4' },
         body: file,
@@ -383,13 +392,31 @@ export default function AIChatterPage() {
 
   if (loading) return <div className="admin-card admin-muted">Загрузка АИЧАТТЕР…</div>;
 
+  const isMainBotProfile = profile === 'elizabeth_bot';
+  const switchProfile = async (nextProfile) => {
+    if (nextProfile === profile) return;
+    setProfile(nextProfile);
+    setError('');
+    setSuccess('');
+  };
+
   return (
     <div className="aichatter-layout">
+      <section className="admin-card aichatter-profile-switch">
+        <div>
+          <strong>Канал общения</strong>
+          <small>У каждого канала свои настройки, промпты, расписание и набор кружков.</small>
+        </div>
+        <div className="aichatter-profile-buttons">
+          <button type="button" className={`admin-btn-outline ${!isMainBotProfile ? 'active' : ''}`} onClick={() => switchProfile('chatter')}>EL CHATTER · аккаунт</button>
+          <button type="button" className={`admin-btn-outline ${isMainBotProfile ? 'active' : ''}`} onClick={() => switchProfile('elizabeth_bot')}>БОТ ELIZABETH · кружки</button>
+        </div>
+      </section>
       <section className="admin-card aichatter-hero">
         <div>
-          <div className="admin-badge">@EVanechat_bot</div>
-          <h2 className="admin-subtitle">AI-менеджер Elizabeth Vane</h2>
-          <p className="admin-muted">Настройки применяются к работающему боту и общей базе aichat.</p>
+          <div className="admin-badge">{isMainBotProfile ? '@ElizabethVane_bot' : 'Telegram Business · аккаунт Elizabeth'}</div>
+          <h2 className="admin-subtitle">{isMainBotProfile ? 'Основной бот Elizabeth Vane' : 'EL CHATTER — переписка от аккаунта'}</h2>
+          <p className="admin-muted">{isMainBotProfile ? 'Отдельные настройки ответов основного Telegram-бота и его видеокружков.' : 'Отдельный сервис, подключённый к Telegram-аккаунту и ведущий переписку от его имени.'}</p>
         </div>
         <div className={`aichatter-status ${settings.system_enabled && settings.ai_enabled ? 'online' : 'paused'}`}>
           {settings.system_enabled && settings.ai_enabled ? 'Работает' : 'Приостановлен'}
@@ -485,8 +512,8 @@ export default function AIChatterPage() {
           <section className="admin-card">
             <div className="aichatter-section-head">
               <div>
-                <h3 className="admin-section-title">AI-чаттер и видеокружки</h3>
-                <p className="admin-muted">Настройки относятся к отдельному сервису AI-чаттера. Он отвечает и в личном чате, и через основного бота Elizabeth, когда сообщение передано ему через AI-шлюз.</p>
+                <h3 className="admin-section-title">{isMainBotProfile ? 'Воронка основного бота и видеокружки' : 'Воронка EL CHATTER и видеокружки'}</h3>
+                <p className="admin-muted">{isMainBotProfile ? 'Эта воронка используется только в @ElizabethVane_bot и не зависит от настроек EL CHATTER.' : 'Эта воронка используется только сервисом переписки от Telegram-аккаунта и не управляет основным ботом.'}</p>
               </div>
               <Toggle checked={settings.funnel_media_enabled} onChange={(value) => updateField('funnel_media_enabled', value)} label="Кружки включены" hint="Глобальное включение отправки" />
             </div>
@@ -496,11 +523,11 @@ export default function AIChatterPage() {
               <div><strong>3. Клиент получает ответ</strong><span>Сначала уходит кружок, затем текст AI. Один и тот же шаг повторно не отправляется.</span></div>
             </div>
             <label className="aichatter-field-label">
-              <span>Основной системный промпт AI-чаттера</span>
+              <span>Основной системный промпт {isMainBotProfile ? 'бота Elizabeth' : 'EL CHATTER'}</span>
               <small>Здесь задаются характер Элизабет, логика продажи, язык ответа и правила выбора тегов <code>[SEND:id]</code>. Названия и инструкции карточек ниже автоматически добавляются к этому промпту — копировать их сюда не нужно.</small>
               <textarea className="admin-textarea aichatter-prompt" value={settings.system_prompt} onChange={(event) => updateField('system_prompt', event.target.value)} placeholder="Основные правила диалога AI-чаттера…" />
             </label>
-            <button className="admin-btn" disabled={saving} onClick={saveSettings}>{saving ? 'Сохранение…' : 'Сохранить промпт AI-чаттера'}</button>
+            <button className="admin-btn" disabled={saving} onClick={saveSettings}>{saving ? 'Сохранение…' : `Сохранить промпт ${isMainBotProfile ? 'бота' : 'EL CHATTER'}`}</button>
           </section>
 
           <section className="admin-card">

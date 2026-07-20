@@ -143,7 +143,9 @@ class AichatterAdminTest(unittest.TestCase):
         gateway_handler = bot.split("async def process_gateway_message", 1)[1].split(
             "def gateway_task_done", 1
         )[0]
-        self.assertIn("is_bot_active_now()", gateway_handler)
+        self.assertIn('is_bot_active_now("elizabeth_bot")', gateway_handler)
+        self.assertIn('ELIZABETH_BOT_PROFILE', bot)
+        self.assertIn('elizabeth_bot_funnel_media', db)
 
     def test_round_the_clock_setting_controls_every_chat_entry(self):
         backend = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
@@ -154,7 +156,8 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn("WORK_24_7", backend)
         self.assertIn("Set both work hours before disabling round-the-clock mode", backend)
         self.assertIn("WORK_24_7", db)
-        self.assertIn("work_24_7 or is_in_schedule_now()", bot)
+        self.assertIn('profile["work_24_7"] or is_in_schedule_now(delivery_scope)', bot)
+        self.assertIn('ELIZABETH_BOT_WORK_24_7', bot)
         self.assertIn("Работает круглосуточно", frontend)
         self.assertIn("disabled={settings.work_24_7}", frontend)
         self.assertNotIn("Проверять компанию", frontend)

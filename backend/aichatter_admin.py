@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import shutil
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -136,8 +137,25 @@ def _config() -> Dict[str, Any]:
     }
 
 
-def _media_dir() -> Path:
-    return Path(os.getenv("AICHAT_MEDIA_DIR") or "/root/evanechat/media/funnel").resolve()
+def _profile_config(profile: str) -> Dict[str, Any]:
+    normalized = str(profile or "chatter").strip().lower()
+    profiles = {
+        "chatter": {"id": 1, "kv_prefix": "", "table": "funnel_media", "scope": "business"},
+        "elizabeth_bot": {
+            "id": 2,
+            "kv_prefix": "ELIZABETH_BOT_",
+            "table": "elizabeth_bot_funnel_media",
+            "scope": "elizabeth_bot",
+        },
+    }
+    if normalized not in profiles:
+        raise HTTPException(status_code=400, detail="Unknown AI profile")
+    return {"name": normalized, **profiles[normalized]}
+
+
+def _media_dir(profile: str = "chatter") -> Path:
+    root = Path(os.getenv("AICHAT_MEDIA_DIR") or "/root/evanechat/media/funnel").resolve()
+    return root if profile == "chatter" else (root / "elizabeth_bot").resolve()
 
 
 async def _ensure_funnel_schema(pool):
@@ -162,6 +180,11 @@ async def _ensure_funnel_schema(pool):
         )
         await cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS elizabeth_bot_funnel_media LIKE funnel_media
+            """
+        )
+        await cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS funnel_media_sent (
                 tg_user_id BIGINT UNSIGNED NOT NULL,
                 media_key VARCHAR(32) NOT NULL,
@@ -181,6 +204,27 @@ async def _ensure_funnel_schema(pool):
                 """,
                 (media_key, block_code, title, title, index * 10, f"{media_key.upper()}.MP4"),
             )
+        await cur.execute("SELECT COUNT(*) FROM elizabeth_bot_funnel_media")
+        if int((await cur.fetchone() or [0])[0] or 0) == 0:
+            await cur.execute(
+                """
+                INSERT INTO elizabeth_bot_funnel_media
+                    (media_key, block_code, title, description, sort_order, file_name,
+                     telegram_file_id, enabled, created_at, updated_at)
+                SELECT media_key, block_code, title, description, sort_order, file_name,
+                       telegram_file_id, enabled, created_at, updated_at
+                FROM funnel_media
+                """
+            )
+
+    source_dir = _media_dir("chatter")
+    bot_dir = _media_dir("elizabeth_bot")
+    if source_dir.is_dir():
+        bot_dir.mkdir(parents=True, exist_ok=True)
+        for source in source_dir.glob("*.MP4"):
+            target = bot_dir / source.name
+            if not target.exists():
+                shutil.copy2(source, target)
 
 
 async def _get_pool():
@@ -406,6 +450,51 @@ async def _ensure_ai_settings_schema(pool):
         )
         if not await cur.fetchone():
             await cur.execute("ALTER TABLE ai_settings ADD COLUMN openai_api_key TEXT NULL")
+        await cur.execute(
+            """
+            SELECT 1 FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'
+              AND COLUMN_NAME = 'elizabeth_bot_active'
+            LIMIT 1
+            """
+        )
+        if not await cur.fetchone():
+            await cur.execute(
+                "ALTER TABLE users ADD COLUMN elizabeth_bot_active TINYINT(1) NOT NULL DEFAULT 1 AFTER bot_active"
+            )
+        await cur.execute(
+            "CREATE TABLE IF NOT EXISTS elizabeth_bot_keyword_triggers LIKE keyword_triggers"
+        )
+        await cur.execute("SELECT COUNT(*) FROM elizabeth_bot_keyword_triggers")
+        if int((await cur.fetchone() or [0])[0] or 0) == 0:
+            await cur.execute(
+                "INSERT INTO elizabeth_bot_keyword_triggers (phrases) SELECT phrases FROM keyword_triggers"
+            )
+        await cur.execute(
+            """
+            INSERT INTO settings (id, work_start, work_end, is_enabled)
+            SELECT 2, work_start, work_end, is_enabled FROM settings WHERE id = 1
+            ON DUPLICATE KEY UPDATE id = id
+            """
+        )
+        await cur.execute(
+            """
+            INSERT INTO ai_settings
+                (id, system_prompt, planner_system_prompt, enabled, model, openai_api_key)
+            SELECT 2, system_prompt, planner_system_prompt, enabled, model, openai_api_key
+            FROM ai_settings WHERE id = 1
+            ON DUPLICATE KEY UPDATE id = id
+            """
+        )
+        for key in _KV_KEYS:
+            await cur.execute(
+                """
+                INSERT INTO kv_settings (skey, svalue)
+                SELECT %s, svalue FROM kv_settings WHERE skey = %s
+                ON DUPLICATE KEY UPDATE skey = skey
+                """,
+                (f"ELIZABETH_BOT_{key}", key),
+            )
 
 
 def _time_text(value) -> Optional[str]:
@@ -426,21 +515,28 @@ def _split_phrases(raw: str) -> list[str]:
     return result
 
 
-async def _load_settings(pool) -> Dict[str, Any]:
+async def _load_settings(pool, profile: str = "chatter") -> Dict[str, Any]:
     await _ensure_ai_settings_schema(pool)
+    cfg = _profile_config(profile)
+    keys = tuple(f"{cfg['kv_prefix']}{key}" for key in _KV_KEYS)
     async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
-        await cur.execute("SELECT work_start, work_end, is_enabled FROM settings WHERE id = 1")
+        await cur.execute("SELECT work_start, work_end, is_enabled FROM settings WHERE id = %s", (cfg["id"],))
         settings = await cur.fetchone() or {}
         await cur.execute(
-            "SELECT system_prompt, planner_system_prompt, enabled, model, openai_api_key FROM ai_settings WHERE id = 1"
+            "SELECT system_prompt, planner_system_prompt, enabled, model, openai_api_key FROM ai_settings WHERE id = %s",
+            (cfg["id"],),
         )
         ai = await cur.fetchone() or {}
         await cur.execute(
             f"SELECT skey, svalue FROM kv_settings WHERE skey IN ({','.join(['%s'] * len(_KV_KEYS))})",
-            _KV_KEYS,
+            keys,
         )
-        kv = {row["skey"]: row.get("svalue") or "" for row in await cur.fetchall()}
+        kv = {
+            row["skey"].removeprefix(cfg["kv_prefix"]): row.get("svalue") or ""
+            for row in await cur.fetchall()
+        }
     return {
+        "profile": cfg["name"],
         "system_enabled": bool(settings.get("is_enabled", 1)),
         "work_start": _time_text(settings.get("work_start")),
         "work_end": _time_text(settings.get("work_end")),
@@ -492,14 +588,17 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
         }
 
     @router.get("/overview")
-    async def overview(admin=Depends(admin_dependency)):
+    async def overview(profile: str = Query("chatter"), admin=Depends(admin_dependency)):
         pool = await _get_pool()
-        settings = await _load_settings(pool)
+        settings = await _load_settings(pool, profile)
+        cfg = _profile_config(profile)
+        active_column = "elizabeth_bot_active" if cfg["name"] == "elizabeth_bot" else "bot_active"
+        trigger_table = "elizabeth_bot_keyword_triggers" if cfg["name"] == "elizabeth_bot" else "keyword_triggers"
         async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS users_total,
-                       COALESCE(SUM(bot_active = 1), 0) AS users_active,
+                       COALESCE(SUM({active_column} = 1), 0) AS users_active,
                        COALESCE(SUM(registration_status = 1), 0) AS registrations,
                        COALESCE(SUM(deposit_status = 1), 0) AS deposits
                 FROM users
@@ -510,15 +609,20 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
             counts.update(await cur.fetchone() or {})
             await cur.execute("SELECT COUNT(*) AS admins_total FROM admin_users")
             counts.update(await cur.fetchone() or {})
-            await cur.execute("SELECT phrases FROM keyword_triggers ORDER BY id LIMIT 1")
+            await cur.execute(f"SELECT phrases FROM {trigger_table} ORDER BY id LIMIT 1")
             trigger_row = await cur.fetchone() or {}
         counts["triggers_total"] = len(_split_phrases(trigger_row.get("phrases") or ""))
         return {"status": "success", "settings": settings, "counts": counts}
 
     @router.put("/settings")
-    async def update_settings(payload: AichatterSettingsUpdate, admin=Depends(admin_dependency)):
+    async def update_settings(
+        payload: AichatterSettingsUpdate,
+        profile: str = Query("chatter"),
+        admin=Depends(admin_dependency),
+    ):
         pool = await _get_pool()
         await _ensure_ai_settings_schema(pool)
+        cfg = _profile_config(profile)
         data = payload.model_dump(exclude_unset=True)
         for key in ("work_start", "work_end"):
             if key in data and data[key] is not None and not _TIME_RE.fullmatch(data[key]):
@@ -549,7 +653,10 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
                     value = int(data[field]) if field == "system_enabled" else data[field]
                     setting_values.append(value)
             if setting_parts:
-                await cur.execute(f"UPDATE settings SET {', '.join(setting_parts)} WHERE id = 1", setting_values)
+                await cur.execute(
+                    f"UPDATE settings SET {', '.join(setting_parts)} WHERE id = %s",
+                    (*setting_values, cfg["id"]),
+                )
 
             ai_parts, ai_values = [], []
             for field, column in (
@@ -563,7 +670,10 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
                     ai_parts.append(f"{column} = %s")
                     ai_values.append(int(data[field]) if field == "ai_enabled" else str(data[field]).strip())
             if ai_parts:
-                await cur.execute(f"UPDATE ai_settings SET {', '.join(ai_parts)} WHERE id = 1", ai_values)
+                await cur.execute(
+                    f"UPDATE ai_settings SET {', '.join(ai_parts)} WHERE id = %s",
+                    (*ai_values, cfg["id"]),
+                )
 
             kv_map = {
                 "bot_name": "BOT_NAME",
@@ -582,17 +692,21 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
             for field, key in kv_map.items():
                 if field in data:
                     value = int(data[field]) if isinstance(data[field], bool) else data[field]
-                    await _set_kv(cur, key, value)
-        return {"status": "success", "settings": await _load_settings(pool)}
+                    await _set_kv(cur, f"{cfg['kv_prefix']}{key}", value)
+        return {"status": "success", "settings": await _load_settings(pool, profile)}
 
     @router.get("/users")
     async def users(
         search: str = "",
+        profile: str = Query("chatter"),
         page: int = Query(default=1, ge=1),
         limit: int = Query(default=30, ge=1, le=100),
         admin=Depends(admin_dependency),
     ):
         pool = await _get_pool()
+        await _ensure_ai_settings_schema(pool)
+        cfg = _profile_config(profile)
+        active_column = "u.elizabeth_bot_active" if cfg["name"] == "elizabeth_bot" else "u.bot_active"
         where, params = "", []
         search = search.strip()
         if search:
@@ -606,7 +720,7 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
             await cur.execute(
                 f"""
                 SELECT u.tg_user_id, u.first_name, u.username, u.country, u.trader_id,
-                       u.registration_status, u.deposit_status, u.bot_active,
+                       u.registration_status, u.deposit_status, {active_column} AS bot_active,
                        u.bot_block_reason, u.created_at, u.last_message_at,
                        s.stage, s.notes, COUNT(m.id) AS messages_count
                 FROM users u
@@ -660,14 +774,22 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
         }
 
     @router.patch("/users/{telegram_id}")
-    async def update_user(telegram_id: int, payload: AichatterUserUpdate, admin=Depends(admin_dependency)):
+    async def update_user(
+        telegram_id: int,
+        payload: AichatterUserUpdate,
+        profile: str = Query("chatter"),
+        admin=Depends(admin_dependency),
+    ):
         pool = await _get_pool()
+        await _ensure_ai_settings_schema(pool)
+        cfg = _profile_config(profile)
+        active_column = "elizabeth_bot_active" if cfg["name"] == "elizabeth_bot" else "bot_active"
         reason = None if payload.bot_active else (payload.reason or "Отключено из веб-админцентра")[:255]
         async with pool.acquire() as conn, conn.cursor() as cur:
             await cur.execute(
-                """
+                f"""
                 UPDATE users
-                SET bot_active = %s,
+                SET {active_column} = %s,
                     bot_blocked_at = CASE WHEN %s = 1 THEN NULL ELSE NOW() END,
                     bot_block_reason = %s
                 WHERE tg_user_id = %s
@@ -679,42 +801,56 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
         return {"status": "success", "telegram_id": telegram_id, "bot_active": payload.bot_active}
 
     @router.get("/triggers")
-    async def triggers(admin=Depends(admin_dependency)):
+    async def triggers(profile: str = Query("chatter"), admin=Depends(admin_dependency)):
         pool = await _get_pool()
+        await _ensure_ai_settings_schema(pool)
+        cfg = _profile_config(profile)
+        table = "elizabeth_bot_keyword_triggers" if cfg["name"] == "elizabeth_bot" else "keyword_triggers"
         async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT id, phrases FROM keyword_triggers ORDER BY id LIMIT 1")
+            await cur.execute(f"SELECT id, phrases FROM {table} ORDER BY id LIMIT 1")
             row = await cur.fetchone() or {}
         return {"status": "success", "phrases": _split_phrases(row.get("phrases") or "")}
 
     @router.put("/triggers")
-    async def update_triggers(payload: AichatterTriggersUpdate, admin=Depends(admin_dependency)):
+    async def update_triggers(
+        payload: AichatterTriggersUpdate,
+        profile: str = Query("chatter"),
+        admin=Depends(admin_dependency),
+    ):
         phrases = _split_phrases(",".join(payload.phrases))
         pool = await _get_pool()
+        await _ensure_ai_settings_schema(pool)
+        cfg = _profile_config(profile)
+        table = "elizabeth_bot_keyword_triggers" if cfg["name"] == "elizabeth_bot" else "keyword_triggers"
         async with pool.acquire() as conn, conn.cursor() as cur:
-            await cur.execute("SELECT id FROM keyword_triggers ORDER BY id LIMIT 1")
+            await cur.execute(f"SELECT id FROM {table} ORDER BY id LIMIT 1")
             row = await cur.fetchone()
             if row:
-                await cur.execute("UPDATE keyword_triggers SET phrases = %s WHERE id = %s", (", ".join(phrases), row[0]))
+                await cur.execute(f"UPDATE {table} SET phrases = %s WHERE id = %s", (", ".join(phrases), row[0]))
             else:
-                await cur.execute("INSERT INTO keyword_triggers (phrases) VALUES (%s)", (", ".join(phrases),))
+                await cur.execute(f"INSERT INTO {table} (phrases) VALUES (%s)", (", ".join(phrases),))
         return {"status": "success", "phrases": phrases}
 
     @router.get("/funnel")
-    async def funnel(admin=Depends(admin_dependency)):
+    async def funnel(profile: str = Query("chatter"), admin=Depends(admin_dependency)):
         pool = await _get_pool()
         await _ensure_funnel_schema(pool)
-        media_dir = _media_dir()
+        cfg = _profile_config(profile)
+        media_dir = _media_dir(cfg["name"])
+        table = cfg["table"]
         async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
-                """
+                f"""
                 SELECT fm.id, fm.media_key, fm.block_code, fm.title, fm.description,
                        fm.sort_order, fm.file_name, fm.enabled, fm.updated_at,
                        COUNT(fms.tg_user_id) AS sent_count
-                FROM funnel_media fm
+                FROM {table} fm
                 LEFT JOIN funnel_media_sent fms ON fms.media_key = fm.media_key
+                  AND fms.delivery_scope = %s
                 GROUP BY fm.id
                 ORDER BY fm.sort_order, fm.id
-                """
+                """,
+                (cfg["scope"],),
             )
             rows = await cur.fetchall()
         for row in rows:
@@ -722,10 +858,14 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
             exists = file_path.parent == media_dir and file_path.is_file()
             row["file_exists"] = exists
             row["file_size"] = file_path.stat().st_size if exists else 0
-        return {"status": "success", "items": rows, "media_dir": str(media_dir)}
+        return {"status": "success", "profile": cfg["name"], "items": rows, "media_dir": str(media_dir)}
 
     @router.put("/funnel")
-    async def update_funnel(payload: AichatterFunnelUpdate, admin=Depends(admin_dependency)):
+    async def update_funnel(
+        payload: AichatterFunnelUpdate,
+        profile: str = Query("chatter"),
+        admin=Depends(admin_dependency),
+    ):
         if not payload.items:
             raise HTTPException(status_code=400, detail="Funnel must contain at least one item")
         keys = [item.media_key.strip().lower() for item in payload.items]
@@ -741,16 +881,18 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
 
         pool = await _get_pool()
         await _ensure_funnel_schema(pool)
+        cfg = _profile_config(profile)
+        table = cfg["table"]
         async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT media_key FROM funnel_media")
+            await cur.execute(f"SELECT media_key FROM {table}")
             known = {row["media_key"] for row in await cur.fetchall()}
             unknown = sorted(set(keys) - known)
             if unknown:
                 raise HTTPException(status_code=400, detail=f"Unknown media keys: {', '.join(unknown)}")
             for item, media_key in zip(payload.items, keys):
                 await cur.execute(
-                    """
-                    UPDATE funnel_media
+                    f"""
+                    UPDATE {table}
                     SET block_code = %s, title = %s, description = %s,
                         sort_order = %s, enabled = %s
                     WHERE media_key = %s
@@ -764,10 +906,15 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
                         media_key,
                     ),
                 )
-        return await funnel(admin)
+        return await funnel(profile, admin)
 
     @router.put("/funnel/{media_key}/media")
-    async def upload_funnel_media(media_key: str, request: Request, admin=Depends(admin_dependency)):
+    async def upload_funnel_media(
+        media_key: str,
+        request: Request,
+        profile: str = Query("chatter"),
+        admin=Depends(admin_dependency),
+    ):
         media_key = media_key.strip().lower()
         if not re.fullmatch(r"[a-z][a-z0-9]*(?:\.[0-9]+)?", media_key):
             raise HTTPException(status_code=400, detail="Invalid media key")
@@ -786,12 +933,14 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
 
         pool = await _get_pool()
         await _ensure_funnel_schema(pool)
+        cfg = _profile_config(profile)
+        table = cfg["table"]
         async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT media_key FROM funnel_media WHERE media_key = %s", (media_key,))
+            await cur.execute(f"SELECT media_key FROM {table} WHERE media_key = %s", (media_key,))
             if not await cur.fetchone():
                 raise HTTPException(status_code=404, detail="Funnel item not found")
 
-        media_dir = _media_dir()
+        media_dir = _media_dir(cfg["name"])
         media_dir.mkdir(parents=True, exist_ok=True)
         file_name = f"{media_key.upper()}.MP4"
         file_path = (media_dir / file_name).resolve()
@@ -808,7 +957,7 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
 
         async with pool.acquire() as conn, conn.cursor() as cur:
             await cur.execute(
-                "UPDATE funnel_media SET file_name = %s, telegram_file_id = NULL WHERE media_key = %s",
+                f"UPDATE {table} SET file_name = %s, telegram_file_id = NULL WHERE media_key = %s",
                 (file_name, media_key),
             )
         return {"status": "success", "media_key": media_key, "file_name": file_name, "file_size": len(payload_bytes)}

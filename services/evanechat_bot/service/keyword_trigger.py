@@ -34,6 +34,7 @@ async def handle_keyword_trigger(
     disable_bot_for_user,
     get_trader_id_for_user,
     update_user_memory,
+    delivery_scope: str = "business",
 ) -> bool:
 
     reg_status, dep_status, _ = await get_user_status_flags(tg_user_id)
@@ -41,7 +42,7 @@ async def handle_keyword_trigger(
     if not (reg_status == 1 and dep_status == 1):
         return False
 
-    phrases = await get_keyword_triggers(db_pool)
+    phrases = await get_keyword_triggers(db_pool, delivery_scope)
     hit = find_keyword_trigger(user_text, phrases)
     if not hit:
         return False

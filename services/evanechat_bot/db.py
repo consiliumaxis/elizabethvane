@@ -1,11 +1,13 @@
 # db.py
 import logging
+import os
+import shutil
 from datetime import time, timedelta
 from typing import Optional, Tuple
 
 import aiomysql
 
-from config import DB_CONFIG
+from config import DB_CONFIG, FUNNEL_MEDIA_DIR
 
 
 FUNNEL_MEDIA_DEFAULTS = (
@@ -189,6 +191,12 @@ async def init_db() -> Tuple[
 
         await ensure_column(cur, "settings", "is_enabled", "is_enabled TINYINT(1) NOT NULL DEFAULT 1")
         await ensure_column(cur, "users", "bot_active", "bot_active TINYINT(1) NOT NULL DEFAULT 1")
+        await ensure_column(
+            cur,
+            "users",
+            "elizabeth_bot_active",
+            "elizabeth_bot_active TINYINT(1) NOT NULL DEFAULT 1",
+        )
         await ensure_column(cur, "users", "bot_blocked_at", "bot_blocked_at TIMESTAMP NULL DEFAULT NULL")
         await ensure_column(cur, "users", "bot_block_reason", "bot_block_reason VARCHAR(255) DEFAULT NULL")
         await ensure_column(cur, "admin_users", "added_by", "added_by BIGINT UNSIGNED DEFAULT NULL")
@@ -320,6 +328,21 @@ async def init_db() -> Tuple[
             ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """
         )
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS elizabeth_bot_keyword_triggers LIKE keyword_triggers
+            """
+        )
+        await cur.execute("SELECT COUNT(*) FROM elizabeth_bot_keyword_triggers")
+        if int((await cur.fetchone() or [0])[0] or 0) == 0:
+            await cur.execute(
+                "INSERT INTO elizabeth_bot_keyword_triggers (phrases) SELECT phrases FROM keyword_triggers"
+            )
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS elizabeth_bot_funnel_media LIKE funnel_media
+            """
+        )
         if not await column_exists(cur, "funnel_media_sent", "delivery_scope"):
             await cur.execute(
                 """
@@ -354,6 +377,18 @@ async def init_db() -> Tuple[
                 ON DUPLICATE KEY UPDATE media_key = media_key
                 """,
                 (media_key, block_code, title, title, index * 10, f"{media_key.upper()}.MP4"),
+            )
+        await cur.execute("SELECT COUNT(*) FROM elizabeth_bot_funnel_media")
+        if int((await cur.fetchone() or [0])[0] or 0) == 0:
+            await cur.execute(
+                """
+                INSERT INTO elizabeth_bot_funnel_media
+                    (media_key, block_code, title, description, sort_order, file_name,
+                     telegram_file_id, enabled, created_at, updated_at)
+                SELECT media_key, block_code, title, description, sort_order, file_name,
+                       telegram_file_id, enabled, created_at, updated_at
+                FROM funnel_media
+                """
             )
 
         await cur.execute(
@@ -551,6 +586,22 @@ async def init_db() -> Tuple[
             """,
             (default_ai_prompt, default_planner_prompt),
         )
+        await cur.execute(
+            """
+            INSERT INTO settings (id, work_start, work_end, is_enabled)
+            SELECT 2, work_start, work_end, is_enabled FROM settings WHERE id = 1
+            ON DUPLICATE KEY UPDATE id = id
+            """
+        )
+        await cur.execute(
+            """
+            INSERT INTO ai_settings
+                (id, system_prompt, planner_system_prompt, enabled, model, openai_api_key)
+            SELECT 2, system_prompt, planner_system_prompt, enabled, model, openai_api_key
+            FROM ai_settings WHERE id = 1
+            ON DUPLICATE KEY UPDATE id = id
+            """
+        )
 
         await cur.execute(
             "SELECT system_prompt, enabled, model FROM ai_settings WHERE id = 1"
@@ -583,6 +634,20 @@ async def init_db() -> Tuple[
         await ensure_kv_setting(cur, "STATS_COMMISSION_MODE", "auto")
         await ensure_kv_setting(cur, "FUNNEL_MEDIA_ENABLED", "1")
         await ensure_kv_setting(cur, "WORK_24_7", "0")
+        for key in (
+            "BOT_NAME", "MIN_DEPOSIT_THRESHOLD", "WORK_24_7", "FUNNEL_MEDIA_ENABLED",
+            "REGISTER_BASE_URL", "POSTBACK_LOG_CHAT_ID", "LOG_REGISTRATIONS",
+            "LOG_DEPOSITS", "LOG_WITHDRAWALS", "LOG_COMMISSIONS", "LOG_SYSTEM_ERRORS",
+            "STATS_COMMISSION_MODE",
+        ):
+            await cur.execute(
+                """
+                INSERT INTO kv_settings (skey, svalue)
+                SELECT %s, svalue FROM kv_settings WHERE skey = %s
+                ON DUPLICATE KEY UPDATE skey = skey
+                """,
+                (f"ELIZABETH_BOT_{key}", key),
+            )
 
         await cur.execute(
             "SELECT svalue FROM kv_settings WHERE skey = 'BOT_NAME'"
@@ -590,6 +655,17 @@ async def init_db() -> Tuple[
         row = await cur.fetchone()
         bot_name = (row[0] or "Elizabeth Vane") if row else "Elizabeth Vane"
         logging.info("[init_db] bot_name из kv_settings: %s", bot_name)
+
+    bot_media_dir = os.path.join(FUNNEL_MEDIA_DIR, "elizabeth_bot")
+    if os.path.isdir(FUNNEL_MEDIA_DIR):
+        os.makedirs(bot_media_dir, exist_ok=True)
+        for file_name in os.listdir(FUNNEL_MEDIA_DIR):
+            if not file_name.upper().endswith(".MP4"):
+                continue
+            source_path = os.path.join(FUNNEL_MEDIA_DIR, file_name)
+            target_path = os.path.join(bot_media_dir, file_name)
+            if os.path.isfile(source_path) and not os.path.exists(target_path):
+                shutil.copy2(source_path, target_path)
 
     return (
         db_pool,
@@ -602,9 +678,10 @@ async def init_db() -> Tuple[
         bot_name,
     )
     
-async def get_keyword_triggers(db_pool) -> list[str]:
+async def get_keyword_triggers(db_pool, delivery_scope: str = "business") -> list[str]:
+    table = "elizabeth_bot_keyword_triggers" if delivery_scope == "elizabeth_bot" else "keyword_triggers"
     async with db_pool.acquire() as conn, conn.cursor() as cur:
-        await cur.execute("SELECT phrases FROM keyword_triggers LIMIT 1")
+        await cur.execute(f"SELECT phrases FROM {table} LIMIT 1")
         row = await cur.fetchone()
 
     if not row or not row[0]:

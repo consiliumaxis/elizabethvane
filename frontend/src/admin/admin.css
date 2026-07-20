@@ -1390,6 +1390,28 @@
   gap: 10px;
 }
 
+.aichatter-profile-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.aichatter-profile-switch > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.aichatter-profile-switch small {
+  color: var(--admin-muted);
+}
+
+.aichatter-profile-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .aichatter-hero,
 .aichatter-section-head {
   display: flex;
@@ -1885,9 +1907,15 @@
 
 @media (max-width: 480px) {
   .aichatter-hero,
+  .aichatter-profile-switch,
   .aichatter-inline-form {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .aichatter-profile-buttons,
+  .aichatter-profile-buttons .admin-btn-outline {
+    width: 100%;
   }
 
   .aichatter-status {
