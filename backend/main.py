@@ -5199,32 +5199,9 @@ async def build_main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
 
-async def forward_message_to_ai_chatter(
-    message: types.Message,
-    *,
-    text_override: Optional[str] = None,
-    is_start: bool = False,
-) -> bool:
-    """Передаёт личное сообщение единому AI-движку без второго Telegram polling."""
-    if (
-        not AI_CHATTER_GATEWAY_SECRET
-        or not message.from_user
-        or str(message.chat.type) not in {"private", "ChatType.PRIVATE"}
-    ):
+async def post_to_ai_chatter(payload: Dict[str, Any]) -> bool:
+    if not AI_CHATTER_GATEWAY_SECRET:
         return False
-    text = text_override if text_override is not None else (message.text or "")
-    voice_file_id = message.voice.file_id if message.voice else ""
-    if not text.strip() and not voice_file_id:
-        return False
-    payload = {
-        "user_id": int(message.from_user.id),
-        "message_id": int(message.message_id),
-        "first_name": message.from_user.first_name or "",
-        "username": message.from_user.username or "",
-        "text": text,
-        "voice_file_id": voice_file_id,
-        "is_start": bool(is_start),
-    }
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
             response = await client.post(
@@ -5237,6 +5214,47 @@ async def forward_message_to_ai_chatter(
     except Exception as exc:
         print(f"[AI Chatter gateway] forward failed: {exc}")
         return False
+
+
+async def forward_message_to_ai_chatter(
+    message: types.Message,
+    *,
+    text_override: Optional[str] = None,
+    is_start: bool = False,
+) -> bool:
+    """Передаёт личное сообщение единому AI-движку без второго Telegram polling."""
+    if (
+        not message.from_user
+        or str(message.chat.type) not in {"private", "ChatType.PRIVATE"}
+    ):
+        return False
+    text = text_override if text_override is not None else (message.text or "")
+    voice_file_id = message.voice.file_id if message.voice else ""
+    if not text.strip() and not voice_file_id:
+        return False
+    return await post_to_ai_chatter({
+        "user_id": int(message.from_user.id),
+        "message_id": int(message.message_id),
+        "first_name": message.from_user.first_name or "",
+        "username": message.from_user.username or "",
+        "text": text,
+        "voice_file_id": voice_file_id,
+        "is_start": bool(is_start),
+    })
+
+
+async def start_ai_chatter_from_callback(callback: types.CallbackQuery) -> bool:
+    if not callback.from_user or not callback.message:
+        return False
+    return await post_to_ai_chatter({
+        "user_id": int(callback.from_user.id),
+        "message_id": int(callback.message.message_id),
+        "first_name": callback.from_user.first_name or "",
+        "username": callback.from_user.username or "",
+        "text": "Hello",
+        "voice_file_id": "",
+        "is_start": True,
+    })
 
 
 async def send_main_menu(chat_id: int, user_id: int, user_name: str):
@@ -5644,6 +5662,7 @@ async def handle_funnel_continue(callback: types.CallbackQuery):
         user_name = callback.from_user.first_name or callback.from_user.username or "Trader"
         await callback.answer()
         await send_main_menu(callback.message.chat.id, int(callback.from_user.id), user_name)
+        await start_ai_chatter_from_callback(callback)
 
 
 @dp.callback_query(lambda callback: callback.data == FUNNEL_CHECK_CHANNEL_CALLBACK)

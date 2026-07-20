@@ -101,6 +101,17 @@ class BotFunnelTest(unittest.TestCase):
         )
         self.assertTrue((PROJECT_ROOT / "backend" / "assets" / "elizabeth_start_video_note.mp4").exists())
 
+    def test_go_to_trading_starts_the_ai_circle_funnel(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn("async def start_ai_chatter_from_callback", source)
+        self.assertIn('"is_start": True', source)
+        callback_handler = source.split("async def handle_funnel_continue", 1)[1].split(
+            "@dp.callback_query", 1
+        )[0]
+        self.assertIn("await send_main_menu", callback_handler)
+        self.assertIn("await start_ai_chatter_from_callback(callback)", callback_handler)
+
 
 if __name__ == "__main__":
     unittest.main()
