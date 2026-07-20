@@ -16,6 +16,11 @@ def build_registration_url(template: str, click_id: int) -> str:
         if key == "click_id":
             value = str(click_id)
             has_click_id = True
+        if not value and any(existing_key == key and existing_value for existing_key, existing_value in query):
+            # Pocket tracking links may already contain a fixed campaign value
+            # (for example ac=elizabeth_vane_rev1) before an optional {ac} macro.
+            # Do not let an empty duplicate override that attribution.
+            continue
         query.append((key, value))
     if not has_click_id:
         query.append(("click_id", str(click_id)))

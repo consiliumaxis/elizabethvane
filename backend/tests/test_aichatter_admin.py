@@ -27,7 +27,7 @@ class AichatterAdminTest(unittest.TestCase):
 
         self.assertIn(("click_id", "7699787119"), query)
         self.assertIn(("utm_campaign", "836376"), query)
-        self.assertEqual([value for key, value in query if key == "ac"], ["elizabeth_vane_rev1", ""])
+        self.assertEqual([value for key, value in query if key == "ac"], ["elizabeth_vane_rev1"])
         self.assertIn(("site_id", ""), query)
         self.assertIn(("trader_id", ""), query)
 
