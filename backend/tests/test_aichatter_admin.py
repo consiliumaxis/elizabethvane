@@ -1,8 +1,10 @@
 import unittest
 from datetime import time, timedelta
 from pathlib import Path
+from urllib.parse import parse_qsl, urlsplit
 
 from backend.admin_time import time_text
+from services.evanechat_bot.registration_link import build_registration_url
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +16,20 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertEqual(time_text(time(9, 30)), "09:30")
         self.assertEqual(time_text("9:45:00"), "09:45")
         self.assertEqual(time_text("23:59:00"), "23:59")
+
+    def test_shared_registration_template_keeps_fixed_values_and_blanks_unknowns(self):
+        template = (
+            "https://u3.shortink.io/register?utm_campaign=836376&ac=elizabeth_vane_rev1"
+            "&click_id={click_id}&site_id={site_id}&trader_id={trader_id}&ac={ac}"
+        )
+        result = build_registration_url(template, 7699787119)
+        query = parse_qsl(urlsplit(result).query, keep_blank_values=True)
+
+        self.assertIn(("click_id", "7699787119"), query)
+        self.assertIn(("utm_campaign", "836376"), query)
+        self.assertEqual([value for key, value in query if key == "ac"], ["elizabeth_vane_rev1", ""])
+        self.assertIn(("site_id", ""), query)
+        self.assertIn(("trader_id", ""), query)
 
     def test_router_exposes_complete_admin_surface(self):
         source = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")

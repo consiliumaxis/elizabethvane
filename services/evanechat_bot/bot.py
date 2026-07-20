@@ -7,7 +7,6 @@ import math
 import os
 import random
 import re
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from datetime import datetime, time, timedelta
 from html import escape
 from io import BytesIO
@@ -37,6 +36,7 @@ from aiogram.types import (
 from aiogram.dispatcher.router import Router
 
 from db import init_db, to_time
+from registration_link import build_registration_url
 from flows.vip import send_vip_onboarding_flow
 from flows.existing_account import send_existing_account_flow
 from flows.greeting import send_greeting_flow
@@ -226,11 +226,7 @@ active_register_base_url = REGISTER_BASE_URL
 
 
 def build_register_link(tg_user_id: int, delivery_scope: str = "business") -> str:
-    base_url = active_register_base_url
-    parts = urlsplit(base_url)
-    query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query["click_id"] = str(tg_user_id)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    return build_registration_url(active_register_base_url, tg_user_id)
 
 def inject_register_link_into_text(reply_text: str, tg_user_id: int, delivery_scope: str = "business") -> str:
     reg_link = build_register_link(tg_user_id, delivery_scope)
