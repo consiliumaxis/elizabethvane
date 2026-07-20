@@ -590,7 +590,7 @@ async def init_db() -> Tuple[
             """
             INSERT INTO settings (id, work_start, work_end, is_enabled)
             SELECT 2, work_start, work_end, is_enabled FROM settings WHERE id = 1
-            ON DUPLICATE KEY UPDATE id = id
+            ON DUPLICATE KEY UPDATE id = 2
             """
         )
         await cur.execute(
@@ -599,7 +599,7 @@ async def init_db() -> Tuple[
                 (id, system_prompt, planner_system_prompt, enabled, model, openai_api_key)
             SELECT 2, system_prompt, planner_system_prompt, enabled, model, openai_api_key
             FROM ai_settings WHERE id = 1
-            ON DUPLICATE KEY UPDATE id = id
+            ON DUPLICATE KEY UPDATE id = 2
             """
         )
 
@@ -644,7 +644,7 @@ async def init_db() -> Tuple[
                 """
                 INSERT INTO kv_settings (skey, svalue)
                 SELECT %s, svalue FROM kv_settings WHERE skey = %s
-                ON DUPLICATE KEY UPDATE skey = skey
+                ON DUPLICATE KEY UPDATE skey = VALUES(skey)
                 """,
                 (f"ELIZABETH_BOT_{key}", key),
             )
