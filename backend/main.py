@@ -221,6 +221,10 @@ POCKET_POSTBACK_SECRET = (os.getenv("POCKET_POSTBACK_SECRET") or "").strip()
 AFFILIATE_API_SECRET = (os.getenv("AFFILIATE_API_SECRET") or "").strip()
 AFFILIATE_BOT_ID = (os.getenv("AFFILIATE_BOT_ID") or "elizabethvane").strip() or "elizabethvane"
 AI_CHAT_MIN_DEPOSIT = max(0.0, float((os.getenv("AI_CHAT_MIN_DEPOSIT") or "10").strip() or "10"))
+AI_CHATTER_GATEWAY_URL = (
+    os.getenv("AI_CHATTER_GATEWAY_URL") or "http://127.0.0.1:8091/incoming"
+).strip()
+AI_CHATTER_GATEWAY_SECRET = (os.getenv("AI_CHATTER_GATEWAY_SECRET") or "").strip()
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -5195,6 +5199,46 @@ async def build_main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
 
+async def forward_message_to_ai_chatter(
+    message: types.Message,
+    *,
+    text_override: Optional[str] = None,
+    is_start: bool = False,
+) -> bool:
+    """Передаёт личное сообщение единому AI-движку без второго Telegram polling."""
+    if (
+        not AI_CHATTER_GATEWAY_SECRET
+        or not message.from_user
+        or str(message.chat.type) not in {"private", "ChatType.PRIVATE"}
+    ):
+        return False
+    text = text_override if text_override is not None else (message.text or "")
+    voice_file_id = message.voice.file_id if message.voice else ""
+    if not text.strip() and not voice_file_id:
+        return False
+    payload = {
+        "user_id": int(message.from_user.id),
+        "message_id": int(message.message_id),
+        "first_name": message.from_user.first_name or "",
+        "username": message.from_user.username or "",
+        "text": text,
+        "voice_file_id": voice_file_id,
+        "is_start": bool(is_start),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            response = await client.post(
+                AI_CHATTER_GATEWAY_URL,
+                json=payload,
+                headers={"X-AI-Chatter-Secret": AI_CHATTER_GATEWAY_SECRET},
+            )
+        response.raise_for_status()
+        return True
+    except Exception as exc:
+        print(f"[AI Chatter gateway] forward failed: {exc}")
+        return False
+
+
 async def send_main_menu(chat_id: int, user_id: int, user_name: str):
     global menu_photo_file_id
     welcome_text = (
@@ -5433,10 +5477,10 @@ async def finish_quiz_and_show_channel(message: types.Message, user_id: int, ski
     await send_channel_gate(message.chat.id)
 
 
-async def route_user_after_start(message: types.Message, user_id: int, user_name: str):
+async def route_user_after_start(message: types.Message, user_id: int, user_name: str) -> bool:
     if not db_pool:
         await send_main_menu(message.chat.id, user_id, user_name)
-        return
+        return True
 
     row = await ensure_onboarding_row(user_id)
     if not row.get("quiz_completed_at"):
@@ -5445,13 +5489,14 @@ async def route_user_after_start(message: types.Message, user_id: int, user_name
             await send_start_video_note(message.chat.id)
             await send_quiz_welcome(message.chat.id)
         await send_quiz_question(message.chat.id, current_step)
-        return
+        return False
 
     if row.get("channel_gate_completed_at"):
         await send_main_menu(message.chat.id, user_id, user_name)
-        return
+        return True
 
     await send_channel_gate(message.chat.id)
+    return False
 
 
 @dp.message(CommandStart())
@@ -5491,7 +5536,9 @@ async def cmd_start(message: types.Message):
 
     asyncio.create_task(send_aio_postback_event(user_id, "bot_start"))
     asyncio.create_task(send_aio_user_fields(user_id, first_name=first_name, username=username))
-    await route_user_after_start(message, user_id, user_name)
+    ai_chat_ready = await route_user_after_start(message, user_id, user_name)
+    if ai_chat_ready:
+        await forward_message_to_ai_chatter(message, text_override="Hello", is_start=True)
 
 
 @dp.message()
@@ -5500,7 +5547,11 @@ async def handle_onboarding_answer(message: types.Message):
         return
     user_id = int(message.from_user.id)
     row = await get_onboarding_row(user_id)
-    if not row or row.get("quiz_completed_at"):
+    if not row:
+        return
+    if row.get("quiz_completed_at"):
+        if row.get("channel_gate_completed_at"):
+            await forward_message_to_ai_chatter(message)
         return
 
     current_step = normalize_quiz_step(row.get("current_step"))

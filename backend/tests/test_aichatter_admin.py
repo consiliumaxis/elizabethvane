@@ -117,6 +117,19 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn('return {"business_connection_id": business_id} if business_id else {}', context)
         self.assertLess(bot.index("dp.include_router(admin_router)"), bot.index("dp.include_router(router)"))
 
+    def test_main_elizabeth_bot_uses_the_internal_ai_gateway(self):
+        backend = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+        bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
+        db = (PROJECT_ROOT / "services/evanechat_bot/db.py").read_text(encoding="utf-8")
+
+        self.assertIn("forward_message_to_ai_chatter", backend)
+        self.assertIn('headers={"X-AI-Chatter-Secret": AI_CHATTER_GATEWAY_SECRET}', backend)
+        self.assertIn('text_override="Hello", is_start=True', backend)
+        self.assertIn('gateway_app.router.add_post("/incoming", incoming)', bot)
+        self.assertIn('delivery_scope = "elizabeth_bot"', bot)
+        self.assertIn("send_intro_funnel_media_if_needed", bot)
+        self.assertIn("delivery_scope VARCHAR(32) NOT NULL", db)
+
     def test_business_messages_are_marked_read(self):
         bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
 
@@ -128,7 +141,7 @@ class AichatterAdminTest(unittest.TestCase):
         bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
 
         self.assertIn("get_next_unsent_funnel_media_key", bot)
-        self.assertIn('get_next_unsent_funnel_media_key(tg_user_id, "A")', bot)
+        self.assertIn('get_next_unsent_funnel_media_key(tg_user_id, "A", delivery_scope)', bot)
         self.assertIn("inserted required cold-stage media", bot)
 
     def test_ai_reply_is_forced_to_english(self):

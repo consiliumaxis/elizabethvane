@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -12,6 +13,7 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 import aiomysql
 import httpx
+from aiohttp import web
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from aiogram import Bot, Dispatcher, F
@@ -50,6 +52,10 @@ from admin.admin import (
 
 from config import (
     API_TOKEN,
+    AI_CHATTER_DIRECT_BOT_TOKEN,
+    AI_CHATTER_GATEWAY_HOST,
+    AI_CHATTER_GATEWAY_PORT,
+    AI_CHATTER_GATEWAY_SECRET,
     OPENAI_API_KEY,
     DB_CONFIG,
     LOG_CHANNEL_ID,
@@ -105,6 +111,8 @@ pending_reply_tasks: dict[int, asyncio.Task] = {}
 pending_reply_buffers: dict[int, dict] = {}
 manual_takeover_until: dict[int, datetime] = {}
 video_note_prepare_locks: dict[str, asyncio.Lock] = {}
+gateway_tasks: set[asyncio.Task] = set()
+gateway_message_ids: set[tuple[int, int]] = set()
 work_enabled_manual: bool = True
 
 work_start: time | None = None
@@ -488,6 +496,23 @@ async def save_user_from_message(msg: Message):
                 last_message_at = CURRENT_TIMESTAMP
             """,
             (tg_id, first_name, username),
+        )
+
+
+async def save_gateway_user(tg_user_id: int, first_name: str, username: str):
+    """Создаёт пользователя AI-воронки из события основного Elizabeth-бота."""
+    assert db_pool is not None
+    async with db_pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            INSERT INTO users (tg_user_id, first_name, username)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                first_name = COALESCE(NULLIF(VALUES(first_name), ''), first_name),
+                username = COALESCE(NULLIF(VALUES(username), ''), username),
+                last_message_at = CURRENT_TIMESTAMP
+            """,
+            (tg_user_id, first_name or None, username or None),
         )
 
 
@@ -1061,7 +1086,11 @@ async def get_funnel_routing_prompt() -> str:
     return "\n".join(lines)
 
 
-async def get_next_unsent_funnel_media_key(tg_user_id: int, block_code: str) -> str | None:
+async def get_next_unsent_funnel_media_key(
+    tg_user_id: int,
+    block_code: str,
+    delivery_scope: str = "business",
+) -> str | None:
     settings = await load_kv_settings()
     if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
         return None
@@ -1072,14 +1101,16 @@ async def get_next_unsent_funnel_media_key(tg_user_id: int, block_code: str) -> 
             SELECT fm.media_key
             FROM funnel_media fm
             LEFT JOIN funnel_media_sent fms
-              ON fms.media_key = fm.media_key AND fms.tg_user_id = %s
+              ON fms.media_key = fm.media_key
+             AND fms.tg_user_id = %s
+             AND fms.delivery_scope = %s
             WHERE fm.enabled = 1
               AND fm.block_code = %s
               AND fms.media_key IS NULL
             ORDER BY fm.sort_order, fm.id
             LIMIT 1
             """,
-            (tg_user_id, block_code),
+            (tg_user_id, delivery_scope, block_code),
         )
         row = await cur.fetchone()
     return str(row[0]) if row else None
@@ -1768,6 +1799,7 @@ async def generate_ai_reply(
     user_text: str,
     bot: Bot,
     plan: dict | None = None,
+    delivery_scope: str = "business",
 ) -> str:
 
     global ai_system_prompt, ai_enabled, ai_model
@@ -1923,7 +1955,11 @@ async def generate_ai_reply(
 
         selected_media_key, _, _ = split_funnel_reply(reply)
         if stage == STAGE_NEW and not selected_media_key:
-            selected_media_key = await get_next_unsent_funnel_media_key(tg_user_id, "A")
+            selected_media_key = await get_next_unsent_funnel_media_key(
+                tg_user_id,
+                "A",
+                delivery_scope,
+            )
             if selected_media_key:
                 reply = f"[SEND:{selected_media_key}]\n\n{reply}"
                 logging.info(
@@ -2291,7 +2327,30 @@ async def transcribe_voice_to_text(msg: Message, bot: Bot) -> str | None:
         return None
 
 
-async def get_funnel_media_for_user(tg_user_id: int, media_key: str) -> dict | None:
+async def transcribe_voice_file_id(file_id: str, bot: Bot) -> str | None:
+    if not ai_client or not file_id:
+        return None
+    buf = BytesIO()
+    try:
+        await bot.download(file_id, buf)
+        buf.seek(0)
+        buf.name = "voice.ogg"
+        result = await ai_client.audio.transcriptions.create(
+            model="gpt-4o-transcribe",
+            file=buf,
+        )
+        text = (result.text or "").strip()
+        return text or None
+    except Exception as exc:
+        logging.warning("[gateway] voice transcription failed: %s", exc)
+        return None
+
+
+async def get_funnel_media_for_user(
+    tg_user_id: int,
+    media_key: str,
+    delivery_scope: str = "business",
+) -> dict | None:
     settings = await load_kv_settings()
     if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
         return None
@@ -2310,8 +2369,12 @@ async def get_funnel_media_for_user(tg_user_id: int, media_key: str) -> dict | N
         if not row:
             return None
         await cur.execute(
-            "SELECT 1 FROM funnel_media_sent WHERE tg_user_id = %s AND media_key = %s LIMIT 1",
-            (tg_user_id, media_key),
+            """
+            SELECT 1 FROM funnel_media_sent
+            WHERE tg_user_id = %s AND media_key = %s AND delivery_scope = %s
+            LIMIT 1
+            """,
+            (tg_user_id, media_key, delivery_scope),
         )
         if await cur.fetchone():
             logging.info("[funnel media] skip repeated %s for user %s", media_key, tg_user_id)
@@ -2319,12 +2382,20 @@ async def get_funnel_media_for_user(tg_user_id: int, media_key: str) -> dict | N
     return row
 
 
-async def mark_funnel_media_sent(tg_user_id: int, media_key: str, telegram_file_id: str | None):
+async def mark_funnel_media_sent(
+    tg_user_id: int,
+    media_key: str,
+    telegram_file_id: str | None,
+    delivery_scope: str = "business",
+):
     assert db_pool is not None
     async with db_pool.acquire() as conn, conn.cursor() as cur:
         await cur.execute(
-            "INSERT IGNORE INTO funnel_media_sent (tg_user_id, media_key) VALUES (%s, %s)",
-            (tg_user_id, media_key),
+            """
+            INSERT IGNORE INTO funnel_media_sent (tg_user_id, media_key, delivery_scope)
+            VALUES (%s, %s, %s)
+            """,
+            (tg_user_id, media_key, delivery_scope),
         )
         if telegram_file_id:
             await cur.execute(
@@ -2401,8 +2472,9 @@ async def send_funnel_video_note(
     media_key: str,
     bot: Bot,
     reply_markup=None,
+    delivery_scope: str = "business",
 ) -> Message | None:
-    media = await get_funnel_media_for_user(tg_user_id, media_key)
+    media = await get_funnel_media_for_user(tg_user_id, media_key, delivery_scope)
     if not media:
         return None
 
@@ -2426,7 +2498,10 @@ async def send_funnel_video_note(
         )
 
     sent = None
-    cached_file_id = str(media.get("telegram_file_id") or "").strip()
+    # Telegram file_id привязан к токену бота. Глобальный кеш принадлежит
+    # EVanechat/Business-токену и не должен использоваться основным ботом.
+    reuse_cached_file_id = delivery_scope != "elizabeth_bot"
+    cached_file_id = str(media.get("telegram_file_id") or "").strip() if reuse_cached_file_id else ""
     if cached_file_id:
         try:
             sent = await send(cached_file_id)
@@ -2449,7 +2524,12 @@ async def send_funnel_video_note(
     if not telegram_file_id:
         logging.error("[funnel media] Telegram returned no video_note for %s", media_key)
         return None
-    await mark_funnel_media_sent(tg_user_id, media_key, telegram_file_id)
+    await mark_funnel_media_sent(
+        tg_user_id,
+        media_key,
+        telegram_file_id if reuse_cached_file_id else None,
+        delivery_scope,
+    )
     await save_message(
         sent.chat.id,
         "out",
@@ -2459,12 +2539,46 @@ async def send_funnel_video_note(
     return sent
 
 
+async def send_intro_funnel_media_if_needed(
+    tg_user_id: int,
+    bot: Bot,
+    delivery_scope: str,
+) -> bool:
+    """Один раз начинает отдельную цепочку кружков для конкретного бота."""
+    assert db_pool is not None
+    async with db_pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT 1 FROM funnel_media_sent
+            WHERE tg_user_id = %s AND delivery_scope = %s
+            LIMIT 1
+            """,
+            (tg_user_id, delivery_scope),
+        )
+        if await cur.fetchone():
+            return False
+
+    media_key = await get_next_unsent_funnel_media_key(tg_user_id, "A", delivery_scope)
+    if not media_key:
+        return False
+    return bool(
+        await send_funnel_video_note(
+            tg_user_id,
+            None,
+            media_key,
+            bot,
+            delivery_scope=delivery_scope,
+        )
+    )
+
+
 async def send_ai_reply_with_funnel_media(
     tg_user_id: int,
     business_id: str | None,
     reply_text: str,
     bot: Bot,
     reply_markup=None,
+    delivery_scope: str = "business",
 ) -> tuple[int | None, int]:
     media_key, before, after = split_funnel_reply(reply_text)
     if not media_key:
@@ -2498,6 +2612,7 @@ async def send_ai_reply_with_funnel_media(
             media_key,
             bot,
             reply_markup=reply_markup if not after else None,
+            delivery_scope=delivery_scope,
         )
         if sent_media:
             sent_chat_id, sent_count = sent_media.chat.id, sent_count + 1
@@ -2520,9 +2635,11 @@ async def send_business_ai_reply(
     business_id: str | None,
     user_text: str,
     bot: Bot,
+    delivery_scope: str | None = None,
 ):
 
     global session_clients, session_out_messages
+    delivery_scope = delivery_scope or ("business" if business_id else "evanechat_bot")
 
     # 0. Если бот для этого пользователя уже отключён – ничего не делаем
     if not await is_user_bot_active(tg_user_id):
@@ -2857,7 +2974,13 @@ async def send_business_ai_reply(
         return   
         
     # 3. Генерируем текст ответа через основной ИИ
-    reply_text = await generate_ai_reply(tg_user_id, user_text, bot, plan)
+    reply_text = await generate_ai_reply(
+        tg_user_id,
+        user_text,
+        bot,
+        plan,
+        delivery_scope=delivery_scope,
+    )
 
     # 4. Кнопка + ссылка на регистрацию, если планировщик запросил
     reply_markup = None
@@ -2909,6 +3032,7 @@ async def send_business_ai_reply(
         reply_text=reply_text,
         bot=bot,
         reply_markup=reply_markup,
+        delivery_scope=delivery_scope,
     )
     if sent_chat_id is not None:
         session_clients.add(sent_chat_id)
@@ -2916,6 +3040,98 @@ async def send_business_ai_reply(
 
     # 7. Обновляем долгосрочную память асинхронно
     asyncio.create_task(update_user_memory(tg_user_id))
+
+
+async def process_gateway_message(payload: dict, delivery_bot: Bot):
+    tg_user_id = int(payload["user_id"])
+    await save_gateway_user(
+        tg_user_id,
+        str(payload.get("first_name") or ""),
+        str(payload.get("username") or ""),
+    )
+
+    text = str(payload.get("text") or "").strip()
+    voice_file_id = str(payload.get("voice_file_id") or "").strip()
+    if voice_file_id and not text:
+        text = await transcribe_voice_file_id(voice_file_id, delivery_bot) or ""
+    if not text:
+        logging.info("[gateway] ignored empty message from user=%s", tg_user_id)
+        return
+
+    await save_message(tg_user_id, "in", text, is_business=False)
+    await passive_sync_user_context(tg_user_id, incoming_text=text)
+    if not is_bot_active_now() or not await is_user_bot_active(tg_user_id):
+        return
+
+    delivery_scope = "elizabeth_bot"
+    if bool(payload.get("is_start")):
+        await send_intro_funnel_media_if_needed(tg_user_id, delivery_bot, delivery_scope)
+
+    await send_business_ai_reply(
+        tg_user_id,
+        None,
+        text,
+        delivery_bot,
+        delivery_scope=delivery_scope,
+    )
+
+
+def gateway_task_done(task: asyncio.Task):
+    gateway_tasks.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logging.exception("[gateway] background message failed: %s", exc)
+
+
+async def start_chatter_gateway(delivery_bot: Bot) -> web.AppRunner | None:
+    if not AI_CHATTER_GATEWAY_SECRET:
+        logging.warning("[gateway] disabled: AI_CHATTER_GATEWAY_SECRET is empty")
+        return None
+
+    async def health(_request: web.Request):
+        return web.json_response({"status": "ok"})
+
+    async def incoming(request: web.Request):
+        supplied_secret = request.headers.get("X-AI-Chatter-Secret", "")
+        if not hmac.compare_digest(supplied_secret, AI_CHATTER_GATEWAY_SECRET):
+            raise web.HTTPUnauthorized()
+        try:
+            payload = await request.json()
+            user_id = int(payload.get("user_id") or 0)
+            message_id = int(payload.get("message_id") or 0)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise web.HTTPBadRequest(text="invalid payload")
+        if user_id <= 0 or message_id <= 0:
+            raise web.HTTPBadRequest(text="user_id and message_id are required")
+
+        message_key = (user_id, message_id)
+        if message_key in gateway_message_ids:
+            return web.json_response({"status": "duplicate"})
+        if len(gateway_message_ids) >= 10_000:
+            gateway_message_ids.clear()
+        gateway_message_ids.add(message_key)
+
+        task = asyncio.create_task(process_gateway_message(payload, delivery_bot))
+        gateway_tasks.add(task)
+        task.add_done_callback(gateway_task_done)
+        return web.json_response({"status": "accepted"}, status=202)
+
+    gateway_app = web.Application(client_max_size=256 * 1024)
+    gateway_app.router.add_get("/health", health)
+    gateway_app.router.add_post("/incoming", incoming)
+    runner = web.AppRunner(gateway_app)
+    await runner.setup()
+    site = web.TCPSite(runner, AI_CHATTER_GATEWAY_HOST, AI_CHATTER_GATEWAY_PORT)
+    await site.start()
+    logging.info(
+        "[gateway] listening on http://%s:%s",
+        AI_CHATTER_GATEWAY_HOST,
+        AI_CHATTER_GATEWAY_PORT,
+    )
+    return runner
     
 def split_prompt_pages(prompt: str, page_size: int = PROMPT_PAGE_SIZE) -> list[str]:
     prompt = prompt or ""
@@ -3023,6 +3239,16 @@ async def main():
         API_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    direct_delivery_bot = None
+    gateway_runner = None
+    if AI_CHATTER_DIRECT_BOT_TOKEN:
+        direct_delivery_bot = Bot(
+            AI_CHATTER_DIRECT_BOT_TOKEN,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
+        gateway_runner = await start_chatter_gateway(direct_delivery_bot)
+    else:
+        logging.warning("[gateway] disabled: AI_CHATTER_DIRECT_BOT_TOKEN is empty")
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
@@ -3061,6 +3287,10 @@ async def main():
     try:
         await dp.start_polling(bot)
     finally:
+        if gateway_runner is not None:
+            await gateway_runner.cleanup()
+        if direct_delivery_bot is not None:
+            await direct_delivery_bot.session.close()
         if db_pool is not None:
             db_pool.close()
             await db_pool.wait_closed()
