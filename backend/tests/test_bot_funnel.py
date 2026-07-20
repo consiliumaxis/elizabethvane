@@ -144,6 +144,20 @@ class BotFunnelTest(unittest.TestCase):
             handler.index("await complete_channel_subscription"),
         )
 
+    def test_confirmed_subscription_immediately_unlocks_ai_messages(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        confirmation = source.split("async def complete_channel_subscription", 1)[1].split(
+            '@app.get("/api/bot/channel/open")', 1
+        )[0]
+        self.assertIn("channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())", confirmation)
+
+        message_handler = source.split("async def handle_onboarding_answer", 1)[1].split(
+            "@dp.callback_query", 1
+        )[0]
+        self.assertIn('if row.get("channel_subscribed_at"):', message_handler)
+        self.assertIn("await forward_message_to_ai_chatter(message)", message_handler)
+
     def test_aio_funnel_events_are_deduplicated_per_telegram_user(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 

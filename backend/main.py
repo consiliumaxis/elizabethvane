@@ -5490,7 +5490,8 @@ async def complete_channel_subscription(
             await cur.execute(
                 """
                 UPDATE user_onboarding
-                SET channel_subscribed_at = NOW()
+                SET channel_subscribed_at = NOW(),
+                    channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())
                 WHERE user_id = %s
                   AND quiz_completed_at IS NOT NULL
                   AND channel_subscribed_at IS NULL
@@ -5748,7 +5749,19 @@ async def handle_onboarding_answer(message: types.Message):
     if not row:
         return
     if row.get("quiz_completed_at"):
-        if row.get("channel_gate_completed_at"):
+        if row.get("channel_subscribed_at"):
+            if not row.get("channel_gate_completed_at"):
+                async with db_pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute(
+                            """
+                            UPDATE user_onboarding
+                            SET channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())
+                            WHERE user_id = %s
+                              AND channel_subscribed_at IS NOT NULL
+                            """,
+                            (user_id,),
+                        )
             await forward_message_to_ai_chatter(message)
         return
 
