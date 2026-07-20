@@ -1332,11 +1332,12 @@ export default function SettingsPage({ adminUser }) {
               checked={checkSubscriptionEnabled}
               onChange={(e) => setCheckSubscriptionEnabled(e.target.checked)}
             />{' '}
-            {checkSubscriptionEnabled ? 'Chatterfy' : 'Без события'}
+            {checkSubscriptionEnabled ? 'Chatterfy' : 'Заявка через Telegram-бота'}
           </label>
           <div className="admin-muted">
-            Бот не проверяет подписку кнопкой. Факт подписки приходит postback-событием из Chatterfy,
-            а в Telegram показывается кнопка перехода дальше.
+            {checkSubscriptionEnabled
+              ? 'Факт подписки приходит postback-событием из Chatterfy.'
+              : 'Кнопка ведёт напрямую в Telegram. Бот принимает заявку, фиксирует подписку и запускает отправку кружков. Бот должен быть администратором канала с правом приглашать пользователей.'}
           </div>
         </div>
 
