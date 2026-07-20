@@ -523,6 +523,11 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
         for key in ("work_start", "work_end"):
             if key in data and data[key] is not None and not _TIME_RE.fullmatch(data[key]):
                 raise HTTPException(status_code=400, detail=f"{key} must use HH:MM format")
+        if data.get("work_24_7") is False and (not data.get("work_start") or not data.get("work_end")):
+            raise HTTPException(
+                status_code=400,
+                detail="Set both work hours before disabling round-the-clock mode",
+            )
         if "min_deposit" in data and (data["min_deposit"] is None or data["min_deposit"] < 0):
             raise HTTPException(status_code=400, detail="Minimum deposit must be non-negative")
         if data.get("commission_mode") not in (None, "auto", "manual", "auto_plus"):

@@ -152,6 +152,7 @@ class AichatterAdminTest(unittest.TestCase):
         db = (PROJECT_ROOT / "services/evanechat_bot/db.py").read_text(encoding="utf-8")
 
         self.assertIn("WORK_24_7", backend)
+        self.assertIn("Set both work hours before disabling round-the-clock mode", backend)
         self.assertIn("WORK_24_7", db)
         self.assertIn("work_24_7 or is_in_schedule_now()", bot)
         self.assertIn("Работает круглосуточно", frontend)
