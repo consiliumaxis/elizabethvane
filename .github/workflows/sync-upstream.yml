@@ -2,8 +2,17 @@ name: Sync Upstream
 
 # Автосинхронизация форка consiliumaxis/elizabethvane с upstream
 # Elizabet-Eric-project/elizabethvane. Ветки main и test держатся ТОЧНЫМИ
-# зеркалами upstream (hard reset + push). Свой workflow-файл живёт только
-# в ветке ci/sync, чтобы не расходить зеркала. Своя разработка — в feature/*.
+# зеркалами upstream. Свой workflow-файл живёт только в ветке ci/sync,
+# чтобы не расходить зеркала. Своя разработка — в feature/*.
+#
+# ЗАЩИТА / ОТКАТ:
+# Перед КАЖДЫМ обновлением ветки (если в upstream реально появились новые
+# коммиты) workflow ставит тег-снимок предыдущего состояния:
+#   snapshot/main/<UTC-timestamp>  и  snapshot/test/<UTC-timestamp>
+# Так любую поломку (баг или преднамеренный слом в upstream) можно откатить
+# на предыдущую рабочую версию. Хранятся последние KEEP_SNAPSHOTS снимков
+# на ветку, старые автоматически удаляются.
+#
 # Upstream публичный -> отдельный токен не нужен, читаем upstream без авторизации,
 # пишем в форк через встроенный GITHUB_TOKEN.
 
@@ -16,17 +25,21 @@ on:
 permissions:
   contents: write
 
+env:
+  # Сколько тегов-снимков хранить на каждую ветку.
+  KEEP_SNAPSHOTS: '50'
+
 jobs:
   mirror:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout fork (full history)
+      - name: Checkout fork (full history + tags)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Mirror main and test from upstream
+      - name: Mirror main and test from upstream (with auto-snapshot backups)
         env:
           UPSTREAM: https://github.com/Elizabet-Eric-project/elizabethvane.git
         run: |
@@ -36,16 +49,65 @@ jobs:
 
           git remote add upstream "$UPSTREAM"
           git fetch upstream --prune
+          git fetch origin --tags --prune
+
+          TS="$(date -u +'%Y-%m-%d-%H%M%S')"
 
           for BRANCH in main test; do
             echo "::group::Mirroring $BRANCH"
-            if git ls-remote --exit-code --heads upstream "$BRANCH" >/dev/null 2>&1; then
-              # Приводим локальную ветку к точной копии upstream и пушим в форк.
-              git checkout -B "$BRANCH" "upstream/$BRANCH"
-              git push origin "$BRANCH" --force-with-lease
-              echo "Synced $BRANCH to upstream/$BRANCH"
-            else
+
+            if ! git ls-remote --exit-code --heads upstream "$BRANCH" >/dev/null 2>&1; then
               echo "Upstream has no branch '$BRANCH', skipping."
+              echo "::endgroup::"
+              continue
             fi
+
+            UPSTREAM_SHA="$(git rev-parse "upstream/$BRANCH")"
+
+            # Текущее состояние ветки форка (может отсутствовать при первом запуске).
+            if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+              FORK_SHA="$(git rev-parse "origin/$BRANCH")"
+            else
+              FORK_SHA=""
+            fi
+
+            if [ "$FORK_SHA" = "$UPSTREAM_SHA" ]; then
+              echo "Branch '$BRANCH' already matches upstream ($UPSTREAM_SHA). Nothing to do."
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Есть реальные изменения -> сначала снимок текущей версии форка.
+            if [ -n "$FORK_SHA" ]; then
+              SNAP="snapshot/$BRANCH/$TS"
+              echo "Creating backup snapshot tag '$SNAP' at $FORK_SHA"
+              git tag -f "$SNAP" "$FORK_SHA"
+              git push origin "refs/tags/$SNAP" --force
+            fi
+
+            # Приводим ветку форка к точной копии upstream.
+            git checkout -B "$BRANCH" "upstream/$BRANCH"
+            git push origin "$BRANCH" --force-with-lease
+            echo "Synced $BRANCH to upstream/$BRANCH ($UPSTREAM_SHA)"
+
             echo "::endgroup::"
+          done
+
+      - name: Prune old snapshot tags
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --prune
+          for BRANCH in main test; do
+            # Список снимков этой ветки, самые новые сверху (имена содержат timestamp).
+            MAPFILE="$(git tag -l "snapshot/$BRANCH/*" | sort -r)"
+            [ -z "$MAPFILE" ] && continue
+            COUNT=0
+            while IFS= read -r TAG; do
+              [ -z "$TAG" ] && continue
+              COUNT=$((COUNT+1))
+              if [ "$COUNT" -gt "${KEEP_SNAPSHOTS}" ]; then
+                echo "Pruning old snapshot tag '$TAG'"
+                git push origin ":refs/tags/$TAG" || true
+              fi
+            done <<< "$MAPFILE"
           done
