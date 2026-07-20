@@ -101,6 +101,55 @@ class BotFunnelTest(unittest.TestCase):
         )
         self.assertTrue((PROJECT_ROOT / "backend" / "assets" / "elizabeth_start_video_note.mp4").exists())
 
+    def test_go_to_trading_opens_menu_after_channel_click(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        callback_handler = source.split("async def handle_funnel_continue", 1)[1].split(
+            "@dp.callback_query", 1
+        )[0]
+        self.assertIn("SELECT channel_subscribed_at FROM user_onboarding", callback_handler)
+        self.assertIn("await send_main_menu", callback_handler)
+        self.assertNotIn("await start_ai_chatter_from_callback(callback)", callback_handler)
+
+    def test_open_channel_redirect_sends_subscription_event_and_starts_ai(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn('channel_button_url = build_channel_click_url', source)
+        self.assertIn('InlineKeyboardButton(text="Open channel", url=channel_button_url)', source)
+        self.assertIn('@app.get("/api/bot/channel/open")', source)
+        self.assertIn("build_channel_click_signature", source)
+        click_handler = source.split("async def process_channel_open_click", 1)[1].split(
+            '@app.get("/api/bot/channel/open")', 1
+        )[0]
+        self.assertIn("channel_subscribed_at = NOW()", click_handler)
+        self.assertIn("await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)", click_handler)
+        self.assertIn("await post_to_ai_chatter", click_handler)
+        self.assertLess(
+            click_handler.index("await send_aio_postback_event"),
+            click_handler.index("await post_to_ai_chatter"),
+        )
+
+    def test_telegram_join_request_mode_approves_before_starting_ai(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn("creates_join_request=True", source)
+        self.assertIn("@dp.chat_join_request()", source)
+        handler = source.split("async def handle_channel_join_request", 1)[1].split(
+            "async def map_quiz_answer_with_ai", 1
+        )[0]
+        self.assertIn("await bot.approve_chat_join_request", handler)
+        self.assertIn("await complete_channel_subscription", handler)
+        self.assertLess(
+            handler.index("await bot.approve_chat_join_request"),
+            handler.index("await complete_channel_subscription"),
+        )
+
+    def test_aio_funnel_events_are_deduplicated_per_telegram_user(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn('default_unique_key = f"{normalized_event_slug}:{user_id}"', source)
+        self.assertIn("unique_key=normalized_unique_key", source)
+
 
 if __name__ == "__main__":
     unittest.main()

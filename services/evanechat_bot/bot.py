@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -12,6 +13,7 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 import aiomysql
 import httpx
+from aiohttp import web
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from aiogram import Bot, Dispatcher, F
@@ -40,6 +42,7 @@ from flows.greeting import send_greeting_flow
 from service.funnel import update_user_stage_from_exchange
 from service.funnel_media import split_funnel_reply
 from service.keyword_trigger import handle_keyword_trigger
+from service.telegram_context import business_connection_kwargs
 from admin.admin import (
     router as admin_router,
     setup_admin,
@@ -49,6 +52,10 @@ from admin.admin import (
 
 from config import (
     API_TOKEN,
+    AI_CHATTER_DIRECT_BOT_TOKEN,
+    AI_CHATTER_GATEWAY_HOST,
+    AI_CHATTER_GATEWAY_PORT,
+    AI_CHATTER_GATEWAY_SECRET,
     OPENAI_API_KEY,
     DB_CONFIG,
     LOG_CHANNEL_ID,
@@ -104,6 +111,8 @@ pending_reply_tasks: dict[int, asyncio.Task] = {}
 pending_reply_buffers: dict[int, dict] = {}
 manual_takeover_until: dict[int, datetime] = {}
 video_note_prepare_locks: dict[str, asyncio.Lock] = {}
+gateway_tasks: set[asyncio.Task] = set()
+gateway_message_ids: set[tuple[int, int]] = set()
 work_enabled_manual: bool = True
 
 work_start: time | None = None
@@ -335,18 +344,18 @@ async def check_user_globally_via_affiliate(tg_user_id: int) -> list[dict]:
 
 async def send_cross_project_hold_and_notify(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     bot: Bot,
     match: dict,
 ):
-    hold_text = "Брат, буквально пару минут и вернусь к тебе 🤝"
+    hold_text = "I’ll get back to you in just a couple of minutes 🤝"
     try:
         sent = await bot.send_message(
             chat_id=tg_user_id,
             text=hold_text,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
         )
-        await save_message(sent.chat.id, "out", hold_text, is_business=True)
+        await save_message(sent.chat.id, "out", hold_text, is_business=bool(business_id))
     except Exception as exc:
         logging.warning("[cross_project] failed to send hold message to %s: %s", tg_user_id, exc)
 
@@ -387,31 +396,31 @@ async def send_cross_project_hold_and_notify(
 
 async def send_platform_account_question(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     bot: Bot,
 ):
-    text = "Есть ли у тебя уже аккаунт на торговой площадке?"
+    text = "Do you already have an account on the trading platform?"
     sent = await bot.send_message(
         chat_id=tg_user_id,
-        business_connection_id=business_id,
+        **business_connection_kwargs(business_id),
         text=text,
     )
-    await save_message(sent.chat.id, "out", text, is_business=True)
+    await save_message(sent.chat.id, "out", text, is_business=bool(business_id))
     await set_user_state(tg_user_id, STAGE_WAITING_PLATFORM_ACCOUNT, "Ждём ответ про наличие аккаунта")
 
 
 async def send_existing_account_trader_id_request(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     bot: Bot,
 ):
-    text = "Супер, можешь пожалуйста выслать его, добавлю тебя в команду 🤝"
+    text = "Great! Please send me your Trader ID so I can add you to the team 🤝"
     sent = await bot.send_message(
         chat_id=tg_user_id,
-        business_connection_id=business_id,
+        **business_connection_kwargs(business_id),
         text=text,
     )
-    await save_message(sent.chat.id, "out", text, is_business=True)
+    await save_message(sent.chat.id, "out", text, is_business=bool(business_id))
     await set_user_state(
         tg_user_id,
         STAGE_WAITING_EXISTING_ACCOUNT_TRADER_ID,
@@ -421,29 +430,29 @@ async def send_existing_account_trader_id_request(
 
 async def send_registration_start_message(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     bot: Bot,
 ):
     reg_link = build_register_link(tg_user_id)
     text = (
-        "Отлично, тогда идём дальше.\n\n"
-        "Для старта нужно пройти регистрацию по моей ссылке, а после этого прислать мне свой Trader ID 🤝"
+        "Great, let’s move on.\n\n"
+        "To get started, register using my link and then send me your Trader ID 🤝"
     )
     reply_markup = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
-                text="🔗 Зарегистрироваться по моей ссылке",
+                text="🔗 Register using my link",
                 url=reg_link,
             )
         ]]
     )
     sent = await bot.send_message(
         chat_id=tg_user_id,
-        business_connection_id=business_id,
+        **business_connection_kwargs(business_id),
         text=text,
         reply_markup=reply_markup,
     )
-    await save_message(sent.chat.id, "out", text, is_business=True)
+    await save_message(sent.chat.id, "out", text, is_business=bool(business_id))
     await set_user_state(
         tg_user_id,
         STAGE_REG_LINK_SENT,
@@ -487,6 +496,23 @@ async def save_user_from_message(msg: Message):
                 last_message_at = CURRENT_TIMESTAMP
             """,
             (tg_id, first_name, username),
+        )
+
+
+async def save_gateway_user(tg_user_id: int, first_name: str, username: str):
+    """Создаёт пользователя AI-воронки из события основного Elizabeth-бота."""
+    assert db_pool is not None
+    async with db_pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            INSERT INTO users (tg_user_id, first_name, username)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                first_name = COALESCE(NULLIF(VALUES(first_name), ''), first_name),
+                username = COALESCE(NULLIF(VALUES(username), ''), username),
+                last_message_at = CURRENT_TIMESTAMP
+            """,
+            (tg_user_id, first_name or None, username or None),
         )
 
 
@@ -1060,7 +1086,11 @@ async def get_funnel_routing_prompt() -> str:
     return "\n".join(lines)
 
 
-async def get_next_unsent_funnel_media_key(tg_user_id: int, block_code: str) -> str | None:
+async def get_next_unsent_funnel_media_key(
+    tg_user_id: int,
+    block_code: str,
+    delivery_scope: str = "business",
+) -> str | None:
     settings = await load_kv_settings()
     if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
         return None
@@ -1071,14 +1101,16 @@ async def get_next_unsent_funnel_media_key(tg_user_id: int, block_code: str) -> 
             SELECT fm.media_key
             FROM funnel_media fm
             LEFT JOIN funnel_media_sent fms
-              ON fms.media_key = fm.media_key AND fms.tg_user_id = %s
+              ON fms.media_key = fm.media_key
+             AND fms.tg_user_id = %s
+             AND fms.delivery_scope = %s
             WHERE fm.enabled = 1
               AND fm.block_code = %s
               AND fms.media_key IS NULL
             ORDER BY fm.sort_order, fm.id
             LIMIT 1
             """,
-            (tg_user_id, block_code),
+            (tg_user_id, delivery_scope, block_code),
         )
         row = await cur.fetchone()
     return str(row[0]) if row else None
@@ -1508,17 +1540,17 @@ async def check_registration_via_affiliate(
     # ====== company_mismatch (как было) ======
     if code == "company_mismatch":
         # 1. Пытаемся объяснить клиенту, но не роняем функцию при ошибке
-        if bot and business_id:
+        if bot:
             txt = (
-                "Сейчас все проверю и вернусь с ответом 🤝"
+                "I’ll check everything now and get back to you with an answer 🤝"
             )
             try:
                 sent = await bot.send_message(
                     chat_id=tg_user_id,
                     text=txt,
-                    business_connection_id=business_id,
+                    **business_connection_kwargs(business_id),
                 )
-                await save_message(sent.chat.id, "out", txt, is_business=True)
+                await save_message(sent.chat.id, "out", txt, is_business=bool(business_id))
             except Exception as e:
                 logging.warning(
                     "[company_mismatch] Не удалось отправить сообщение клиенту "
@@ -1583,19 +1615,19 @@ async def check_registration_via_affiliate(
 
     # ====== НОВОЕ: user_not_found ======
     if code == "user_not_found":
-        if bot and business_id:
+        if bot:
             try:
                 intro_text = (
-                    "По этому ID кабинет не найден.\n\n"
-                    "Скорее всего, аккаунт зарегистрирован не по моей ссылке. "
-                    "Тогда давай сразу сделаем новый аккаунт по моей ссылке, а после регистрации ты пришлёшь мне свой Trader ID 🤝"
+                    "I couldn’t find an account with this ID.\n\n"
+                    "The account was most likely not registered using my link. "
+                    "Let’s create a new account through my link, and then send me your Trader ID after registration 🤝"
                 )
                 sent = await bot.send_message(
                     chat_id=tg_user_id,
                     text=intro_text,
-                    business_connection_id=business_id,
+                    **business_connection_kwargs(business_id),
                 )
-                await save_message(sent.chat.id, "out", intro_text, is_business=True)
+                await save_message(sent.chat.id, "out", intro_text, is_business=bool(business_id))
                 await send_registration_start_message(tg_user_id, business_id, bot)
             except Exception as e:
                 logging.warning(
@@ -1608,15 +1640,15 @@ async def check_registration_via_affiliate(
     # ====== НОВОЕ: pocket_error / unknown_bot_id ======
     if code in ("unknown_bot_id", "pocket_error"):
         # 1) Пишем клиенту
-        if bot and business_id:
-            txt = "Спасибо, подожди пожалуйста, я проверю и вернусь"
+        if bot:
+            txt = "Thank you. Please wait while I check this, and I’ll get back to you."
             try:
                 sent = await bot.send_message(
                     chat_id=tg_user_id,
                     text=txt,
-                    business_connection_id=business_id,
+                    **business_connection_kwargs(business_id),
                 )
-                await save_message(sent.chat.id, "out", txt, is_business=True)
+                await save_message(sent.chat.id, "out", txt, is_business=bool(business_id))
             except Exception as e:
                 logging.warning(
                     "[reg_error_msg] Не удалось отправить сообщение клиенту "
@@ -1767,6 +1799,8 @@ async def generate_ai_reply(
     user_text: str,
     bot: Bot,
     plan: dict | None = None,
+    delivery_scope: str = "business",
+    allow_funnel_media: bool = True,
 ) -> str:
 
     global ai_system_prompt, ai_enabled, ai_model
@@ -1921,8 +1955,12 @@ async def generate_ai_reply(
         reply = await ensure_english_reply(reply, ai_model)
 
         selected_media_key, _, _ = split_funnel_reply(reply)
-        if stage == STAGE_NEW and not selected_media_key:
-            selected_media_key = await get_next_unsent_funnel_media_key(tg_user_id, "A")
+        if allow_funnel_media and stage == STAGE_NEW and not selected_media_key:
+            selected_media_key = await get_next_unsent_funnel_media_key(
+                tg_user_id,
+                "A",
+                delivery_scope,
+            )
             if selected_media_key:
                 reply = f"[SEND:{selected_media_key}]\n\n{reply}"
                 logging.info(
@@ -2206,22 +2244,57 @@ async def on_business_voice(msg: Message, bot: Bot):
 # ================== ОБЫЧНЫЕ СООБЩЕНИЯ БОТУ ==================
 
 
-@router.message(F.text.regexp(r"(?i)^привет$"))
-async def on_regular_message(msg: Message):
-    global session_clients, session_out_messages
-
+@router.message(Command("start"), F.chat.type == "private")
+async def on_regular_start(msg: Message, bot: Bot):
     await save_user_from_message(msg)
-    await save_message(msg.chat.id, "in", msg.text or "", is_business=False)
+    await save_message(msg.chat.id, "in", msg.text or "/start", is_business=False)
+    await passive_sync_user_context(msg.chat.id, incoming_text="Hello")
 
-    if not is_bot_active_now():
+    if not is_bot_active_now() or not await is_user_bot_active(msg.chat.id):
         return
 
-    reply_text = "Привет (обычный чат, не бизнес)"
-    sent = await msg.answer(reply_text)
-    await save_message(sent.chat.id, "out", reply_text, is_business=False)
+    await send_business_ai_reply(msg.chat.id, None, "Hello", bot)
 
-    session_clients.add(sent.chat.id)
-    session_out_messages += 1
+
+@router.message(F.voice, F.chat.type == "private")
+async def on_regular_voice(msg: Message, bot: Bot):
+    await save_user_from_message(msg)
+
+    if not is_bot_active_now() or not await is_user_bot_active(msg.chat.id):
+        await save_message(
+            msg.chat.id,
+            "in",
+            "(голосовое сообщение, получено при выключенном боте)",
+            is_business=False,
+        )
+        return
+
+    text = await transcribe_voice_to_text(msg, bot)
+    if not text:
+        await save_message(
+            msg.chat.id,
+            "in",
+            "(не удалось расшифровать голосовое сообщение)",
+            is_business=False,
+        )
+        return
+
+    await save_message(msg.chat.id, "in", f"(голосовое) {text}", is_business=False)
+    await passive_sync_user_context(msg.chat.id, incoming_text=text)
+    await send_business_ai_reply(msg.chat.id, None, text, bot)
+
+
+@router.message(F.text, ~F.text.startswith("/"), F.chat.type == "private")
+async def on_regular_message(msg: Message, bot: Bot):
+    await save_user_from_message(msg)
+    text = msg.text or ""
+    await save_message(msg.chat.id, "in", text, is_business=False)
+    await passive_sync_user_context(msg.chat.id, incoming_text=text)
+
+    if not is_bot_active_now() or not await is_user_bot_active(msg.chat.id):
+        return
+
+    await send_business_ai_reply(msg.chat.id, None, text, bot)
 
 
 async def transcribe_voice_to_text(msg: Message, bot: Bot) -> str | None:
@@ -2255,7 +2328,30 @@ async def transcribe_voice_to_text(msg: Message, bot: Bot) -> str | None:
         return None
 
 
-async def get_funnel_media_for_user(tg_user_id: int, media_key: str) -> dict | None:
+async def transcribe_voice_file_id(file_id: str, bot: Bot) -> str | None:
+    if not ai_client or not file_id:
+        return None
+    buf = BytesIO()
+    try:
+        await bot.download(file_id, buf)
+        buf.seek(0)
+        buf.name = "voice.ogg"
+        result = await ai_client.audio.transcriptions.create(
+            model="gpt-4o-transcribe",
+            file=buf,
+        )
+        text = (result.text or "").strip()
+        return text or None
+    except Exception as exc:
+        logging.warning("[gateway] voice transcription failed: %s", exc)
+        return None
+
+
+async def get_funnel_media_for_user(
+    tg_user_id: int,
+    media_key: str,
+    delivery_scope: str = "business",
+) -> dict | None:
     settings = await load_kv_settings()
     if settings.get("FUNNEL_MEDIA_ENABLED", "1") != "1":
         return None
@@ -2274,8 +2370,12 @@ async def get_funnel_media_for_user(tg_user_id: int, media_key: str) -> dict | N
         if not row:
             return None
         await cur.execute(
-            "SELECT 1 FROM funnel_media_sent WHERE tg_user_id = %s AND media_key = %s LIMIT 1",
-            (tg_user_id, media_key),
+            """
+            SELECT 1 FROM funnel_media_sent
+            WHERE tg_user_id = %s AND media_key = %s AND delivery_scope = %s
+            LIMIT 1
+            """,
+            (tg_user_id, media_key, delivery_scope),
         )
         if await cur.fetchone():
             logging.info("[funnel media] skip repeated %s for user %s", media_key, tg_user_id)
@@ -2283,12 +2383,20 @@ async def get_funnel_media_for_user(tg_user_id: int, media_key: str) -> dict | N
     return row
 
 
-async def mark_funnel_media_sent(tg_user_id: int, media_key: str, telegram_file_id: str | None):
+async def mark_funnel_media_sent(
+    tg_user_id: int,
+    media_key: str,
+    telegram_file_id: str | None,
+    delivery_scope: str = "business",
+):
     assert db_pool is not None
     async with db_pool.acquire() as conn, conn.cursor() as cur:
         await cur.execute(
-            "INSERT IGNORE INTO funnel_media_sent (tg_user_id, media_key) VALUES (%s, %s)",
-            (tg_user_id, media_key),
+            """
+            INSERT IGNORE INTO funnel_media_sent (tg_user_id, media_key, delivery_scope)
+            VALUES (%s, %s, %s)
+            """,
+            (tg_user_id, media_key, delivery_scope),
         )
         if telegram_file_id:
             await cur.execute(
@@ -2361,12 +2469,13 @@ async def prepare_square_video_note(source_path: str) -> str | None:
 
 async def send_funnel_video_note(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     media_key: str,
     bot: Bot,
     reply_markup=None,
+    delivery_scope: str = "business",
 ) -> Message | None:
-    media = await get_funnel_media_for_user(tg_user_id, media_key)
+    media = await get_funnel_media_for_user(tg_user_id, media_key, delivery_scope)
     if not media:
         return None
 
@@ -2385,12 +2494,15 @@ async def send_funnel_video_note(
         return await bot.send_video_note(
             chat_id=tg_user_id,
             video_note=video_note,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             reply_markup=reply_markup,
         )
 
     sent = None
-    cached_file_id = str(media.get("telegram_file_id") or "").strip()
+    # Telegram file_id привязан к токену бота. Глобальный кеш принадлежит
+    # EVanechat/Business-токену и не должен использоваться основным ботом.
+    reuse_cached_file_id = delivery_scope != "elizabeth_bot"
+    cached_file_id = str(media.get("telegram_file_id") or "").strip() if reuse_cached_file_id else ""
     if cached_file_id:
         try:
             sent = await send(cached_file_id)
@@ -2413,28 +2525,72 @@ async def send_funnel_video_note(
     if not telegram_file_id:
         logging.error("[funnel media] Telegram returned no video_note for %s", media_key)
         return None
-    await mark_funnel_media_sent(tg_user_id, media_key, telegram_file_id)
-    await save_message(sent.chat.id, "out", f"[Кружок {media_key.upper()}]", is_business=True)
+    await mark_funnel_media_sent(
+        tg_user_id,
+        media_key,
+        telegram_file_id if reuse_cached_file_id else None,
+        delivery_scope,
+    )
+    await save_message(
+        sent.chat.id,
+        "out",
+        f"[Кружок {media_key.upper()}]",
+        is_business=bool(business_id),
+    )
     return sent
+
+
+async def send_intro_funnel_media_if_needed(
+    tg_user_id: int,
+    bot: Bot,
+    delivery_scope: str,
+) -> bool:
+    """Один раз начинает отдельную цепочку кружков для конкретного бота."""
+    assert db_pool is not None
+    async with db_pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT 1 FROM funnel_media_sent
+            WHERE tg_user_id = %s AND delivery_scope = %s
+            LIMIT 1
+            """,
+            (tg_user_id, delivery_scope),
+        )
+        if await cur.fetchone():
+            return False
+
+    media_key = await get_next_unsent_funnel_media_key(tg_user_id, "A", delivery_scope)
+    if not media_key:
+        return False
+    return bool(
+        await send_funnel_video_note(
+            tg_user_id,
+            None,
+            media_key,
+            bot,
+            delivery_scope=delivery_scope,
+        )
+    )
 
 
 async def send_ai_reply_with_funnel_media(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     reply_text: str,
     bot: Bot,
     reply_markup=None,
+    delivery_scope: str = "business",
 ) -> tuple[int | None, int]:
     media_key, before, after = split_funnel_reply(reply_text)
     if not media_key:
         sent = await bot.send_message(
             chat_id=tg_user_id,
             text=reply_text,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML,
         )
-        await save_message(sent.chat.id, "out", reply_text, is_business=True)
+        await save_message(sent.chat.id, "out", reply_text, is_business=bool(business_id))
         return sent.chat.id, 1
 
     sent_chat_id = None
@@ -2444,10 +2600,10 @@ async def send_ai_reply_with_funnel_media(
         sent = await bot.send_message(
             chat_id=tg_user_id,
             text=before,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             parse_mode=ParseMode.HTML,
         )
-        await save_message(sent.chat.id, "out", before, is_business=True)
+        await save_message(sent.chat.id, "out", before, is_business=bool(business_id))
         sent_chat_id, sent_count = sent.chat.id, sent_count + 1
 
     if not is_manual_takeover_active(tg_user_id):
@@ -2457,6 +2613,7 @@ async def send_ai_reply_with_funnel_media(
             media_key,
             bot,
             reply_markup=reply_markup if not after else None,
+            delivery_scope=delivery_scope,
         )
         if sent_media:
             sent_chat_id, sent_count = sent_media.chat.id, sent_count + 1
@@ -2465,23 +2622,26 @@ async def send_ai_reply_with_funnel_media(
         sent = await bot.send_message(
             chat_id=tg_user_id,
             text=after,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML,
         )
-        await save_message(sent.chat.id, "out", after, is_business=True)
+        await save_message(sent.chat.id, "out", after, is_business=bool(business_id))
         sent_chat_id, sent_count = sent.chat.id, sent_count + 1
 
     return sent_chat_id, sent_count
     
 async def send_business_ai_reply(
     tg_user_id: int,
-    business_id: str,
+    business_id: str | None,
     user_text: str,
     bot: Bot,
+    delivery_scope: str | None = None,
+    allow_funnel_media: bool = True,
 ):
 
     global session_clients, session_out_messages
+    delivery_scope = delivery_scope or ("business" if business_id else "evanechat_bot")
 
     # 0. Если бот для этого пользователя уже отключён – ничего не делаем
     if not await is_user_bot_active(tg_user_id):
@@ -2534,15 +2694,15 @@ async def send_business_ai_reply(
 
             if code == "registered":
                 confirm_text = (
-                    "Отлично, аккаунт вижу 🤝\n\nТеперь нужно пополнить баланс, "
-                    "и после этого мы продолжим дальше. Точные условия и сумму подскажет твой личный менеджер."
+                    "Great, I can see your account 🤝\n\nNow you need to fund your balance, "
+                    "and then we’ll continue. Your personal manager will explain the exact terms and amount."
                 )
                 sent = await bot.send_message(
                     chat_id=tg_user_id,
-                    business_connection_id=business_id,
+                    **business_connection_kwargs(business_id),
                     text=confirm_text,
                 )
-                await save_message(sent.chat.id, "out", confirm_text, is_business=True)
+                await save_message(sent.chat.id, "out", confirm_text, is_business=bool(business_id))
                 _, notes = await get_user_state(tg_user_id)
                 new_notes = (notes or "") + ("\n" if notes else "") + "Trader ID подтвержден сразу после вопроса про наличие аккаунта"
                 await set_user_state(tg_user_id, STAGE_WAITING_DEPOSIT, new_notes)
@@ -2565,13 +2725,13 @@ async def send_business_ai_reply(
             asyncio.create_task(update_user_memory(tg_user_id))
             return
 
-        clarify_text = "Напиши, пожалуйста, просто да или нет 🤝"
+        clarify_text = "Please reply with just yes or no 🤝"
         sent = await bot.send_message(
             chat_id=tg_user_id,
-            business_connection_id=business_id,
+            **business_connection_kwargs(business_id),
             text=clarify_text,
         )
-        await save_message(sent.chat.id, "out", clarify_text, is_business=True)
+        await save_message(sent.chat.id, "out", clarify_text, is_business=bool(business_id))
         session_clients.add(tg_user_id)
         session_out_messages += 1
         return
@@ -2579,13 +2739,13 @@ async def send_business_ai_reply(
     if stage == STAGE_WAITING_EXISTING_ACCOUNT_TRADER_ID:
         trader_id = extract_trader_id(user_text)
         if not trader_id:
-            reminder_text = "Пришли, пожалуйста, только Trader ID без лишнего текста 🤝"
+            reminder_text = "Please send only your Trader ID, without any additional text 🤝"
             sent = await bot.send_message(
                 chat_id=tg_user_id,
-                business_connection_id=business_id,
+                **business_connection_kwargs(business_id),
                 text=reminder_text,
             )
-            await save_message(sent.chat.id, "out", reminder_text, is_business=True)
+            await save_message(sent.chat.id, "out", reminder_text, is_business=bool(business_id))
             session_clients.add(tg_user_id)
             session_out_messages += 1
             return
@@ -2608,15 +2768,15 @@ async def send_business_ai_reply(
 
         if code == "registered":
             confirm_text = (
-                "Отлично, аккаунт вижу 🤝\n\nТеперь нужно пополнить баланс, "
-                "и после этого мы продолжим дальше. Точные условия и сумму подскажет твой личный менеджер."
+                "Great, I can see your account 🤝\n\nNow you need to fund your balance, "
+                "and then we’ll continue. Your personal manager will explain the exact terms and amount."
             )
             sent = await bot.send_message(
                 chat_id=tg_user_id,
-                business_connection_id=business_id,
+                **business_connection_kwargs(business_id),
                 text=confirm_text,
             )
-            await save_message(sent.chat.id, "out", confirm_text, is_business=True)
+            await save_message(sent.chat.id, "out", confirm_text, is_business=bool(business_id))
             _, notes = await get_user_state(tg_user_id)
             new_notes = (notes or "") + ("\n" if notes else "") + "Trader ID подтвержден после кросс-проверки"
             await set_user_state(tg_user_id, STAGE_WAITING_DEPOSIT, new_notes)
@@ -2816,7 +2976,19 @@ async def send_business_ai_reply(
         return   
         
     # 3. Генерируем текст ответа через основной ИИ
-    reply_text = await generate_ai_reply(tg_user_id, user_text, bot, plan)
+    reply_text = await generate_ai_reply(
+        tg_user_id,
+        user_text,
+        bot,
+        plan,
+        delivery_scope=delivery_scope,
+        allow_funnel_media=allow_funnel_media,
+    )
+    if not allow_funnel_media:
+        _media_key, before_media, after_media = split_funnel_reply(reply_text)
+        reply_text = "\n\n".join(part for part in (before_media, after_media) if part).strip()
+        if not reply_text:
+            reply_text = "Hi! I’m here and ready to help. What would you like to know first?"
 
     # 4. Кнопка + ссылка на регистрацию, если планировщик запросил
     reply_markup = None
@@ -2826,7 +2998,7 @@ async def send_business_ai_reply(
         reply_markup = InlineKeyboardMarkup(
             inline_keyboard=[[
                 InlineKeyboardButton(
-                    text="🔗 Регистрация на Pocket Option",
+                    text="🔗 Register on Pocket Option",
                     url=reg_link,
                 )
             ]]
@@ -2847,7 +3019,7 @@ async def send_business_ai_reply(
             await bot.send_chat_action(
                 chat_id=tg_user_id,
                 action=ChatAction.TYPING,
-                business_connection_id=business_id,
+                **business_connection_kwargs(business_id),
             )
         except Exception:
             pass
@@ -2868,6 +3040,7 @@ async def send_business_ai_reply(
         reply_text=reply_text,
         bot=bot,
         reply_markup=reply_markup,
+        delivery_scope=delivery_scope,
     )
     if sent_chat_id is not None:
         session_clients.add(sent_chat_id)
@@ -2875,6 +3048,106 @@ async def send_business_ai_reply(
 
     # 7. Обновляем долгосрочную память асинхронно
     asyncio.create_task(update_user_memory(tg_user_id))
+
+
+async def process_gateway_message(payload: dict, delivery_bot: Bot):
+    tg_user_id = int(payload["user_id"])
+    await save_gateway_user(
+        tg_user_id,
+        str(payload.get("first_name") or ""),
+        str(payload.get("username") or ""),
+    )
+
+    text = str(payload.get("text") or "").strip()
+    voice_file_id = str(payload.get("voice_file_id") or "").strip()
+    if voice_file_id and not text:
+        text = await transcribe_voice_file_id(voice_file_id, delivery_bot) or ""
+    if not text:
+        logging.info("[gateway] ignored empty message from user=%s", tg_user_id)
+        return
+
+    await save_message(tg_user_id, "in", text, is_business=False)
+    await passive_sync_user_context(tg_user_id, incoming_text=text)
+    # Основной Elizabeth-бот доступен круглосуточно. Рабочие часы относятся
+    # только к Business-автоответчику и не должны глушить чат внутри продукта.
+    if not await is_user_bot_active(tg_user_id):
+        return
+
+    delivery_scope = "elizabeth_bot"
+    intro_media_sent = False
+    if bool(payload.get("is_start")):
+        intro_media_sent = await send_intro_funnel_media_if_needed(
+            tg_user_id,
+            delivery_bot,
+            delivery_scope,
+        )
+
+    await send_business_ai_reply(
+        tg_user_id,
+        None,
+        text,
+        delivery_bot,
+        delivery_scope=delivery_scope,
+        allow_funnel_media=not intro_media_sent,
+    )
+
+
+def gateway_task_done(task: asyncio.Task):
+    gateway_tasks.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logging.exception("[gateway] background message failed: %s", exc)
+
+
+async def start_chatter_gateway(delivery_bot: Bot) -> web.AppRunner | None:
+    if not AI_CHATTER_GATEWAY_SECRET:
+        logging.warning("[gateway] disabled: AI_CHATTER_GATEWAY_SECRET is empty")
+        return None
+
+    async def health(_request: web.Request):
+        return web.json_response({"status": "ok"})
+
+    async def incoming(request: web.Request):
+        supplied_secret = request.headers.get("X-AI-Chatter-Secret", "")
+        if not hmac.compare_digest(supplied_secret, AI_CHATTER_GATEWAY_SECRET):
+            raise web.HTTPUnauthorized()
+        try:
+            payload = await request.json()
+            user_id = int(payload.get("user_id") or 0)
+            message_id = int(payload.get("message_id") or 0)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise web.HTTPBadRequest(text="invalid payload")
+        if user_id <= 0 or message_id <= 0:
+            raise web.HTTPBadRequest(text="user_id and message_id are required")
+
+        message_key = (user_id, message_id)
+        if message_key in gateway_message_ids:
+            return web.json_response({"status": "duplicate"})
+        if len(gateway_message_ids) >= 10_000:
+            gateway_message_ids.clear()
+        gateway_message_ids.add(message_key)
+
+        task = asyncio.create_task(process_gateway_message(payload, delivery_bot))
+        gateway_tasks.add(task)
+        task.add_done_callback(gateway_task_done)
+        return web.json_response({"status": "accepted"}, status=202)
+
+    gateway_app = web.Application(client_max_size=256 * 1024)
+    gateway_app.router.add_get("/health", health)
+    gateway_app.router.add_post("/incoming", incoming)
+    runner = web.AppRunner(gateway_app)
+    await runner.setup()
+    site = web.TCPSite(runner, AI_CHATTER_GATEWAY_HOST, AI_CHATTER_GATEWAY_PORT)
+    await site.start()
+    logging.info(
+        "[gateway] listening on http://%s:%s",
+        AI_CHATTER_GATEWAY_HOST,
+        AI_CHATTER_GATEWAY_PORT,
+    )
+    return runner
     
 def split_prompt_pages(prompt: str, page_size: int = PROMPT_PAGE_SIZE) -> list[str]:
     prompt = prompt or ""
@@ -2982,11 +3255,18 @@ async def main():
         API_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    direct_delivery_bot = None
+    gateway_runner = None
+    if AI_CHATTER_DIRECT_BOT_TOKEN:
+        direct_delivery_bot = Bot(
+            AI_CHATTER_DIRECT_BOT_TOKEN,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
+        gateway_runner = await start_chatter_gateway(direct_delivery_bot)
+    else:
+        logging.warning("[gateway] disabled: AI_CHATTER_DIRECT_BOT_TOKEN is empty")
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
-
-    # обычный роутер с бизнес-логикой
-    dp.include_router(router)
 
     # функция, чтобы админка могла обновлять промпт в памяти
     def set_ai_system_prompt(new_value: str) -> None:
@@ -3011,8 +3291,10 @@ async def main():
     )
     await refresh_admin_ids_cache()
 
-    # подключаем админский роутер
+    # Сначала подключаем админские FSM-хендлеры, чтобы обычный AI-чат
+    # не перехватывал текст, который администратор вводит в формах.
     dp.include_router(admin_router)
+    dp.include_router(router)
 
     asyncio.create_task(work_monitor(bot))
     asyncio.create_task(backfill_missing_trader_ids_from_messages())
@@ -3021,6 +3303,10 @@ async def main():
     try:
         await dp.start_polling(bot)
     finally:
+        if gateway_runner is not None:
+            await gateway_runner.cleanup()
+        if direct_delivery_bot is not None:
+            await direct_delivery_bot.session.close()
         if db_pool is not None:
             db_pool.close()
             await db_pool.wait_closed()

@@ -313,12 +313,38 @@ async def init_db() -> Tuple[
             CREATE TABLE IF NOT EXISTS funnel_media_sent (
                 tg_user_id BIGINT UNSIGNED NOT NULL,
                 media_key VARCHAR(32) NOT NULL,
+                delivery_scope VARCHAR(32) NOT NULL DEFAULT 'business',
                 sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (tg_user_id, media_key),
+                PRIMARY KEY (tg_user_id, media_key, delivery_scope),
                 INDEX idx_funnel_media_sent_at (sent_at)
             ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """
         )
+        if not await column_exists(cur, "funnel_media_sent", "delivery_scope"):
+            await cur.execute(
+                """
+                ALTER TABLE funnel_media_sent
+                ADD COLUMN delivery_scope VARCHAR(32) NOT NULL DEFAULT 'business' AFTER media_key
+                """
+            )
+        await cur.execute(
+            """
+            SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
+            FROM information_schema.statistics
+            WHERE table_schema = DATABASE()
+              AND table_name = 'funnel_media_sent'
+              AND index_name = 'PRIMARY'
+            """
+        )
+        primary_columns = str((await cur.fetchone() or [""])[0] or "")
+        if primary_columns != "tg_user_id,media_key,delivery_scope":
+            await cur.execute(
+                """
+                ALTER TABLE funnel_media_sent
+                DROP PRIMARY KEY,
+                ADD PRIMARY KEY (tg_user_id, media_key, delivery_scope)
+                """
+            )
         for index, (media_key, block_code, title) in enumerate(FUNNEL_MEDIA_DEFAULTS, start=1):
             await cur.execute(
                 """
