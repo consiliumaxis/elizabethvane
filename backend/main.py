@@ -120,6 +120,7 @@ try:
         get_quiz_options,
         get_quiz_question,
         get_quiz_steps_to_complete,
+        is_active_channel_member,
         is_skip_answer,
         is_valid_quiz_step,
         map_quiz_answer_locally,
@@ -137,6 +138,7 @@ except ModuleNotFoundError:
         get_quiz_options,
         get_quiz_question,
         get_quiz_steps_to_complete,
+        is_active_channel_member,
         is_skip_answer,
         is_valid_quiz_step,
         map_quiz_answer_locally,
@@ -5674,6 +5676,23 @@ async def handle_funnel_continue(callback: types.CallbackQuery):
 async def handle_funnel_check_channel(callback: types.CallbackQuery):
     if callback.from_user and db_pool:
         user_id = int(callback.from_user.id)
+        settings = await get_support_links_row()
+        if settings.get("check_subscription_enabled"):
+            try:
+                member = await bot.get_chat_member(settings["channel_id"], user_id)
+            except Exception as exc:
+                print(f"[Bot] channel membership check failed for {user_id}: {exc}")
+                await callback.answer(
+                    "I couldn’t verify your subscription. Please make sure you joined the channel and try again.",
+                    show_alert=True,
+                )
+                return
+            if not is_active_channel_member(member.status):
+                await callback.answer(
+                    "Please join the channel first, then tap this button again.",
+                    show_alert=True,
+                )
+                return
         async with db_pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
