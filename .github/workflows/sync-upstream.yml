@@ -42,7 +42,7 @@ jobs:
             if git ls-remote --exit-code --heads upstream "$BRANCH" >/dev/null 2>&1; then
               # Приводим локальную ветку к точной копии upstream и пушим в форк.
               git checkout -B "$BRANCH" "upstream/$BRANCH"
-              git push origin "$BRANCH" --force
+              git push origin "$BRANCH" --force-with-lease
               echo "Synced $BRANCH to upstream/$BRANCH"
             else
               echo "Upstream has no branch '$BRANCH', skipping."
