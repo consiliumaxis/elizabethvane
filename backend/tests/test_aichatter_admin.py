@@ -129,6 +129,10 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn('delivery_scope = "elizabeth_bot"', bot)
         self.assertIn("send_intro_funnel_media_if_needed", bot)
         self.assertIn("delivery_scope VARCHAR(32) NOT NULL", db)
+        gateway_handler = bot.split("async def process_gateway_message", 1)[1].split(
+            "def gateway_task_done", 1
+        )[0]
+        self.assertNotIn("is_bot_active_now()", gateway_handler)
 
     def test_business_messages_are_marked_read(self):
         bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")

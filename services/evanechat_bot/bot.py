@@ -3060,7 +3060,9 @@ async def process_gateway_message(payload: dict, delivery_bot: Bot):
 
     await save_message(tg_user_id, "in", text, is_business=False)
     await passive_sync_user_context(tg_user_id, incoming_text=text)
-    if not is_bot_active_now() or not await is_user_bot_active(tg_user_id):
+    # Основной Elizabeth-бот доступен круглосуточно. Рабочие часы относятся
+    # только к Business-автоответчику и не должны глушить чат внутри продукта.
+    if not await is_user_bot_active(tg_user_id):
         return
 
     delivery_scope = "elizabeth_bot"
