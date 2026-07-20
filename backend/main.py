@@ -2,13 +2,16 @@ import os
 import asyncio
 import aiomysql
 import httpx
+import hashlib
+import hmac
 import json
 import secrets
 import random
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs
-from fastapi import FastAPI, Request, Depends, HTTPException, Header, Query
+from urllib.parse import parse_qs, urlencode, urlsplit
+from fastapi import FastAPI, Request, Depends, HTTPException, Header, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand
@@ -225,6 +228,12 @@ AI_CHATTER_GATEWAY_URL = (
     os.getenv("AI_CHATTER_GATEWAY_URL") or "http://127.0.0.1:8091/incoming"
 ).strip()
 AI_CHATTER_GATEWAY_SECRET = (os.getenv("AI_CHATTER_GATEWAY_SECRET") or "").strip()
+BOT_CHANNEL_CLICK_SECRET = (os.getenv("BOT_CHANNEL_CLICK_SECRET") or "").strip()
+_web_app_parts = urlsplit((os.getenv("WEB_APP_URL") or "").strip())
+BOT_PUBLIC_BASE_URL = (
+    os.getenv("BOT_PUBLIC_BASE_URL")
+    or (f"{_web_app_parts.scheme}://{_web_app_parts.netloc}" if _web_app_parts.scheme and _web_app_parts.netloc else "")
+).strip().rstrip("/")
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -5383,16 +5392,83 @@ async def send_quiz_welcome(chat_id: int):
     )
 
 
+def build_channel_click_signature(user_id: int) -> str:
+    if not BOT_CHANNEL_CLICK_SECRET:
+        return ""
+    return hmac.new(
+        BOT_CHANNEL_CLICK_SECRET.encode("utf-8"),
+        str(int(user_id)).encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def build_channel_click_url(user_id: int, channel_url: str) -> str:
+    signature = build_channel_click_signature(user_id)
+    if not BOT_PUBLIC_BASE_URL or not signature:
+        return channel_url
+    query = urlencode({"user_id": int(user_id), "sig": signature})
+    return f"{BOT_PUBLIC_BASE_URL}/api/bot/channel/open?{query}"
+
+
+async def process_channel_open_click(user_id: int):
+    if not db_pool:
+        return
+    first_name = ""
+    username = ""
+    first_click = False
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT first_name, username FROM users WHERE user_id = %s LIMIT 1",
+                (user_id,),
+            )
+            user = await cur.fetchone() or {}
+            first_name = str(user.get("first_name") or "")
+            username = str(user.get("username") or "")
+            await cur.execute(
+                """
+                UPDATE user_onboarding
+                SET channel_subscribed_at = NOW()
+                WHERE user_id = %s AND channel_subscribed_at IS NULL
+                """,
+                (user_id,),
+            )
+            first_click = cur.rowcount > 0
+    if not first_click:
+        return
+
+    await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)
+    await post_to_ai_chatter({
+        "user_id": user_id,
+        "message_id": int(datetime.now().timestamp() * 1_000_000),
+        "first_name": first_name,
+        "username": username,
+        "text": "Hello",
+        "voice_file_id": "",
+        "is_start": True,
+    })
+
+
+@app.get("/api/bot/channel/open")
+async def open_channel_from_bot(
+    user_id: int,
+    sig: str,
+    background_tasks: BackgroundTasks,
+):
+    expected_signature = build_channel_click_signature(user_id)
+    if not expected_signature or not hmac.compare_digest(sig, expected_signature):
+        raise HTTPException(status_code=403, detail="Invalid channel link")
+    settings = await get_support_links_row()
+    background_tasks.add_task(process_channel_open_click, int(user_id))
+    return RedirectResponse(settings["channel_url"], status_code=302)
+
+
 async def send_channel_gate(chat_id: int):
     settings = await get_support_links_row()
+    tracked_channel_url = build_channel_click_url(chat_id, settings["channel_url"])
     keyboard_rows = [
-        [InlineKeyboardButton(text="Open channel", url=settings["channel_url"])],
-        [
-            InlineKeyboardButton(
-                text="I’ve subscribed — go to trading",
-                callback_data=FUNNEL_CHECK_CHANNEL_CALLBACK,
-            )
-        ],
+        [InlineKeyboardButton(text="Open channel", url=tracked_channel_url)],
+        [InlineKeyboardButton(text="Go to trading", callback_data=FUNNEL_CONTINUE_CALLBACK)],
     ]
     await bot.send_message(
         chat_id=chat_id,
@@ -5654,9 +5730,22 @@ async def handle_quiz_answer_callback(callback: types.CallbackQuery):
 @dp.callback_query(lambda callback: callback.data == FUNNEL_CONTINUE_CALLBACK)
 async def handle_funnel_continue(callback: types.CallbackQuery):
     if callback.message and callback.from_user:
+        channel_subscribed = False
         if db_pool:
             async with db_pool.acquire() as conn:
-                async with conn.cursor() as cur:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute(
+                        "SELECT channel_subscribed_at FROM user_onboarding WHERE user_id = %s LIMIT 1",
+                        (int(callback.from_user.id),),
+                    )
+                    row = await cur.fetchone() or {}
+                    channel_subscribed = bool(row.get("channel_subscribed_at"))
+                    if not channel_subscribed:
+                        await callback.answer(
+                            "Please open the channel first, then return to trading.",
+                            show_alert=True,
+                        )
+                        return
                     await cur.execute(
                         """
                         UPDATE user_onboarding
@@ -5668,7 +5757,6 @@ async def handle_funnel_continue(callback: types.CallbackQuery):
         user_name = callback.from_user.first_name or callback.from_user.username or "Trader"
         await callback.answer()
         await send_main_menu(callback.message.chat.id, int(callback.from_user.id), user_name)
-        await start_ai_chatter_from_callback(callback)
 
 
 @dp.callback_query(lambda callback: callback.data == FUNNEL_CHECK_CHANNEL_CALLBACK)
@@ -5686,6 +5774,7 @@ async def handle_funnel_check_channel(callback: types.CallbackQuery):
                     (user_id,),
                 )
         await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)
+        await start_ai_chatter_from_callback(callback)
     await handle_funnel_continue(callback)
 
 class AIChatRequest(BaseModel):

@@ -101,30 +101,31 @@ class BotFunnelTest(unittest.TestCase):
         )
         self.assertTrue((PROJECT_ROOT / "backend" / "assets" / "elizabeth_start_video_note.mp4").exists())
 
-    def test_go_to_trading_starts_the_ai_circle_funnel(self):
+    def test_go_to_trading_opens_menu_after_channel_click(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 
-        self.assertIn("async def start_ai_chatter_from_callback", source)
-        self.assertIn('"is_start": True', source)
         callback_handler = source.split("async def handle_funnel_continue", 1)[1].split(
             "@dp.callback_query", 1
         )[0]
+        self.assertIn("SELECT channel_subscribed_at FROM user_onboarding", callback_handler)
         self.assertIn("await send_main_menu", callback_handler)
-        self.assertIn("await start_ai_chatter_from_callback(callback)", callback_handler)
+        self.assertNotIn("await start_ai_chatter_from_callback(callback)", callback_handler)
 
-    def test_subscription_confirmation_sends_event_before_trading(self):
+    def test_open_channel_redirect_sends_subscription_event_and_starts_ai(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 
-        self.assertIn('text="I’ve subscribed — go to trading"', source)
-        self.assertIn("callback_data=FUNNEL_CHECK_CHANNEL_CALLBACK", source)
-        subscription_handler = source.split("async def handle_funnel_check_channel", 1)[1].split(
-            "class AIChatRequest", 1
+        self.assertIn('InlineKeyboardButton(text="Open channel", url=tracked_channel_url)', source)
+        self.assertIn('@app.get("/api/bot/channel/open")', source)
+        self.assertIn("build_channel_click_signature", source)
+        click_handler = source.split("async def process_channel_open_click", 1)[1].split(
+            '@app.get("/api/bot/channel/open")', 1
         )[0]
-        self.assertIn("channel_subscribed_at = COALESCE(channel_subscribed_at, NOW())", subscription_handler)
-        self.assertIn("await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)", subscription_handler)
+        self.assertIn("channel_subscribed_at = NOW()", click_handler)
+        self.assertIn("await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)", click_handler)
+        self.assertIn("await post_to_ai_chatter", click_handler)
         self.assertLess(
-            subscription_handler.index("await send_aio_postback_event"),
-            subscription_handler.index("await handle_funnel_continue"),
+            click_handler.index("await send_aio_postback_event"),
+            click_handler.index("await post_to_ai_chatter"),
         )
 
     def test_aio_funnel_events_are_deduplicated_per_telegram_user(self):
