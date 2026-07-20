@@ -517,8 +517,12 @@ export default function AIChatterPage() {
                 <article className={`aichatter-funnel-item ${item.enabled ? '' : 'disabled'}`} key={item.media_key}>
                   <div className="aichatter-funnel-order">
                     <strong>{index + 1}</strong>
-                    <button type="button" disabled={index === 0} onClick={() => moveFunnelItem(index, -1)} title="Поднять">↑</button>
-                    <button type="button" disabled={index === funnelItems.length - 1} onClick={() => moveFunnelItem(index, 1)} title="Опустить">↓</button>
+                    <button type="button" disabled={index === 0} onClick={() => moveFunnelItem(index, -1)} title="Переместить выше" aria-label="Переместить шаг выше">
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 12.5 10 7l5.5 5.5" /></svg>
+                    </button>
+                    <button type="button" disabled={index === funnelItems.length - 1} onClick={() => moveFunnelItem(index, 1)} title="Переместить ниже" aria-label="Переместить шаг ниже">
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4.5 7.5 5.5 5.5 5.5-5.5" /></svg>
+                    </button>
                   </div>
                   <div className="aichatter-funnel-fields">
                     <div className="aichatter-funnel-card-head">
