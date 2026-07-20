@@ -14,9 +14,8 @@ _pool = None
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 _KV_KEYS = (
     "BOT_NAME",
-    "COMPANY_CODE",
     "MIN_DEPOSIT_THRESHOLD",
-    "CHECK_COMPANY",
+    "WORK_24_7",
     "POSTBACK_LOG_CHAT_ID",
     "LOG_REGISTRATIONS",
     "LOG_DEPOSITS",
@@ -74,9 +73,8 @@ class AichatterSettingsUpdate(BaseModel):
     work_start: Optional[str] = None
     work_end: Optional[str] = None
     bot_name: Optional[str] = None
-    company_code: Optional[str] = None
     min_deposit: Optional[float] = None
-    check_company: Optional[bool] = None
+    work_24_7: Optional[bool] = None
     ai_enabled: Optional[bool] = None
     ai_model: Optional[str] = None
     openai_api_key: Optional[str] = None
@@ -447,9 +445,8 @@ async def _load_settings(pool) -> Dict[str, Any]:
         "work_start": _time_text(settings.get("work_start")),
         "work_end": _time_text(settings.get("work_end")),
         "bot_name": kv.get("BOT_NAME", "Elizabeth Vane"),
-        "company_code": kv.get("COMPANY_CODE", ""),
         "min_deposit": float(kv.get("MIN_DEPOSIT_THRESHOLD") or 0),
-        "check_company": kv.get("CHECK_COMPANY", "1") == "1",
+        "work_24_7": kv.get("WORK_24_7", "0") == "1",
         "postback_log_chat_id": kv.get("POSTBACK_LOG_CHAT_ID", ""),
         "log_registrations": kv.get("LOG_REGISTRATIONS", "1") == "1",
         "log_deposits": kv.get("LOG_DEPOSITS", "1") == "1",
@@ -565,9 +562,8 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
 
             kv_map = {
                 "bot_name": "BOT_NAME",
-                "company_code": "COMPANY_CODE",
                 "min_deposit": "MIN_DEPOSIT_THRESHOLD",
-                "check_company": "CHECK_COMPANY",
+                "work_24_7": "WORK_24_7",
                 "postback_log_chat_id": "POSTBACK_LOG_CHAT_ID",
                 "log_registrations": "LOG_REGISTRATIONS",
                 "log_deposits": "LOG_DEPOSITS",

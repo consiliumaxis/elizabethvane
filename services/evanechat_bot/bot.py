@@ -115,6 +115,7 @@ video_note_prepare_locks: dict[str, asyncio.Lock] = {}
 gateway_tasks: set[asyncio.Task] = set()
 gateway_message_ids: set[tuple[int, int]] = set()
 work_enabled_manual: bool = True
+work_24_7: bool = False
 
 work_start: time | None = None
 work_end: time | None = None
@@ -2055,7 +2056,7 @@ async def generate_ai_reply(
 def is_bot_active_now() -> bool:
     if not work_enabled_manual:
         return False
-    return is_in_schedule_now()
+    return work_24_7 or is_in_schedule_now()
 
 async def update_work_enabled(enabled: bool):
     global work_enabled_manual
@@ -2073,7 +2074,7 @@ async def work_monitor(bot: Bot):
     global is_working_flag, session_clients, session_out_messages
 
     while True:
-        active = is_in_schedule_now() 
+        active = is_bot_active_now()
 
         if is_working_flag is None:
             # первый запуск
@@ -2107,7 +2108,7 @@ async def work_monitor(bot: Bot):
 
 
 async def runtime_settings_refresh_worker():
-    global work_start, work_end, work_enabled_manual
+    global work_start, work_end, work_enabled_manual, work_24_7
     global ai_system_prompt, ai_enabled, ai_model, bot_name
     global KV_CACHE, KV_CACHE_LOADED_AT
     global ai_client, active_openai_api_key, active_register_base_url
@@ -2128,6 +2129,8 @@ async def runtime_settings_refresh_worker():
                 name_row = await cur.fetchone()
                 await cur.execute("SELECT svalue FROM kv_settings WHERE skey = 'REGISTER_BASE_URL'")
                 register_url_row = await cur.fetchone()
+                await cur.execute("SELECT svalue FROM kv_settings WHERE skey = 'WORK_24_7'")
+                work_24_7_row = await cur.fetchone()
 
             if settings_row:
                 work_start = to_time(settings_row[0]) if settings_row[0] is not None else None
@@ -2149,6 +2152,8 @@ async def runtime_settings_refresh_worker():
                 bot_name = name_row[0] or "Elizabeth Vane"
             if register_url_row and str(register_url_row[0] or "").strip():
                 active_register_base_url = str(register_url_row[0]).strip()
+            if work_24_7_row:
+                work_24_7 = str(work_24_7_row[0] or "0").strip() == "1"
 
             KV_CACHE = {}
             KV_CACHE_LOADED_AT = None
@@ -3148,9 +3153,7 @@ async def process_gateway_message(payload: dict, delivery_bot: Bot):
 
     await save_message(tg_user_id, "in", text, is_business=False)
     await passive_sync_user_context(tg_user_id, incoming_text=text)
-    # Основной Elizabeth-бот доступен круглосуточно. Рабочие часы относятся
-    # только к Business-автоответчику и не должны глушить чат внутри продукта.
-    if not await is_user_bot_active(tg_user_id):
+    if not is_bot_active_now() or not await is_user_bot_active(tg_user_id):
         return
 
     delivery_scope = "elizabeth_bot"
@@ -3314,7 +3317,7 @@ def is_in_schedule_now() -> bool:
     
 # ================== ЗАПУСК ==================
 async def main():
-    global db_pool, work_start, work_end, work_enabled_manual
+    global db_pool, work_start, work_end, work_enabled_manual, work_24_7
     global ai_system_prompt, ai_enabled, ai_model, bot_name
 
     if not API_TOKEN:
@@ -3330,6 +3333,8 @@ async def main():
         ai_model,
         bot_name,
     ) = await init_db()
+    initial_kv_settings = await load_kv_settings()
+    work_24_7 = initial_kv_settings.get("WORK_24_7", "0") == "1"
 
     bot = Bot(
         API_TOKEN,

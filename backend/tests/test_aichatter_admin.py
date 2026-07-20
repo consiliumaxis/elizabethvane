@@ -143,7 +143,21 @@ class AichatterAdminTest(unittest.TestCase):
         gateway_handler = bot.split("async def process_gateway_message", 1)[1].split(
             "def gateway_task_done", 1
         )[0]
-        self.assertNotIn("is_bot_active_now()", gateway_handler)
+        self.assertIn("is_bot_active_now()", gateway_handler)
+
+    def test_round_the_clock_setting_controls_every_chat_entry(self):
+        backend = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
+        frontend = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
+        bot = (PROJECT_ROOT / "services/evanechat_bot/bot.py").read_text(encoding="utf-8")
+        db = (PROJECT_ROOT / "services/evanechat_bot/db.py").read_text(encoding="utf-8")
+
+        self.assertIn("WORK_24_7", backend)
+        self.assertIn("WORK_24_7", db)
+        self.assertIn("work_24_7 or is_in_schedule_now()", bot)
+        self.assertIn("Работает круглосуточно", frontend)
+        self.assertIn("disabled={settings.work_24_7}", frontend)
+        self.assertNotIn("Проверять компанию", frontend)
+        self.assertNotIn("Код компании", frontend)
 
     def test_every_ai_chatter_entry_path_reports_dialog_start_to_aio(self):
         backend = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")

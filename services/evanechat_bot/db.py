@@ -569,7 +569,9 @@ async def init_db() -> Tuple[
             """
         )
 
-        await ensure_kv_setting(cur, "CHECK_COMPANY", "1")
+        # Company matching is no longer part of the Elizabeth registration flow.
+        await ensure_kv_setting(cur, "CHECK_COMPANY", "0")
+        await cur.execute("UPDATE kv_settings SET svalue = '0' WHERE skey = 'CHECK_COMPANY'")
         await ensure_kv_setting(cur, "COMPANY_CODE", "")
         await ensure_kv_setting(cur, "MIN_DEPOSIT_THRESHOLD", "10")
         await ensure_kv_setting(cur, "LOG_DEPOSITS", "1")
@@ -580,6 +582,7 @@ async def init_db() -> Tuple[
         await ensure_kv_setting(cur, "POSTBACK_LOG_CHAT_ID", "")
         await ensure_kv_setting(cur, "STATS_COMMISSION_MODE", "auto")
         await ensure_kv_setting(cur, "FUNNEL_MEDIA_ENABLED", "1")
+        await ensure_kv_setting(cur, "WORK_24_7", "0")
 
         await cur.execute(
             "SELECT svalue FROM kv_settings WHERE skey = 'BOT_NAME'"
