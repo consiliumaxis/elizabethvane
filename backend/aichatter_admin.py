@@ -1,4 +1,5 @@
 import os
+import json
 import re
 from datetime import date
 from pathlib import Path
@@ -24,6 +25,7 @@ _KV_KEYS = (
     "LOG_SYSTEM_ERRORS",
     "STATS_COMMISSION_MODE",
     "FUNNEL_MEDIA_ENABLED",
+    "REGISTER_BASE_URL",
 )
 
 _FUNNEL_DEFAULTS = (
@@ -88,6 +90,7 @@ class AichatterSettingsUpdate(BaseModel):
     log_system_errors: Optional[bool] = None
     commission_mode: Optional[str] = None
     funnel_media_enabled: Optional[bool] = None
+    registration_base_url: Optional[str] = None
 
 
 class AichatterTriggersUpdate(BaseModel):
@@ -196,6 +199,201 @@ async def _get_pool():
     return _pool
 
 
+async def _ensure_postback_source_key(pool) -> None:
+    async with pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND table_name = 'postback_events'
+              AND column_name = 'source_unique_key'
+            LIMIT 1
+            """
+        )
+        if not await cur.fetchone():
+            await cur.execute(
+                "ALTER TABLE postback_events ADD COLUMN source_unique_key VARCHAR(191) NULL AFTER event_code"
+            )
+        await cur.execute(
+            """
+            SELECT 1 FROM information_schema.statistics
+            WHERE table_schema = DATABASE() AND table_name = 'postback_events'
+              AND index_name = 'uq_postback_events_source'
+            LIMIT 1
+            """
+        )
+        if not await cur.fetchone():
+            await cur.execute(
+                "ALTER TABLE postback_events ADD UNIQUE KEY uq_postback_events_source (source_unique_key)"
+            )
+
+
+async def sync_aichatter_pocket_event(
+    *,
+    user_id: int,
+    event_slug: str,
+    unique_key: str,
+    trader_id: str = "",
+    click_id: str = "",
+    deposit_amount: object = 0,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Mirror a verified Elizabeth Pocket event into the AI Chatter database."""
+    pool = await _get_pool()
+    await _ensure_postback_source_key(pool)
+    event_code = {"registration": "reg", "ftd": "dep1", "dep": "dep"}.get(str(event_slug or ""))
+    if not event_code:
+        return {"status": "skipped", "reason": "unsupported_event"}
+
+    normalized_trader_id = str(trader_id or "").strip()[:128]
+    normalized_click_id = str(click_id or "").strip()[:128]
+    meta = metadata or {}
+    try:
+        amount = max(0.0, round(float(deposit_amount or 0), 2))
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    async with pool.acquire() as conn, conn.cursor() as cur:
+        if event_code == "reg":
+            await cur.execute(
+                """
+                INSERT INTO users (tg_user_id, trader_id, registration_status, registered_at)
+                VALUES (%s, NULLIF(%s, ''), 1, NOW())
+                ON DUPLICATE KEY UPDATE
+                    trader_id = COALESCE(NULLIF(VALUES(trader_id), ''), trader_id),
+                    registration_status = 1,
+                    registered_at = COALESCE(registered_at, VALUES(registered_at))
+                """,
+                (user_id, normalized_trader_id),
+            )
+        else:
+            await cur.execute(
+                """
+                INSERT INTO users (tg_user_id, trader_id, registration_status, deposit_status, registered_at)
+                VALUES (%s, NULLIF(%s, ''), 1, 1, NOW())
+                ON DUPLICATE KEY UPDATE
+                    trader_id = COALESCE(NULLIF(VALUES(trader_id), ''), trader_id),
+                    registration_status = 1,
+                    deposit_status = 1,
+                    registered_at = COALESCE(registered_at, VALUES(registered_at))
+                """,
+                (user_id, normalized_trader_id),
+            )
+
+        await cur.execute(
+            """
+            INSERT IGNORE INTO postback_events (
+                event_code, source_unique_key, tg_user_id, click_id, trader_id,
+                site_id, cid, ac, country, promo, device_type, sumdep, status, raw_payload
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'processed', %s)
+            """,
+            (
+                event_code,
+                str(unique_key or "")[:191],
+                user_id,
+                normalized_click_id or None,
+                normalized_trader_id or None,
+                str(meta.get("site_id") or "")[:191] or None,
+                str(meta.get("cid") or "")[:255] or None,
+                str(meta.get("ac") or "")[:255] or None,
+                str(meta.get("country") or "")[:32] or None,
+                str(meta.get("promo") or "")[:128] or None,
+                str(meta.get("device_type") or "")[:64] or None,
+                amount if event_code in {"dep1", "dep"} else None,
+                json.dumps(meta, ensure_ascii=False, default=str)[:16000],
+            ),
+        )
+        if cur.rowcount == 0:
+            return {"status": "duplicate"}
+
+        if normalized_trader_id:
+            if event_code == "reg":
+                await cur.execute(
+                    """
+                    INSERT INTO postback_state (
+                        trader_id, tg_user_id, click_id, site_id, cid, ac, country, promo,
+                        device_type, registration_received_at, last_event_code, last_event_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        tg_user_id = COALESCE(VALUES(tg_user_id), tg_user_id),
+                        click_id = COALESCE(VALUES(click_id), click_id),
+                        registration_received_at = COALESCE(registration_received_at, NOW()),
+                        last_event_code = VALUES(last_event_code), last_event_at = NOW()
+                    """,
+                    (
+                        normalized_trader_id, user_id, normalized_click_id or None,
+                        str(meta.get("site_id") or "")[:191] or None,
+                        str(meta.get("cid") or "")[:255] or None,
+                        str(meta.get("ac") or "")[:255] or None,
+                        str(meta.get("country") or "")[:32] or None,
+                        str(meta.get("promo") or "")[:128] or None,
+                        str(meta.get("device_type") or "")[:64] or None,
+                        event_code,
+                    ),
+                )
+            elif event_code == "dep1":
+                await cur.execute(
+                    """
+                    INSERT INTO postback_state (
+                        trader_id, tg_user_id, click_id, first_deposit_sum, first_deposit_at,
+                        deposit_total, last_event_code, last_event_at
+                    ) VALUES (%s, %s, %s, %s, NOW(), %s, %s, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        tg_user_id = COALESCE(VALUES(tg_user_id), tg_user_id),
+                        first_deposit_sum = COALESCE(first_deposit_sum, VALUES(first_deposit_sum)),
+                        first_deposit_at = COALESCE(first_deposit_at, NOW()),
+                        deposit_total = deposit_total + VALUES(deposit_total),
+                        last_event_code = VALUES(last_event_code), last_event_at = NOW()
+                    """,
+                    (normalized_trader_id, user_id, normalized_click_id or None, amount, amount, event_code),
+                )
+            else:
+                await cur.execute(
+                    """
+                    INSERT INTO postback_state (
+                        trader_id, tg_user_id, click_id, repeat_deposit_last_sum,
+                        repeat_deposit_total, repeat_deposit_count, repeat_deposit_at,
+                        deposit_total, last_event_code, last_event_at
+                    ) VALUES (%s, %s, %s, %s, %s, 1, NOW(), %s, %s, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        tg_user_id = COALESCE(VALUES(tg_user_id), tg_user_id),
+                        repeat_deposit_last_sum = VALUES(repeat_deposit_last_sum),
+                        repeat_deposit_total = repeat_deposit_total + VALUES(repeat_deposit_total),
+                        repeat_deposit_count = repeat_deposit_count + 1,
+                        repeat_deposit_at = NOW(), deposit_total = deposit_total + VALUES(deposit_total),
+                        last_event_code = VALUES(last_event_code), last_event_at = NOW()
+                    """,
+                    (normalized_trader_id, user_id, normalized_click_id or None, amount, amount, amount, event_code),
+                )
+
+        if event_code == "reg":
+            await cur.execute(
+                """
+                INSERT INTO postback_daily_stats (stat_date, registrations_count)
+                VALUES (CURDATE(), 1)
+                ON DUPLICATE KEY UPDATE registrations_count = registrations_count + 1
+                """
+            )
+        elif event_code == "dep1":
+            await cur.execute(
+                """
+                INSERT INTO postback_daily_stats (stat_date, first_deposit_total)
+                VALUES (CURDATE(), %s)
+                ON DUPLICATE KEY UPDATE first_deposit_total = first_deposit_total + VALUES(first_deposit_total)
+                """,
+                (amount,),
+            )
+        else:
+            await cur.execute(
+                """
+                INSERT INTO postback_daily_stats (stat_date, deposit_total)
+                VALUES (CURDATE(), %s)
+                ON DUPLICATE KEY UPDATE deposit_total = deposit_total + VALUES(deposit_total)
+                """,
+                (amount,),
+            )
+    return {"status": "synchronized", "event_code": event_code}
+
+
 async def _ensure_ai_settings_schema(pool):
     async with pool.acquire() as conn, conn.cursor() as cur:
         await cur.execute(
@@ -260,6 +458,7 @@ async def _load_settings(pool) -> Dict[str, Any]:
         "log_system_errors": kv.get("LOG_SYSTEM_ERRORS", "0") == "1",
         "commission_mode": kv.get("STATS_COMMISSION_MODE", "auto"),
         "funnel_media_enabled": kv.get("FUNNEL_MEDIA_ENABLED", "1") == "1",
+        "registration_base_url": kv.get("REGISTER_BASE_URL") or os.getenv("REGISTER_BASE_URL", ""),
         "ai_enabled": bool(ai.get("enabled", 1)),
         "ai_model": ai.get("model") or "gpt-4.1",
         "openai_api_key": "",
@@ -278,6 +477,22 @@ async def _set_kv(cur, key: str, value: Any):
 
 def create_aichatter_admin_router(admin_dependency) -> APIRouter:
     router = APIRouter(prefix="/api/admin/aichatter", tags=["admin-aichatter"])
+
+    @router.get("/pocket-postback-config")
+    async def pocket_postback_config(admin=Depends(admin_dependency)):
+        base_url = (os.getenv("POCKET_POSTBACK_PUBLIC_BASE_URL") or "https://app.elizabethvane.online").rstrip("/")
+        secret = str(os.getenv("POCKET_POSTBACK_SECRET") or "").strip()
+        suffix = f"?secret={secret}" if secret else ""
+        return {
+            "status": "success",
+            "configured": bool(secret),
+            "urls": {code: f"{base_url}/postback/elizabethvane/{code}{suffix}" for code in ("reg", "dep1", "dep")},
+            "parameters": {
+                "common": ["click_id", "site_id", "trader_id", "cid", "ac"],
+                "registration": ["country", "promo", "device_type"],
+                "deposit": ["sumdep", "transaction_id"],
+            },
+        }
 
     @router.get("/overview")
     async def overview(admin=Depends(admin_dependency)):
@@ -361,6 +576,7 @@ def create_aichatter_admin_router(admin_dependency) -> APIRouter:
                 "log_system_errors": "LOG_SYSTEM_ERRORS",
                 "commission_mode": "STATS_COMMISSION_MODE",
                 "funnel_media_enabled": "FUNNEL_MEDIA_ENABLED",
+                "registration_base_url": "REGISTER_BASE_URL",
             }
             for field, key in kv_map.items():
                 if field in data:

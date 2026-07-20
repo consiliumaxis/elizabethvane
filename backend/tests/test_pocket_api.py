@@ -16,7 +16,7 @@ class PocketApiTest(unittest.TestCase):
 
         self.assertEqual(
             url,
-            "https://pocketpartners.com/api/user-info/797973/123456/cbaf69d09eec8ce37cd44f459632cc59",
+            "https://affiliate.pocketoption.com/api/user-info/797973/123456/cbaf69d09eec8ce37cd44f459632cc59",
         )
 
     def test_masks_token_with_first_two_and_last_two_chars(self):
@@ -67,7 +67,16 @@ class PocketApiTest(unittest.TestCase):
         self.assertEqual(normalized["event_slug"], POCKET_FTD_EVENT)
         self.assertEqual(normalized["telegram_id"], 7097261848)
         self.assertEqual(normalized["deposit_amount"], "250.50")
-        self.assertEqual(normalized["unique_key"], "ftd:7097261848:900102:250.50")
+        self.assertEqual(normalized["unique_key"], "ftd:7097261848:900102")
+
+    def test_dep1_alias_and_provider_transaction_are_idempotent(self):
+        normalized = normalize_pocket_postback_payload(
+            {"event": "dep1", "click_id": "7097261848", "sumdep": "10", "transaction_id": "tx-42"}
+        )
+
+        self.assertEqual(normalized["event_slug"], POCKET_FTD_EVENT)
+        self.assertEqual(normalized["provider_event_id"], "tx-42")
+        self.assertEqual(normalized["unique_key"], "ftd:provider:tx-42")
 
     def test_normalizes_repeat_deposit_postback(self):
         normalized = normalize_pocket_postback_payload(

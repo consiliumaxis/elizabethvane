@@ -174,8 +174,11 @@ class ReadBusinessMessage(TelegramMethod[bool]):
     chat_id: int
     message_id: int
 
+active_register_base_url = REGISTER_BASE_URL
+
+
 def build_register_link(tg_user_id: int) -> str:
-    parts = urlsplit(REGISTER_BASE_URL)
+    parts = urlsplit(active_register_base_url)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query["click_id"] = str(tg_user_id)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
@@ -2107,7 +2110,7 @@ async def runtime_settings_refresh_worker():
     global work_start, work_end, work_enabled_manual
     global ai_system_prompt, ai_enabled, ai_model, bot_name
     global KV_CACHE, KV_CACHE_LOADED_AT
-    global ai_client, active_openai_api_key
+    global ai_client, active_openai_api_key, active_register_base_url
 
     while True:
         await asyncio.sleep(10)
@@ -2123,6 +2126,8 @@ async def runtime_settings_refresh_worker():
                 ai_row = await cur.fetchone()
                 await cur.execute("SELECT svalue FROM kv_settings WHERE skey = 'BOT_NAME'")
                 name_row = await cur.fetchone()
+                await cur.execute("SELECT svalue FROM kv_settings WHERE skey = 'REGISTER_BASE_URL'")
+                register_url_row = await cur.fetchone()
 
             if settings_row:
                 work_start = to_time(settings_row[0]) if settings_row[0] is not None else None
@@ -2142,6 +2147,8 @@ async def runtime_settings_refresh_worker():
                     )
             if name_row:
                 bot_name = name_row[0] or "Elizabeth Vane"
+            if register_url_row and str(register_url_row[0] or "").strip():
+                active_register_base_url = str(register_url_row[0]).strip()
 
             KV_CACHE = {}
             KV_CACHE_LOADED_AT = None

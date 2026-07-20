@@ -1,10 +1,11 @@
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
+import json
 import re
 from typing import Any, Dict, Optional
 
 
-POCKET_USER_INFO_ENDPOINT_TEMPLATE = "https://pocketpartners.com/api/user-info/{user_id}/{partner_id}/{hash}"
+POCKET_USER_INFO_ENDPOINT_TEMPLATE = "https://affiliate.pocketoption.com/api/user-info/{user_id}/{partner_id}/{hash}"
 POCKET_REGISTRATION_EVENT = "registration"
 POCKET_FTD_EVENT = "ftd"
 POCKET_DEPOSIT_EVENT = "dep"
@@ -14,6 +15,7 @@ POCKET_ALLOWED_EVENTS = {
     "reg": POCKET_REGISTRATION_EVENT,
     "lead": POCKET_REGISTRATION_EVENT,
     "ftd": POCKET_FTD_EVENT,
+    "dep1": POCKET_FTD_EVENT,
     "first_deposit": POCKET_FTD_EVENT,
     "firstdeposit": POCKET_FTD_EVENT,
     "first_dep": POCKET_FTD_EVENT,
@@ -41,7 +43,7 @@ def build_pocket_user_info_url(user_id: str, partner_id: str, api_token: str) ->
     cabinet_id = str(partner_id or "").strip()
     token = str(api_token or "").strip()
     signature = hashlib.md5(f"{trader_id}:{cabinet_id}:{token}".encode("utf-8")).hexdigest()
-    return f"https://pocketpartners.com/api/user-info/{trader_id}/{cabinet_id}/{signature}"
+    return f"https://affiliate.pocketoption.com/api/user-info/{trader_id}/{cabinet_id}/{signature}"
 
 
 def _normalize_pocket_text(value: Optional[object], max_length: int = 255) -> str:
@@ -100,16 +102,45 @@ def normalize_pocket_postback_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     cid = _normalize_pocket_text(_first_payload_value(payload, "cid", "campaign_id"), 128)
     sub_id1 = _normalize_pocket_text(_first_payload_value(payload, "sub_id1", "subid1", "sub_id"), 255)
     sub_id2 = _normalize_pocket_text(_first_payload_value(payload, "sub_id2", "subid2"), 255)
+    provider_event_id = _normalize_pocket_text(
+        _first_payload_value(
+            payload,
+            "transaction_id",
+            "transactionid",
+            "deposit_id",
+            "event_id",
+            "conversion_id",
+            "tid",
+        ),
+        128,
+    )
+    event_time = _normalize_pocket_text(
+        _first_payload_value(payload, "event_time", "transaction_time", "datetime", "created_at", "date"),
+        64,
+    )
+    ac = _normalize_pocket_text(_first_payload_value(payload, "ac"), 255)
+    country = _normalize_pocket_text(_first_payload_value(payload, "country"), 32)
+    promo = _normalize_pocket_text(_first_payload_value(payload, "promo"), 128)
+    device_type = _normalize_pocket_text(_first_payload_value(payload, "device_type", "device"), 64)
     deposit_amount = normalize_pocket_amount(
         _first_payload_value(payload, "sumdep", "deposit_amount", "amount", "payout", "sum")
     )
     telegram_id = normalize_pocket_telegram_id(click_id)
+    fingerprint_payload = {
+        str(key).lower(): str(value).strip()
+        for key, value in payload.items()
+        if str(key).lower() not in {"secret", "token", "signature"}
+    }
+    payload_fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     unique_source = trader_id or cid or sub_id2 or sub_id1 or click_id or "unknown"
-    if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT}:
-        unique_key = _normalize_pocket_text(
-            f"{event_slug or 'unknown'}:{click_id or 'unknown'}:{unique_source}:{deposit_amount}",
-            191,
-        )
+    if provider_event_id:
+        unique_key = _normalize_pocket_text(f"{event_slug or 'unknown'}:provider:{provider_event_id}", 191)
+    elif event_slug == POCKET_DEPOSIT_EVENT:
+        # Without a provider transaction id, prefer preventing double credit on retries.
+        # Configure transaction_id in Pocket to preserve distinct same-value deposits.
+        unique_key = _normalize_pocket_text(f"dep:fingerprint:{payload_fingerprint}", 191)
     else:
         unique_key = _normalize_pocket_text(f"{event_slug or 'unknown'}:{click_id or 'unknown'}:{unique_source}", 191)
 
@@ -122,6 +153,13 @@ def normalize_pocket_postback_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         "cid": cid,
         "sub_id1": sub_id1,
         "sub_id2": sub_id2,
+        "provider_event_id": provider_event_id,
+        "event_time": event_time,
+        "payload_fingerprint": payload_fingerprint,
+        "ac": ac,
+        "country": country,
+        "promo": promo,
+        "device_type": device_type,
         "deposit_amount": deposit_amount,
         "unique_key": unique_key,
     }

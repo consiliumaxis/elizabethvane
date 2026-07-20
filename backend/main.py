@@ -169,9 +169,9 @@ except ModuleNotFoundError:
         system_policy_grants_signal_access,
     )
 try:
-    from backend.aichatter_admin import create_aichatter_admin_router
+    from backend.aichatter_admin import create_aichatter_admin_router, sync_aichatter_pocket_event
 except ModuleNotFoundError:
-    from aichatter_admin import create_aichatter_admin_router
+    from aichatter_admin import create_aichatter_admin_router, sync_aichatter_pocket_event
 
 load_dotenv()
 
@@ -1500,10 +1500,12 @@ async def get_signal_access_status(user_id: int, mode: str) -> Dict[str, Any]:
                 """
                 SELECT
                     u.user_id,
+                    COALESCE(u.is_blocked, 0) AS is_blocked,
                     COALESCE(u.pocket_registered, 0) AS pocket_registered,
                     COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
                     COALESCE(u.pocket_deposit_amount, 0) AS pocket_deposit_amount,
-                    COALESCE(uma.is_enabled, 0) AS manual_access
+                    COALESCE(uma.is_enabled, 0) AS manual_access,
+                    COALESCE(uma.override_mode, 'inherit') AS override_mode
                 FROM users u
                 LEFT JOIN user_mode_access uma ON uma.user_id = u.user_id AND uma.mode = %s
                 WHERE u.user_id = %s
@@ -1514,8 +1516,13 @@ async def get_signal_access_status(user_id: int, mode: str) -> Dict[str, Any]:
             row = await cur.fetchone()
     if not row:
         return {"access": 0, "policy": settings.get("policy")}
-    if truthy_db(row.get("manual_access")) == 1:
-        return {"access": 1, "policy": "manual"}
+    if truthy_db(row.get("is_blocked")) == 1:
+        return {"access": 0, "policy": "blocked"}
+    override_mode = str(row.get("override_mode") or "inherit").strip().lower()
+    if override_mode == "allow":
+        return {"access": 1, "policy": "manual_allow"}
+    if override_mode == "deny":
+        return {"access": 0, "policy": "manual_deny"}
     return {
         "access": 1 if system_policy_grants_signal_access(settings, row) else 0,
         "policy": settings.get("policy"),
@@ -1544,6 +1551,34 @@ def extract_pocket_balance(payload: Any) -> Optional[float]:
     return None
 
 
+def numeric_payload_value(payload: Any, *keys: str) -> float:
+    if not isinstance(payload, dict):
+        return 0.0
+    for key in keys:
+        try:
+            amount = float(payload.get(key))
+        except (TypeError, ValueError):
+            continue
+        if amount > 0:
+            return round(amount, 2)
+    return 0.0
+
+
+def extract_pocket_registration_status(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"registered": 0, "registered_at": None}
+    registered_at = payload.get("registered_at") or payload.get("registration_date") or payload.get("created_at")
+    registered = 1 if (payload.get("user_id") or registered_at or payload.get("status")) else 0
+    return {"registered": registered, "registered_at": str(registered_at).strip()[:64] if registered_at else None}
+
+
+def extract_pocket_deposit_status(payload: Any) -> Dict[str, Any]:
+    amount = numeric_payload_value(
+        payload, "sum_deposits", "sum_ftd", "ftd_amount", "total_deposits", "deposit_amount", "deposits"
+    )
+    return {"deposited": 1 if amount > 0 else 0, "deposit_amount": amount}
+
+
 async def fetch_pocket_user_info(trader_id: str, partner_id: str, api_token: str) -> Dict[str, Any]:
     url = build_pocket_user_info_url(trader_id, partner_id, api_token)
     async with httpx.AsyncClient() as client:
@@ -1562,6 +1597,8 @@ async def sync_pocket_balance_for_user(user_row: Dict[str, Any], pocket_settings
     try:
         payload = await fetch_pocket_user_info(trader_id, partner_id, api_token)
         balance = extract_pocket_balance(payload)
+        registration_status = extract_pocket_registration_status(payload)
+        deposit_status = extract_pocket_deposit_status(payload)
         if balance is None:
             raise ValueError("Pocket response does not contain balance")
         async with db_pool.acquire() as conn:
@@ -1571,10 +1608,22 @@ async def sync_pocket_balance_for_user(user_row: Dict[str, Any], pocket_settings
                     UPDATE users
                     SET balance = %s,
                         balance_synced_at = NOW(),
-                        balance_sync_error = NULL
+                        balance_sync_error = NULL,
+                        pocket_registered = %s,
+                        pocket_deposited = %s,
+                        pocket_registered_at = COALESCE(%s, pocket_registered_at),
+                        pocket_deposit_amount = GREATEST(COALESCE(pocket_deposit_amount, 0), %s),
+                        pocket_checked_at = NOW()
                     WHERE user_id = %s
                     """,
-                    (balance, user_id),
+                    (
+                        balance,
+                        registration_status["registered"],
+                        deposit_status["deposited"],
+                        registration_status["registered_at"],
+                        deposit_status["deposit_amount"],
+                        user_id,
+                    ),
                 )
         return True
     except Exception as e:
@@ -1584,7 +1633,8 @@ async def sync_pocket_balance_for_user(user_row: Dict[str, Any], pocket_settings
                     """
                     UPDATE users
                     SET balance_synced_at = NOW(),
-                        balance_sync_error = %s
+                        balance_sync_error = %s,
+                        pocket_checked_at = NOW()
                     WHERE user_id = %s
                     """,
                     (str(e)[:1000], user_id),
@@ -1665,15 +1715,20 @@ async def insert_pocket_postback_log(
     user_id: Optional[int],
     source_ip: str,
 ) -> int:
+    safe_payload = {
+        key: ("***" if str(key).lower() in {"secret", "token", "signature"} else value)
+        for key, value in raw_payload.items()
+    }
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
                 INSERT IGNORE INTO pocket_postback_events (
                     event_slug, unique_key, user_id, click_id, trader_id, deposit_amount,
-                    site_id, cid, sub_id1, sub_id2, raw_payload, status, reason, source_ip
+                    site_id, cid, sub_id1, sub_id2, provider_event_id, payload_fingerprint,
+                    raw_payload, status, reason, source_ip
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     normalized.get("event_slug") or "unknown",
@@ -1686,13 +1741,29 @@ async def insert_pocket_postback_log(
                     normalized.get("cid") or None,
                     normalized.get("sub_id1") or None,
                     normalized.get("sub_id2") or None,
-                    json.dumps(raw_payload, ensure_ascii=False, default=str),
+                    normalized.get("provider_event_id") or None,
+                    normalized.get("payload_fingerprint") or None,
+                    json.dumps(safe_payload, ensure_ascii=False, default=str),
                     status,
                     reason,
                     source_ip,
                 ),
             )
             return int(cur.lastrowid)
+
+
+async def update_pocket_aichatter_delivery(log_id: int, result: Dict[str, Any]) -> None:
+    if not log_id or not db_pool:
+        return
+    async with db_pool.acquire() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            UPDATE pocket_postback_events
+            SET aichatter_status = %s, aichatter_error = %s, aichatter_synced_at = NOW()
+            WHERE id = %s
+            """,
+            (result.get("status"), result.get("error") or result.get("reason"), log_id),
+        )
 
 
 async def update_pocket_chatterfy_delivery(log_id: int, result: Dict[str, Any]) -> None:
@@ -1831,8 +1902,26 @@ async def send_aio_postback_event(
                 ),
             )
             if cur.rowcount == 0:
-                return {"status": "skipped", "reason": "duplicate"}
-            event_id = cur.lastrowid
+                await cur.execute(
+                    """
+                    SELECT id, status, request_url
+                    FROM aio_postback_events
+                    WHERE aio_visit_uuid = %s AND event_slug = %s AND unique_key = %s
+                    LIMIT 1
+                    """,
+                    (aio_visit_uuid, normalized_event_slug, normalized_unique_key),
+                )
+                existing_event = await cur.fetchone() or {}
+                if existing_event.get("status") != "failed":
+                    return {"status": "skipped", "reason": "duplicate", "event_id": existing_event.get("id")}
+                event_id = int(existing_event["id"])
+                request_url = existing_event.get("request_url") or request_url
+                await cur.execute(
+                    "UPDATE aio_postback_events SET status = 'pending', error = NULL WHERE id = %s",
+                    (event_id,),
+                )
+            else:
+                event_id = cur.lastrowid
 
     response_status = None
     response_body = ""
@@ -1866,6 +1955,32 @@ async def send_aio_postback_event(
             )
 
     return {"status": final_status, "event_id": event_id, "response_status": response_status, "error": error_text}
+
+
+async def send_pocket_aio_delivery(
+    *,
+    user_id: int,
+    event_slug: str,
+    unique_key: str,
+    trader_id: str = "",
+    deposit_amount: object = 0,
+    total_deposit_amount: object = 0,
+) -> Dict[str, Any]:
+    postback_result = await send_aio_pocket_conversion(
+        user_id=user_id,
+        event_slug=event_slug,
+        trader_id=trader_id,
+        unique_key=unique_key,
+        revenue=deposit_amount if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT} else "",
+    )
+    fields = []
+    if trader_id:
+        fields.append(await send_aio_field_value(user_id, "tg_trader_id", trader_id))
+    if event_slug == POCKET_FTD_EVENT:
+        fields.append(await send_aio_field_value(user_id, "tg_first_dep", deposit_amount))
+    if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT}:
+        fields.append(await send_aio_field_value(user_id, "tg_sum_dep", total_deposit_amount))
+    return {"status": postback_result.get("status"), "postback": postback_result, "fields": fields}
 
 
 async def send_aio_user_fields(user_id: int, first_name: str = "", username: str = "") -> Dict[str, Any]:
@@ -2013,8 +2128,26 @@ async def send_aio_pocket_conversion(
                 (user_id, aio_visit_uuid, aio_event_slug, normalized_unique_key, normalize_aio_revenue(revenue), request_url),
             )
             if cur.rowcount == 0:
-                return {"status": "skipped", "reason": "duplicate"}
-            event_id = cur.lastrowid
+                await cur.execute(
+                    """
+                    SELECT id, status, request_url
+                    FROM aio_postback_events
+                    WHERE aio_visit_uuid = %s AND event_slug = %s AND unique_key = %s
+                    LIMIT 1
+                    """,
+                    (aio_visit_uuid, aio_event_slug, normalized_unique_key),
+                )
+                existing_event = await cur.fetchone() or {}
+                if existing_event.get("status") != "failed":
+                    return {"status": "skipped", "reason": "duplicate", "event_id": existing_event.get("id")}
+                event_id = int(existing_event["id"])
+                request_url = existing_event.get("request_url") or request_url
+                await cur.execute(
+                    "UPDATE aio_postback_events SET status = 'pending', error = NULL WHERE id = %s",
+                    (event_id,),
+                )
+            else:
+                event_id = cur.lastrowid
 
     response_status = None
     response_body = ""
@@ -2049,8 +2182,7 @@ async def send_aio_pocket_conversion(
     return {"status": final_status, "event_id": event_id, "response_status": response_status, "error": error_text}
 
 
-@app.api_route("/api/integrations/pocket/postback", methods=["GET", "POST"])
-async def pocket_postback(request: Request):
+async def process_pocket_postback(request: Request, forced_event: Optional[str] = None):
     if not db_pool:
         raise HTTPException(status_code=503, detail="Database is unavailable")
 
@@ -2059,6 +2191,8 @@ async def pocket_postback(request: Request):
         raise HTTPException(status_code=503, detail="Pocket postback secret is not configured")
 
     payload = await read_postback_payload(request)
+    if forced_event:
+        payload["event"] = forced_event
     provided_secret = str(payload.get("secret") or request.headers.get("X-Pocket-Secret") or "").strip()
     if not provided_secret or not secrets.compare_digest(provided_secret, expected_secret):
         raise HTTPException(status_code=403, detail="Invalid postback secret")
@@ -2087,79 +2221,124 @@ async def pocket_postback(request: Request):
         log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "invalid_deposit_amount", telegram_id, source_ip)
         return {"status": "skipped", "reason": "invalid_deposit_amount", "log_id": log_id}
 
+    safe_payload = {
+        key: ("***" if str(key).lower() in {"secret", "token", "signature"} else value)
+        for key, value in payload.items()
+    }
     async with db_pool.acquire() as conn:
-        async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT user_id, aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1", (telegram_id,))
-            user_row = await cur.fetchone()
-            if not user_row:
-                log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "user_not_found", telegram_id, source_ip)
-                return {"status": "skipped", "reason": "user_not_found", "log_id": log_id}
+        await conn.begin()
+        try:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT user_id, aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1 FOR UPDATE", (telegram_id,))
+                user_row = await cur.fetchone()
+                if not user_row:
+                    await conn.rollback()
+                    log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "user_not_found", telegram_id, source_ip)
+                    return {"status": "skipped", "reason": "user_not_found", "log_id": log_id}
 
-            if event_slug == POCKET_REGISTRATION_EVENT:
                 await cur.execute(
                     """
-                    UPDATE users
-                    SET trader_id = CASE WHEN %s <> '' THEN %s ELSE trader_id END,
-                        pocket_click_id = CASE WHEN %s <> '' THEN %s ELSE pocket_click_id END,
-                        pocket_site_id = CASE WHEN %s <> '' THEN %s ELSE pocket_site_id END,
-                        pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
-                        pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
-                        pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
-                        pocket_registered = 1,
-                        pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
-                        pocket_checked_at = NOW()
-                    WHERE user_id = %s
+                    INSERT IGNORE INTO pocket_postback_events (
+                        event_slug, unique_key, user_id, click_id, trader_id, deposit_amount,
+                        site_id, cid, sub_id1, sub_id2, provider_event_id, payload_fingerprint,
+                        raw_payload, status, source_ip
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'received', %s)
                     """,
                     (
-                        trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
-                        sub_id1, sub_id1, sub_id2, sub_id2, telegram_id,
+                        event_slug, normalized.get("unique_key"), telegram_id, click_id or None,
+                        trader_id or None, f"{deposit_amount:.2f}", site_id or None, cid or None,
+                        sub_id1 or None, sub_id2 or None, normalized.get("provider_event_id") or None,
+                        normalized.get("payload_fingerprint") or None,
+                        json.dumps(safe_payload, ensure_ascii=False, default=str), source_ip,
                     ),
                 )
-            else:
-                await cur.execute(
-                    """
-                    UPDATE users
-                    SET trader_id = CASE WHEN %s <> '' THEN %s ELSE trader_id END,
-                        pocket_click_id = CASE WHEN %s <> '' THEN %s ELSE pocket_click_id END,
-                        pocket_site_id = CASE WHEN %s <> '' THEN %s ELSE pocket_site_id END,
-                        pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
-                        pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
-                        pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
-                        pocket_registered = 1,
-                        pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
-                        pocket_deposited = 1,
-                        pocket_deposit_amount = COALESCE(pocket_deposit_amount, 0) + %s,
-                        pocket_checked_at = NOW()
-                    WHERE user_id = %s
-                    """,
-                    (
-                        trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
-                        sub_id1, sub_id1, sub_id2, sub_id2, f"{deposit_amount:.2f}", telegram_id,
-                    ),
-                )
-            await cur.execute(
-                """
-                SELECT COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount
-                FROM users
-                WHERE user_id = %s
-                LIMIT 1
-                """,
-                (telegram_id,),
-            )
-            updated_user_row = await cur.fetchone()
+                if cur.rowcount == 0:
+                    await cur.execute(
+                        "SELECT id, status FROM pocket_postback_events WHERE unique_key = %s LIMIT 1",
+                        (normalized.get("unique_key"),),
+                    )
+                    duplicate_row = await cur.fetchone() or {}
+                    await conn.rollback()
+                    return {"status": "duplicate", "reason": "already_processed", "log_id": duplicate_row.get("id")}
+                log_id = int(cur.lastrowid)
 
-    status = "registered" if event_slug == POCKET_REGISTRATION_EVENT else "deposited"
-    log_id = await insert_pocket_postback_log(normalized, payload, status, None, telegram_id, source_ip)
+                if event_slug == POCKET_REGISTRATION_EVENT:
+                    await cur.execute(
+                        """
+                        UPDATE users
+                        SET trader_id = CASE WHEN %s <> '' THEN %s ELSE trader_id END,
+                            pocket_click_id = CASE WHEN %s <> '' THEN %s ELSE pocket_click_id END,
+                            pocket_site_id = CASE WHEN %s <> '' THEN %s ELSE pocket_site_id END,
+                            pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
+                            pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
+                            pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
+                            pocket_registered = 1,
+                            pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
+                            pocket_checked_at = NOW()
+                        WHERE user_id = %s
+                        """,
+                        (trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
+                         sub_id1, sub_id1, sub_id2, sub_id2, telegram_id),
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        UPDATE users
+                        SET trader_id = CASE WHEN %s <> '' THEN %s ELSE trader_id END,
+                            pocket_click_id = CASE WHEN %s <> '' THEN %s ELSE pocket_click_id END,
+                            pocket_site_id = CASE WHEN %s <> '' THEN %s ELSE pocket_site_id END,
+                            pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
+                            pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
+                            pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
+                            pocket_registered = 1,
+                            pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
+                            pocket_deposited = 1,
+                            pocket_deposit_amount = COALESCE(pocket_deposit_amount, 0) + %s,
+                            pocket_checked_at = NOW()
+                        WHERE user_id = %s
+                        """,
+                        (trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
+                         sub_id1, sub_id1, sub_id2, sub_id2, f"{deposit_amount:.2f}", telegram_id),
+                    )
+                await cur.execute(
+                    "SELECT COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount FROM users WHERE user_id = %s",
+                    (telegram_id,),
+                )
+                updated_user_row = await cur.fetchone() or {}
+                status = "registered" if event_slug == POCKET_REGISTRATION_EVENT else "deposited"
+                await cur.execute("UPDATE pocket_postback_events SET status = %s WHERE id = %s", (status, log_id))
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
     signal_access_status = await get_signal_access_status(int(telegram_id), "forex")
     access_granted = truthy_db(signal_access_status.get("access")) == 1
     total_deposit_amount = normalize_deposit_amount((updated_user_row or {}).get("pocket_deposit_amount"))
-    aio_result = await send_aio_pocket_conversion(
+    aio_result = await send_pocket_aio_delivery(
         user_id=int(telegram_id),
         event_slug=event_slug,
         unique_key=normalized.get("unique_key") or event_slug,
         trader_id=trader_id,
-        revenue=f"{deposit_amount:.2f}" if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT} else "",
+        deposit_amount=f"{deposit_amount:.2f}",
+        total_deposit_amount=f"{total_deposit_amount:.2f}",
     )
+    try:
+        aichatter_result = await sync_aichatter_pocket_event(
+            user_id=int(telegram_id),
+            event_slug=event_slug,
+            unique_key=normalized.get("unique_key") or event_slug,
+            trader_id=trader_id,
+            click_id=click_id,
+            deposit_amount=deposit_amount,
+            metadata={
+                "site_id": site_id, "cid": cid, "sub_id1": sub_id1, "sub_id2": sub_id2,
+                "ac": normalized.get("ac"), "country": normalized.get("country"),
+                "promo": normalized.get("promo"), "device_type": normalized.get("device_type"),
+            },
+        )
+    except Exception as exc:
+        aichatter_result = {"status": "failed", "error": str(exc)[:1000]}
+    await update_pocket_aichatter_delivery(log_id, aichatter_result)
     chatterfy_result = await send_chatterfy_pocket_postback(
         log_id=log_id,
         event_slug=event_slug,
@@ -2185,8 +2364,25 @@ async def pocket_postback(request: Request):
         "access_granted": access_granted,
         "access_policy": signal_access_status.get("policy"),
         "aio": aio_result,
+        "aichatter": aichatter_result,
         "chatterfy": chatterfy_result,
     }
+
+
+@app.api_route("/api/integrations/pocket/postback", methods=["GET", "POST"])
+async def pocket_postback(request: Request):
+    return await process_pocket_postback(request)
+
+
+@app.api_route("/postback/{bot_id}/{event_code}", methods=["GET", "POST"])
+async def pocket_public_postback(bot_id: str, event_code: str, request: Request):
+    if str(bot_id or "").strip().lower() != "elizabethvane":
+        raise HTTPException(status_code=404, detail="Unknown affiliate bot")
+    event_map = {"reg": "reg", "dep1": "dep1", "dep": "dep"}
+    forced_event = event_map.get(str(event_code or "").strip().lower())
+    if not forced_event:
+        raise HTTPException(status_code=404, detail="Unknown Pocket event")
+    return await process_pocket_postback(request, forced_event=forced_event)
 
 
 def normalize_access_payload(value) -> int:
@@ -2513,15 +2709,16 @@ async def admin_update_user_access(request: Request, admin=Depends(get_admin_use
 
             await cur.executemany(
                 """
-                INSERT INTO user_mode_access (user_id, mode, is_enabled, updated_by)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO user_mode_access (user_id, mode, is_enabled, override_mode, updated_by)
+                VALUES (%s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     is_enabled = VALUES(is_enabled),
+                    override_mode = VALUES(override_mode),
                     updated_by = VALUES(updated_by)
                 """,
                 [
-                    (target_user_id, "forex", forex_access, updated_by),
-                    (target_user_id, "binary", binary_access, updated_by),
+                    (target_user_id, "forex", forex_access, "allow" if forex_access else "deny", updated_by),
+                    (target_user_id, "binary", binary_access, "allow" if binary_access else "deny", updated_by),
                 ],
             )
 

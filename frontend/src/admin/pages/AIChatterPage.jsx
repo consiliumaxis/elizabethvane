@@ -53,6 +53,7 @@ const EMPTY_SETTINGS = {
   log_system_errors: false,
   commission_mode: 'auto',
   funnel_media_enabled: true,
+  registration_base_url: '',
 };
 
 const formatDate = (value) => {
@@ -103,6 +104,7 @@ export default function AIChatterPage() {
   const [triggers, setTriggers] = useState([]);
   const [triggerInput, setTriggerInput] = useState('');
   const [postbacks, setPostbacks] = useState([]);
+  const [pocketPostbackConfig, setPocketPostbackConfig] = useState({ configured: false, urls: {}, parameters: {} });
   const [postbackFilter, setPostbackFilter] = useState('');
   const [statistics, setStatistics] = useState({ daily: [], manual_commissions: [] });
   const [statsDays, setStatsDays] = useState(7);
@@ -141,6 +143,8 @@ export default function AIChatterPage() {
     if (postbackFilter) params.set('event_code', postbackFilter);
     const result = await apiAdminFetchJson(`/api/admin/aichatter/postbacks?${params}`);
     setPostbacks(result.events || []);
+    const config = await apiAdminFetchJson('/api/admin/aichatter/pocket-postback-config');
+    setPocketPostbackConfig(config || { configured: false, urls: {}, parameters: {} });
   }, [postbackFilter]);
 
   const loadStatistics = useCallback(async (days) => {
@@ -442,6 +446,7 @@ export default function AIChatterPage() {
               <label>Имя менеджера<input className="admin-input" value={settings.bot_name} onChange={(event) => updateField('bot_name', event.target.value)} /></label>
               <label>Код компании<input className="admin-input" value={settings.company_code} onChange={(event) => updateField('company_code', event.target.value)} /></label>
               <label>Минимальный депозит<input className="admin-input" type="number" min="0" value={settings.min_deposit} onChange={(event) => updateField('min_deposit', Number(event.target.value))} /></label>
+              <label>Ссылка регистрации Pocket<input className="admin-input" type="url" value={settings.registration_base_url || ''} onChange={(event) => updateField('registration_base_url', event.target.value)} placeholder="https://pocketoption.com/..." /><small className="admin-muted">К ссылке автоматически добавляется click_id пользователя.</small></label>
               <label>Модель OpenAI<select className="admin-input" value={settings.ai_model} onChange={(event) => updateField('ai_model', event.target.value)}>{!AI_MODEL_OPTIONS.some((item) => item.value === settings.ai_model) && <option value={settings.ai_model}>{settings.ai_model} — текущая</option>}{AI_MODEL_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
               <label>OpenAI API-ключ<input className="admin-input" type="password" autoComplete="off" value={settings.openai_api_key || ''} onChange={(event) => updateField('openai_api_key', event.target.value)} placeholder={settings.openai_key_configured ? 'Ключ настроен — введите новый для замены' : 'sk-proj-…'} /><small className="admin-muted">{settings.openai_key_configured ? 'Ключ настроен и скрыт. Пустое поле сохраняет текущий ключ.' : 'Ключ ещё не настроен.'}</small></label>
             </div>
@@ -541,6 +546,7 @@ export default function AIChatterPage() {
 
       {section === 'triggers' && <section className="admin-card"><h3 className="admin-section-title">Стоп-триггеры</h3><p className="admin-muted">Если клиент использует одну из фраз, бот останавливает автоматический диалог и уведомляет администраторов.</p><div className="aichatter-inline-form"><input className="admin-input" placeholder="Несколько фраз через запятую" value={triggerInput} onChange={(event) => setTriggerInput(event.target.value)} /><button className="admin-btn" onClick={addTriggers}>Добавить</button></div><div className="aichatter-tags">{triggers.map((trigger) => <button key={trigger} title="Удалить" onClick={() => saveTriggers(triggers.filter((item) => item !== trigger))}>{trigger}<span>×</span></button>)}</div></section>}
 
+      {section === 'postbacks' && <section className="admin-card"><h3 className="admin-section-title">Ссылки Pocket Option</h3><p className="admin-muted">Создайте три postback-события в партнёрском кабинете. Для депозитов обязательно передавайте transaction_id.</p>{['reg', 'dep1', 'dep'].map((code) => <label key={code}>{code}<input className="admin-input" readOnly value={pocketPostbackConfig.urls?.[code] || 'Секрет ещё не настроен на сервере'} onFocus={(event) => event.target.select()} /></label>)}<p className="admin-muted">Общие параметры: click_id, site_id, trader_id, cid, ac. Регистрация: country, promo, device_type. Депозиты: sumdep, transaction_id.</p></section>}
       {section === 'postbacks' && <div className="aichatter-stack"><section className="admin-card"><div className="aichatter-section-head"><h3 className="admin-section-title">События postback</h3><div className="aichatter-inline-form compact"><select className="admin-input compact" value={postbackFilter} onChange={(event) => setPostbackFilter(event.target.value)}><option value="">Все события</option><option value="reg">Регистрация</option><option value="dep1">Первый депозит</option><option value="dep">Депозит</option><option value="wdr">Вывод</option><option value="commission">Комиссия</option></select><button className="admin-btn-outline" onClick={loadPostbacks}>Обновить</button></div></div><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Дата</th><th>Событие</th><th>Пользователь</th><th>Trader ID</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>{postbacks.map((item) => <tr key={item.id}><td>{formatDate(item.created_at)}</td><td>{item.event_code}</td><td>{item.tg_user_id || '—'}</td><td>{item.trader_id || '—'}</td><td>{formatMoney(item.commission || item.sumdep || item.wdr_sum)}</td><td>{item.status || '—'}</td></tr>)}</tbody></table></div></section><section className="admin-card"><h3 className="admin-section-title">Ручная комиссия</h3><div className="aichatter-inline-form"><input className="admin-input" type="date" value={manualDate} onChange={(event) => setManualDate(event.target.value)} /><input className="admin-input" type="number" min="0" step="0.01" placeholder="Сумма" value={manualAmount} onChange={(event) => setManualAmount(event.target.value)} /><button className="admin-btn" onClick={saveManualCommission}>Сохранить</button></div>{statistics.manual_commissions.length > 0 && <div className="aichatter-manual-list">{statistics.manual_commissions.map((item) => <span key={item.stat_date}>{String(item.stat_date).slice(0, 10)}: <strong>{formatMoney(item.amount)}</strong></span>)}</div>}</section></div>}
 
     </div>

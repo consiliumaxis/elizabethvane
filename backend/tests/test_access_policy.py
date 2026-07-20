@@ -60,6 +60,9 @@ class AccessPolicySourceTest(unittest.TestCase):
         self.assertIn("await require_signal_access(user_id, \"binary\")", source)
         self.assertIn("await require_signal_access(user_id, \"forex\")", source)
         self.assertIn("SIGNAL_ACCESS_REQUIRED_DETAIL", source)
+        self.assertIn('override_mode == "allow"', source)
+        self.assertIn('override_mode == "deny"', source)
+        self.assertIn('"policy": "blocked"', source)
 
     def test_schema_and_admin_ui_have_access_policy_controls(self):
         schema = (PROJECT_ROOT / "backend/db_bootstrap.py").read_text(encoding="utf-8")

@@ -10,6 +10,7 @@ class PocketPostbackSourceTest(unittest.TestCase):
         source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
 
         self.assertIn("/api/integrations/pocket/postback", source)
+        self.assertIn('/postback/{bot_id}/{event_code}', source)
         self.assertIn("POCKET_REGISTRATION_EVENT", source)
         self.assertIn("POCKET_FTD_EVENT", source)
         self.assertIn("POCKET_DEPOSIT_EVENT", source)
@@ -51,6 +52,8 @@ class PocketPostbackSourceTest(unittest.TestCase):
         self.assertIn("X-Pocket-Secret", source)
         self.assertIn("telegram_id = normalized.get(\"telegram_id\")", source)
         self.assertIn("WHERE user_id = %s", source)
+        self.assertIn("SELECT id, status FROM pocket_postback_events WHERE unique_key", source)
+        self.assertIn("sync_aichatter_pocket_event", source)
 
 
 if __name__ == "__main__":

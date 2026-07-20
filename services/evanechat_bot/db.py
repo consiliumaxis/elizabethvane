@@ -361,6 +361,7 @@ async def init_db() -> Tuple[
             CREATE TABLE IF NOT EXISTS postback_events (
                 id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 event_code VARCHAR(32) NOT NULL,
+                source_unique_key VARCHAR(191) DEFAULT NULL,
                 tg_user_id BIGINT UNSIGNED DEFAULT NULL,
                 click_id VARCHAR(128) DEFAULT NULL,
                 trader_id VARCHAR(128) DEFAULT NULL,
@@ -379,7 +380,8 @@ async def init_db() -> Tuple[
                 INDEX idx_postback_events_trader (trader_id),
                 INDEX idx_postback_events_click (click_id),
                 INDEX idx_postback_events_code (event_code),
-                INDEX idx_postback_events_created (created_at)
+                INDEX idx_postback_events_created (created_at),
+                UNIQUE KEY uq_postback_events_source (source_unique_key)
             ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """
         )
@@ -458,6 +460,7 @@ async def init_db() -> Tuple[
         await ensure_column(cur, "ai_settings", "model", "model VARCHAR(64) NOT NULL DEFAULT 'gpt-4.1-mini'")
         await ensure_column(cur, "ai_settings", "openai_api_key", "openai_api_key TEXT NULL")
         await ensure_column(cur, "postback_events", "event_code", "event_code VARCHAR(32) NOT NULL DEFAULT 'unknown'")
+        await ensure_column(cur, "postback_events", "source_unique_key", "source_unique_key VARCHAR(191) DEFAULT NULL")
         await ensure_column(cur, "postback_events", "tg_user_id", "tg_user_id BIGINT UNSIGNED DEFAULT NULL")
         await ensure_column(cur, "postback_events", "click_id", "click_id VARCHAR(128) DEFAULT NULL")
         await ensure_column(cur, "postback_events", "trader_id", "trader_id VARCHAR(128) DEFAULT NULL")
@@ -472,6 +475,18 @@ async def init_db() -> Tuple[
         await ensure_column(cur, "postback_events", "commission", "commission DECIMAL(18,2) DEFAULT NULL")
         await ensure_column(cur, "postback_events", "status", "status VARCHAR(128) DEFAULT NULL")
         await ensure_column(cur, "postback_events", "raw_payload", "raw_payload LONGTEXT")
+        await cur.execute(
+            """
+            SELECT 1 FROM information_schema.statistics
+            WHERE table_schema = DATABASE() AND table_name = 'postback_events'
+              AND index_name = 'uq_postback_events_source'
+            LIMIT 1
+            """
+        )
+        if not await cur.fetchone():
+            await cur.execute(
+                "ALTER TABLE postback_events ADD UNIQUE KEY uq_postback_events_source (source_unique_key)"
+            )
         await ensure_column(cur, "postback_state", "tg_user_id", "tg_user_id BIGINT UNSIGNED DEFAULT NULL")
         await ensure_column(cur, "postback_state", "click_id", "click_id VARCHAR(128) DEFAULT NULL")
         await ensure_column(cur, "postback_state", "site_id", "site_id VARCHAR(191) DEFAULT NULL")

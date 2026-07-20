@@ -372,6 +372,8 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     cid VARCHAR(128) NULL,
                     sub_id1 VARCHAR(255) NULL,
                     sub_id2 VARCHAR(255) NULL,
+                    provider_event_id VARCHAR(128) NULL,
+                    payload_fingerprint CHAR(64) NULL,
                     raw_payload LONGTEXT NULL,
                     status VARCHAR(32) NOT NULL DEFAULT 'received',
                     reason VARCHAR(255) NULL,
@@ -381,6 +383,9 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     chatterfy_response_body LONGTEXT NULL,
                     chatterfy_error TEXT NULL,
                     chatterfy_sent_at TIMESTAMP NULL DEFAULT NULL,
+                    aichatter_status VARCHAR(32) NULL,
+                    aichatter_error TEXT NULL,
+                    aichatter_synced_at TIMESTAMP NULL DEFAULT NULL,
                     source_ip VARCHAR(64) NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE KEY uq_pocket_postback_unique_key (unique_key),
@@ -419,7 +424,8 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 CREATE TABLE IF NOT EXISTS user_mode_access (
                     user_id BIGINT NOT NULL,
                     mode VARCHAR(16) NOT NULL,
-                    is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+                    is_enabled TINYINT(1) NOT NULL DEFAULT 0,
+                    override_mode VARCHAR(16) NOT NULL DEFAULT 'inherit',
                     updated_by BIGINT NULL,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     PRIMARY KEY (user_id, mode)
@@ -463,6 +469,17 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             "updated_at",
             "ALTER TABLE users ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
         )
+        await _ensure_column(
+            conn,
+            db_name,
+            "user_mode_access",
+            "override_mode",
+            "ALTER TABLE user_mode_access ADD COLUMN override_mode VARCHAR(16) NOT NULL DEFAULT 'inherit' AFTER is_enabled",
+        )
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE user_mode_access SET override_mode = 'allow' WHERE is_enabled = 1 AND override_mode = 'inherit'"
+            )
 
         await _ensure_column(conn, db_name, "presets", "icon", "ALTER TABLE presets ADD COLUMN icon VARCHAR(64) NULL DEFAULT '⚡'")
         await _ensure_column(
@@ -714,6 +731,8 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_index(conn, db_name, "users", "idx_users_pocket_click_id", "CREATE INDEX idx_users_pocket_click_id ON users(pocket_click_id)")
         await _ensure_index(conn, db_name, "users", "idx_users_signal_gate", "CREATE INDEX idx_users_signal_gate ON users(pocket_registered, pocket_deposited)")
         await _ensure_column(conn, db_name, "pocket_postback_events", "sub_id2", "ALTER TABLE pocket_postback_events ADD COLUMN sub_id2 VARCHAR(255) NULL AFTER sub_id1")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "provider_event_id", "ALTER TABLE pocket_postback_events ADD COLUMN provider_event_id VARCHAR(128) NULL AFTER sub_id2")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "payload_fingerprint", "ALTER TABLE pocket_postback_events ADD COLUMN payload_fingerprint CHAR(64) NULL AFTER provider_event_id")
         await _ensure_column(conn, db_name, "pocket_postback_events", "deposit_amount", "ALTER TABLE pocket_postback_events ADD COLUMN deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00 AFTER trader_id")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_request_url", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_request_url TEXT NULL")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_status", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_status VARCHAR(32) NULL")
@@ -721,6 +740,9 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_response_body", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_response_body LONGTEXT NULL")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_error", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_error TEXT NULL")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_sent_at", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_sent_at TIMESTAMP NULL DEFAULT NULL")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "aichatter_status", "ALTER TABLE pocket_postback_events ADD COLUMN aichatter_status VARCHAR(32) NULL AFTER chatterfy_sent_at")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "aichatter_error", "ALTER TABLE pocket_postback_events ADD COLUMN aichatter_error TEXT NULL AFTER aichatter_status")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "aichatter_synced_at", "ALTER TABLE pocket_postback_events ADD COLUMN aichatter_synced_at TIMESTAMP NULL DEFAULT NULL AFTER aichatter_error")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "policy", "ALTER TABLE admin_system_access_settings ADD COLUMN policy VARCHAR(32) NOT NULL DEFAULT 'registration_deposit'")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "min_deposit_amount", "ALTER TABLE admin_system_access_settings ADD COLUMN min_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "updated_by", "ALTER TABLE admin_system_access_settings ADD COLUMN updated_by BIGINT NULL")
@@ -735,6 +757,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_index(conn, db_name, "aio_postback_events", "idx_aio_postback_events_status", "CREATE INDEX idx_aio_postback_events_status ON aio_postback_events(status, created_at)")
         await _ensure_index(conn, db_name, "pocket_postback_events", "idx_pocket_postback_events_user", "CREATE INDEX idx_pocket_postback_events_user ON pocket_postback_events(user_id, created_at)")
         await _ensure_index(conn, db_name, "pocket_postback_events", "idx_pocket_postback_events_status", "CREATE INDEX idx_pocket_postback_events_status ON pocket_postback_events(status, created_at)")
+        await _ensure_index(conn, db_name, "pocket_postback_events", "idx_pocket_postback_provider_event", "CREATE INDEX idx_pocket_postback_provider_event ON pocket_postback_events(provider_event_id)")
         await _ensure_index(
             conn,
             db_name,
