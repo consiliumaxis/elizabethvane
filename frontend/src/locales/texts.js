@@ -163,6 +163,9 @@ export const texts = {
     },
     binarySettings: {
       marketClosed: "The market is currently closed. Please switch the mode in your profile or return later.",
+      marketLoadErrorTitle: "Connection error",
+      marketLoadError: "Market data could not be loaded. Check your internet connection and try again.",
+      retryBtn: "Try again",
       goHome: "Home",
       selectPair: "Select a market and pair",
       selectExpiration: "Select expiration time",

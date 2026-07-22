@@ -17,6 +17,26 @@ const DEFAULT_MARKETS = [
 ];
 
 const DEFAULT_EXPIRATIONS = ['5s', '15s', '1m', '3m', '5m', '15m', '1h'].map(value => ({ value, label: value }));
+const MARKET_LOAD_RETRY_DELAYS = [0, 700, 1600];
+
+function waitForRetry(delay) {
+  return new Promise(resolve => setTimeout(resolve, delay));
+}
+
+async function fetchMarketOptionsWithRetry(marketKind, isActive) {
+  let lastError;
+  for (const delay of MARKET_LOAD_RETRY_DELAYS) {
+    if (!isActive()) return null;
+    if (delay > 0) await waitForRetry(delay);
+    if (!isActive()) return null;
+    try {
+      return await apiFetchJson(`/api/market/options?kind=${encodeURIComponent(marketKind)}`);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('Failed to load markets');
+}
 
 function normalizeExpirationOptions(items) {
   const source = Array.isArray(items) && items.length ? items : DEFAULT_EXPIRATIONS;
@@ -99,6 +119,7 @@ export default function BinarySignalSettings({
   const [expOptions, setExpOptions] = useState(DEFAULT_EXPIRATIONS);
   const [marketKind, setMarketKind] = useState(binaryParams.market || 'forex');
   const [loadError, setLoadError] = useState('');
+  const [marketReloadVersion, setMarketReloadVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [loadingPhraseIndex, setLoadingPhraseIndex] = useState(0);
@@ -137,9 +158,9 @@ export default function BinarySignalSettings({
     setLoading(true);
     setLoadError('');
 
-    apiFetchJson(`/api/market/options?kind=${encodeURIComponent(marketKind)}`)
+    fetchMarketOptionsWithRetry(marketKind, () => isActive)
       .then(data => {
-        if (!isActive) return;
+        if (!isActive || !data) return;
         const nextMarkets = Array.isArray(data?.available_markets) && data.available_markets.length
           ? data.available_markets
           : DEFAULT_MARKETS;
@@ -174,15 +195,16 @@ export default function BinarySignalSettings({
       })
       .catch((error) => {
         if (!isActive) return;
+        console.error('Failed to load market options after retries', error);
         setPairs([]);
         setExpOptions(DEFAULT_EXPIRATIONS);
-        setLoadError(error.message || 'Failed to load markets');
+        setLoadError(t.marketLoadError || 'Unable to load market data. Check your connection and try again.');
         setLoading(false);
       });
     return () => {
       isActive = false;
     };
-  }, [marketKind, setBinaryParams]);
+  }, [marketKind, marketReloadVersion, setBinaryParams, t.marketLoadError]);
 
   useEffect(() => {
     let intervalId;
@@ -532,6 +554,40 @@ export default function BinarySignalSettings({
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="profile-wrapper">
+        <div className="empty-market-card market-error-card">
+          <div className="market-chip-grid empty-market-switcher">
+            {availableMarkets.map((market) => (
+              <button
+                key={market.key}
+                type="button"
+                className={`market-chip-btn ${marketKind === market.key ? 'active' : ''}`}
+                onClick={() => handleSelectMarket(market.key)}
+              >
+                {market.title}
+              </button>
+            ))}
+          </div>
+          <div className="market-error-icon" aria-hidden="true">!</div>
+          <h3>{t.marketLoadErrorTitle || 'Unable to load market data'}</h3>
+          <p>{loadError}</p>
+          <button
+            type="button"
+            className="binary-cta-btn market-retry-btn"
+            onClick={() => setMarketReloadVersion(version => version + 1)}
+          >
+            {t.retryBtn || 'Try again'}
+          </button>
+          <button type="button" className="go-back-outline-btn market-home-btn" onClick={onGoHome}>
+            {t.goHome}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (pairs.length === 0) {
     return (
       <div className="profile-wrapper">
@@ -549,7 +605,6 @@ export default function BinarySignalSettings({
             ))}
           </div>
           <p>{t.marketClosed}</p>
-          {loadError && <div className="market-load-error">{loadError}</div>}
           <button className="binary-cta-btn" style={{ marginTop: '20px' }} onClick={onGoHome}>
             {t.goHome}
           </button>
