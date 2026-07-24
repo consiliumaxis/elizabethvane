@@ -96,6 +96,11 @@ class BotFunnelTest(unittest.TestCase):
                     {
                         "id": "menu",
                         "type": "menu",
+                        "text": "Open menu",
+                    },
+                    {
+                        "id": "app",
+                        "type": "web_app",
                         "text": "Open app",
                     },
                 ],
@@ -103,9 +108,10 @@ class BotFunnelTest(unittest.TestCase):
         )
 
         self.assertEqual(config["trigger_button_text"], "Continue")
-        self.assertEqual([button["id"] for button in config["buttons"]], ["register", "menu"])
+        self.assertEqual([button["id"] for button in config["buttons"]], ["register", "menu", "app"])
         self.assertEqual(config["buttons"][0]["url"], "https://t.me/example")
         self.assertEqual(config["buttons"][1]["type"], "menu")
+        self.assertEqual(config["buttons"][2]["type"], "web_app")
 
     def test_final_message_config_rejects_unsafe_or_ambiguous_buttons(self):
         with self.assertRaisesRegex(ValueError, "полную HTTP"):
@@ -126,6 +132,18 @@ class BotFunnelTest(unittest.TestCase):
                     "buttons": [
                         {"type": "menu", "text": "App 1"},
                         {"type": "menu", "text": "App 2"},
+                    ],
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "мини-приложения"):
+            validate_final_message_config(
+                {
+                    "enabled": True,
+                    "trigger_button_text": "Continue",
+                    "message_text": "Done",
+                    "buttons": [
+                        {"type": "web_app", "text": "App 1"},
+                        {"type": "web_app", "text": "App 2"},
                     ],
                 }
             )
@@ -172,8 +190,20 @@ class BotFunnelTest(unittest.TestCase):
         self.assertNotIn("await start_ai_chatter_from_callback(callback)", callback_handler)
 
         self.assertIn("def build_funnel_final_keyboard", source)
+        self.assertIn('callback_data=FUNNEL_OPEN_MENU_CALLBACK', source)
         self.assertIn('web_app=WebAppInfo(url=web_app_url)', source)
         self.assertIn("await callback.message.edit_text", source)
+        self.assertIn("async def handle_funnel_open_menu", source)
+        self.assertIn("await send_main_menu(callback.message.chat.id", source)
+
+    def test_bot_ai_manager_can_be_disabled_per_runtime(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn('os.getenv("BOT_AI_MANAGER_ENABLED")', source)
+        gateway = source.split("async def post_to_ai_chatter", 1)[1].split(
+            "async def forward_message_to_ai_chatter", 1
+        )[0]
+        self.assertIn("not BOT_AI_MANAGER_ENABLED", gateway)
 
     def test_open_channel_redirect_sends_subscription_event_and_starts_ai(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")

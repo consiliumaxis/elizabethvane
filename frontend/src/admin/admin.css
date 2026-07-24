@@ -2445,6 +2445,11 @@
   background: rgba(63, 146, 85, 0.14);
 }
 
+.admin-final-button-type.web_app {
+  color: #245a9b;
+  background: rgba(55, 121, 196, 0.14);
+}
+
 .admin-final-button-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(140px, 0.65fr);

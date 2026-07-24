@@ -63,7 +63,7 @@ DEFAULT_QUIZ_CONFIG = {
     }
     for step in QUIZ_STEPS
 }
-FINAL_MESSAGE_BUTTON_TYPES = ("url", "menu")
+FINAL_MESSAGE_BUTTON_TYPES = ("url", "menu", "web_app")
 FINAL_MESSAGE_MAX_BUTTONS = 8
 FINAL_MESSAGE_TEXT_MAX_LENGTH = 3500
 DEFAULT_FINAL_MESSAGE_CONFIG = {
@@ -183,7 +183,7 @@ def normalize_final_message_config(value: Any = None) -> Dict[str, Any]:
 
     buttons = []
     used_ids = set()
-    menu_added = False
+    singleton_types_added = set()
     for index, raw_button in enumerate(raw_buttons):
         if not isinstance(raw_button, dict):
             continue
@@ -198,10 +198,10 @@ def normalize_final_message_config(value: Any = None) -> Dict[str, Any]:
             url = normalize_final_button_url(raw_button.get("url"))
             if not url:
                 continue
-        elif menu_added:
+        elif button_type in singleton_types_added:
             continue
         else:
-            menu_added = True
+            singleton_types_added.add(button_type)
 
         raw_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(raw_button.get("id") or "").strip())[:48]
         button_id = raw_id or f"button_{index + 1}"
@@ -254,7 +254,7 @@ def validate_final_message_config(value: Any) -> Dict[str, Any]:
     if len(raw_buttons) > FINAL_MESSAGE_MAX_BUTTONS:
         raise ValueError(f"Можно добавить не более {FINAL_MESSAGE_MAX_BUTTONS} кнопок")
 
-    menu_count = 0
+    singleton_counts = {"menu": 0, "web_app": 0}
     for index, button in enumerate(raw_buttons, start=1):
         if not isinstance(button, dict):
             raise ValueError(f"Некорректные данные кнопки {index}")
@@ -268,10 +268,12 @@ def validate_final_message_config(value: Any) -> Dict[str, Any]:
             raise ValueError(f"Название кнопки {index} не должно превышать 64 символа")
         if button_type == "url" and not normalize_final_button_url(button.get("url")):
             raise ValueError(f"Укажите полную HTTP(S) или tg:// ссылку для кнопки {index}")
-        if button_type == "menu":
-            menu_count += 1
-    if menu_count > 1:
+        if button_type in singleton_counts:
+            singleton_counts[button_type] += 1
+    if singleton_counts["menu"] > 1:
         raise ValueError("Можно добавить только одну кнопку открытия меню")
+    if singleton_counts["web_app"] > 1:
+        raise ValueError("Можно добавить только одну кнопку открытия мини-приложения")
     if enabled and not raw_buttons:
         raise ValueError("Добавьте хотя бы одну кнопку финального сообщения")
     return normalize_final_message_config(source)

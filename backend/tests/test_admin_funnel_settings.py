@@ -21,6 +21,8 @@ class AdminFunnelSettingsTest(unittest.TestCase):
         self.assertIn("Финальное сообщение", source)
         self.assertIn("Предпросмотр в Telegram", source)
         self.assertIn("moveFinalMessageButton", source)
+        self.assertIn("Показать меню бота", source)
+        self.assertIn("Открыть мини-приложение", source)
 
     def test_admin_support_settings_store_quiz_config(self):
         source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")

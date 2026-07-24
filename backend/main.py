@@ -242,6 +242,10 @@ AI_CHATTER_GATEWAY_URL = (
     os.getenv("AI_CHATTER_GATEWAY_URL") or "http://127.0.0.1:8091/incoming"
 ).strip()
 AI_CHATTER_GATEWAY_SECRET = (os.getenv("AI_CHATTER_GATEWAY_SECRET") or "").strip()
+BOT_AI_MANAGER_ENABLED = (
+    (os.getenv("BOT_AI_MANAGER_ENABLED") or "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
 BOT_CHANNEL_CLICK_SECRET = (os.getenv("BOT_CHANNEL_CLICK_SECRET") or "").strip()
 _web_app_parts = urlsplit((os.getenv("WEB_APP_URL") or "").strip())
 BOT_PUBLIC_BASE_URL = (
@@ -5555,6 +5559,7 @@ async def update_analysis_status(request: Request, user=Depends(get_telegram_use
     
 FUNNEL_CHECK_CHANNEL_CALLBACK = "funnel_check_channel"
 FUNNEL_CONTINUE_CALLBACK = "funnel_continue"
+FUNNEL_OPEN_MENU_CALLBACK = "funnel_open_menu"
 QUIZ_ANSWER_CALLBACK_PREFIX = "quiz_answer"
 QUALIFICATION_GPT_SYSTEM_PROMPT = """
 You classify one Telegram qualification answer for Elizabeth Vane's trading project.
@@ -5586,7 +5591,7 @@ async def build_main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 async def post_to_ai_chatter(payload: Dict[str, Any]) -> bool:
-    if not AI_CHATTER_GATEWAY_SECRET:
+    if not BOT_AI_MANAGER_ENABLED or not AI_CHATTER_GATEWAY_SECRET:
         return False
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
@@ -5932,6 +5937,11 @@ def build_funnel_final_keyboard(final_message_config: Dict[str, Any]) -> Optiona
     web_app_url = str(os.getenv("WEB_APP_URL") or "").strip()
     for button in config["buttons"]:
         if button["type"] == "menu":
+            telegram_button = InlineKeyboardButton(
+                text=button["text"],
+                callback_data=FUNNEL_OPEN_MENU_CALLBACK,
+            )
+        elif button["type"] == "web_app":
             if not web_app_url:
                 continue
             telegram_button = InlineKeyboardButton(
@@ -6321,6 +6331,19 @@ async def handle_funnel_continue(callback: types.CallbackQuery):
         final_message_shown = await show_funnel_final_message(callback)
         if not final_message_shown:
             await send_main_menu(callback.message.chat.id, int(callback.from_user.id), user_name)
+
+
+@dp.callback_query(lambda callback: callback.data == FUNNEL_OPEN_MENU_CALLBACK)
+async def handle_funnel_open_menu(callback: types.CallbackQuery):
+    if not callback.message or not callback.from_user:
+        return
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception as edit_error:
+        print(f"[Bot] final funnel keyboard cleanup failed: {edit_error}")
+    user_name = callback.from_user.first_name or callback.from_user.username or "Trader"
+    await send_main_menu(callback.message.chat.id, int(callback.from_user.id), user_name)
 
 
 @dp.callback_query(lambda callback: callback.data == FUNNEL_CHECK_CHANNEL_CALLBACK)

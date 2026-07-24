@@ -78,6 +78,7 @@ const DEFAULT_QUIZ_CONFIG = {
   },
 };
 const FINAL_MESSAGE_MAX_BUTTONS = 8;
+const FINAL_MESSAGE_BUTTON_TYPES = ['url', 'menu', 'web_app'];
 const DEFAULT_FINAL_MESSAGE_CONFIG = {
   enabled: true,
   trigger_button_text: 'Go to trading',
@@ -103,7 +104,7 @@ const normalizeFinalMessageConfig = (rawConfig) => {
   const usedIds = new Set();
   const buttons = rawButtons.slice(0, FINAL_MESSAGE_MAX_BUTTONS).map((rawButton, index) => {
     const item = rawButton && typeof rawButton === 'object' ? rawButton : {};
-    const type = item.type === 'menu' ? 'menu' : 'url';
+    const type = FINAL_MESSAGE_BUTTON_TYPES.includes(item.type) ? item.type : 'url';
     let id = String(item.id || `button_${index + 1}`).replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 48);
     if (!id) id = `button_${index + 1}`;
     let uniqueId = id;
@@ -641,9 +642,15 @@ export default function SettingsPage({ adminUser }) {
         setFunnelEditorTab('final');
         return;
       }
+      const webAppButtons = preparedFinalMessageConfig.buttons.filter((button) => button.type === 'web_app');
+      if (webAppButtons.length > 1) {
+        setError('Можно добавить только одну кнопку открытия мини-приложения');
+        setFunnelEditorTab('final');
+        return;
+      }
       const invalidFinalButtonIndex = preparedFinalMessageConfig.buttons.findIndex((button) => (
         !button.text
-        || !['url', 'menu'].includes(button.type)
+        || !FINAL_MESSAGE_BUTTON_TYPES.includes(button.type)
         || (button.type === 'url' && !isValidFinalButtonUrl(button.url))
       ));
       if (invalidFinalButtonIndex >= 0) {
@@ -884,6 +891,10 @@ export default function SettingsPage({ adminUser }) {
       setError('Кнопка открытия меню уже добавлена');
       return;
     }
+    if (type === 'web_app' && finalMessageConfig.buttons.some((button) => button.type === 'web_app')) {
+      setError('Кнопка открытия мини-приложения уже добавлена');
+      return;
+    }
     setFinalMessageConfig((prev) => ({
       ...prev,
       buttons: [
@@ -891,7 +902,9 @@ export default function SettingsPage({ adminUser }) {
         {
           id: createFinalButtonId(),
           type,
-          text: type === 'menu' ? 'Open Elizabeth Vane' : 'Open link',
+          text: type === 'menu'
+            ? 'Open menu'
+            : (type === 'web_app' ? 'Open Elizabeth Vane' : 'Open link'),
           url: type === 'url' ? 'https://' : '',
         },
       ],
@@ -906,7 +919,7 @@ export default function SettingsPage({ adminUser }) {
           ? {
               ...button,
               ...patch,
-              url: patch.type === 'menu' ? '' : (patch.url ?? button.url),
+              url: patch.type && patch.type !== 'url' ? '' : (patch.url ?? button.url),
             }
           : button
       )),
@@ -915,10 +928,14 @@ export default function SettingsPage({ adminUser }) {
 
   const changeFinalMessageButtonType = (buttonId, type) => {
     if (
-      type === 'menu'
-      && finalMessageConfig.buttons.some((button) => button.type === 'menu' && button.id !== buttonId)
+      ['menu', 'web_app'].includes(type)
+      && finalMessageConfig.buttons.some((button) => button.type === type && button.id !== buttonId)
     ) {
-      setError('Можно добавить только одну кнопку открытия меню');
+      setError(
+        type === 'menu'
+          ? 'Можно добавить только одну кнопку открытия меню'
+          : 'Можно добавить только одну кнопку открытия мини-приложения'
+      );
       return;
     }
     setError('');
@@ -1486,6 +1503,7 @@ export default function SettingsPage({ adminUser }) {
   if (activeSection === 'support') {
     const visibleQuizConfig = normalizeQuizConfig(quizConfig);
     const hasMenuButton = finalMessageConfig.buttons.some((button) => button.type === 'menu');
+    const hasWebAppButton = finalMessageConfig.buttons.some((button) => button.type === 'web_app');
     return (
       <div className="admin-card admin-settings-detail">
         <div className="admin-row-between">
@@ -1738,7 +1756,15 @@ export default function SettingsPage({ adminUser }) {
                   onClick={() => addFinalMessageButton('menu')}
                   disabled={hasMenuButton || finalMessageConfig.buttons.length >= FINAL_MESSAGE_MAX_BUTTONS}
                 >
-                  + Меню
+                  + Меню бота
+                </button>
+                <button
+                  type="button"
+                  className="admin-btn-outline"
+                  onClick={() => addFinalMessageButton('web_app')}
+                  disabled={hasWebAppButton || finalMessageConfig.buttons.length >= FINAL_MESSAGE_MAX_BUTTONS}
+                >
+                  + Мини-апка
                 </button>
               </div>
             </div>
@@ -1769,7 +1795,9 @@ export default function SettingsPage({ adminUser }) {
                   <div className="admin-final-button-fields">
                     <div className="admin-final-button-card-head">
                       <span className={`admin-final-button-type ${button.type}`}>
-                        {button.type === 'menu' ? 'Мини-приложение' : 'Внешняя ссылка'}
+                        {button.type === 'menu'
+                          ? 'Меню бота'
+                          : (button.type === 'web_app' ? 'Мини-приложение' : 'Внешняя ссылка')}
                       </span>
                       <button
                         type="button"
@@ -1803,7 +1831,13 @@ export default function SettingsPage({ adminUser }) {
                             value="menu"
                             disabled={hasMenuButton && button.type !== 'menu'}
                           >
-                            Открыть меню
+                            Показать меню бота
+                          </option>
+                          <option
+                            value="web_app"
+                            disabled={hasWebAppButton && button.type !== 'web_app'}
+                          >
+                            Открыть мини-приложение
                           </option>
                         </select>
                       </label>
@@ -1820,9 +1854,13 @@ export default function SettingsPage({ adminUser }) {
                           placeholder="https://example.com"
                         />
                       </label>
+                    ) : button.type === 'menu' ? (
+                      <div className="admin-final-menu-note">
+                        Отправит полноценное главное меню бота — такое же, как после команды /start.
+                      </div>
                     ) : (
                       <div className="admin-final-menu-note">
-                        Откроет основное мини-приложение Elizabeth Vane. Ссылка берётся из системы автоматически.
+                        Сразу откроет мини-приложение Elizabeth Vane. Ссылка берётся из системы автоматически.
                       </div>
                     )}
                   </div>
@@ -1830,7 +1868,7 @@ export default function SettingsPage({ adminUser }) {
               ))}
               {!finalMessageConfig.buttons.length ? (
                 <div className="admin-final-empty">
-                  Кнопок пока нет. Добавьте ссылку или кнопку открытия меню.
+                  Кнопок пока нет. Добавьте ссылку, меню бота или мини-приложение.
                 </div>
               ) : null}
             </div>
@@ -1845,7 +1883,7 @@ export default function SettingsPage({ adminUser }) {
                   {finalMessageConfig.buttons.map((button) => (
                     <div key={`preview-${button.id}`}>
                       <span>{button.text || 'Без названия'}</span>
-                      <b>{button.type === 'menu' ? 'APP' : '↗'}</b>
+                      <b>{button.type === 'menu' ? 'MENU' : (button.type === 'web_app' ? 'APP' : '↗')}</b>
                     </div>
                   ))}
                 </div>
