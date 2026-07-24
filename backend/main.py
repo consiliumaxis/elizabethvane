@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException, Header, Query, Bac
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand
 from dotenv import load_dotenv
 import uvicorn
@@ -184,6 +184,22 @@ except ModuleNotFoundError:
         sync_aichatter_pocket_event,
         sync_shared_ai_access_settings,
     )
+try:
+    from backend.manager_stats import (
+        STAFF_ROLE_ADMIN,
+        STAFF_ROLES,
+        format_manager_stats,
+        normalize_staff_role,
+        parse_stats_target,
+    )
+except ModuleNotFoundError:
+    from manager_stats import (
+        STAFF_ROLE_ADMIN,
+        STAFF_ROLES,
+        format_manager_stats,
+        normalize_staff_role,
+        parse_stats_target,
+    )
 
 load_dotenv()
 
@@ -329,14 +345,14 @@ def build_admin_webapp_url() -> str:
     return f"{base_url}/admin/{token}"
 
 
-async def is_admin_user(user_id: int) -> bool:
+async def get_staff_role(user_id: int) -> Optional[str]:
     if not db_pool:
-        return False
+        return None
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
                 """
-                SELECT user_id
+                SELECT role
                 FROM admin_users
                 WHERE user_id = %s AND is_active = 1
                 LIMIT 1
@@ -344,7 +360,14 @@ async def is_admin_user(user_id: int) -> bool:
                 (user_id,),
             )
             row = await cur.fetchone()
-    return bool(row)
+    if not row:
+        return None
+    role = str(row.get("role") or "").strip().lower()
+    return role if role in STAFF_ROLES else None
+
+
+async def is_admin_user(user_id: int) -> bool:
+    return await get_staff_role(user_id) == STAFF_ROLE_ADMIN
 
 
 async def get_admin_user(
@@ -1749,10 +1772,10 @@ async def insert_pocket_postback_log(
                 """
                 INSERT IGNORE INTO pocket_postback_events (
                     event_slug, unique_key, user_id, click_id, trader_id, deposit_amount,
-                    site_id, cid, sub_id1, sub_id2, provider_event_id, payload_fingerprint,
+                    country, site_id, cid, sub_id1, sub_id2, provider_event_id, payload_fingerprint,
                     raw_payload, status, reason, source_ip
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     normalized.get("event_slug") or "unknown",
@@ -1761,6 +1784,7 @@ async def insert_pocket_postback_log(
                     normalized.get("click_id") or None,
                     normalized.get("trader_id") or None,
                     normalized.get("deposit_amount") or "0.00",
+                    normalized.get("country") or None,
                     normalized.get("site_id") or None,
                     normalized.get("cid") or None,
                     normalized.get("sub_id1") or None,
@@ -2287,13 +2311,14 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                     """
                     INSERT IGNORE INTO pocket_postback_events (
                         event_slug, unique_key, user_id, click_id, trader_id, deposit_amount,
-                        site_id, cid, sub_id1, sub_id2, provider_event_id, payload_fingerprint,
+                        country, site_id, cid, sub_id1, sub_id2, provider_event_id, payload_fingerprint,
                         raw_payload, status, source_ip
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'received', %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'received', %s)
                     """,
                     (
                         event_slug, normalized.get("unique_key"), telegram_id, click_id or None,
-                        trader_id or None, f"{deposit_amount:.2f}", site_id or None, cid or None,
+                        trader_id or None, f"{deposit_amount:.2f}", normalized.get("country") or None,
+                        site_id or None, cid or None,
                         sub_id1 or None, sub_id2 or None, normalized.get("provider_event_id") or None,
                         normalized.get("payload_fingerprint") or None,
                         json.dumps(safe_payload, ensure_ascii=False, default=str), source_ip,
@@ -2319,13 +2344,15 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                             pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
                             pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
                             pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
+                            country = CASE WHEN %s <> '' THEN %s ELSE country END,
                             pocket_registered = 1,
                             pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
                             pocket_checked_at = NOW()
                         WHERE user_id = %s
                         """,
                         (trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
-                         sub_id1, sub_id1, sub_id2, sub_id2, telegram_id),
+                         sub_id1, sub_id1, sub_id2, sub_id2,
+                         normalized.get("country") or "", normalized.get("country") or "", telegram_id),
                     )
                 else:
                     await cur.execute(
@@ -2337,6 +2364,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                             pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
                             pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
                             pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
+                            country = CASE WHEN %s <> '' THEN %s ELSE country END,
                             pocket_registered = 1,
                             pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
                             pocket_deposited = 1,
@@ -2345,7 +2373,9 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                         WHERE user_id = %s
                         """,
                         (trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
-                         sub_id1, sub_id1, sub_id2, sub_id2, f"{deposit_amount:.2f}", telegram_id),
+                         sub_id1, sub_id1, sub_id2, sub_id2,
+                         normalized.get("country") or "", normalized.get("country") or "",
+                         f"{deposit_amount:.2f}", telegram_id),
                     )
                 await cur.execute(
                     "SELECT COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount FROM users WHERE user_id = %s",
@@ -2451,7 +2481,7 @@ async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
                a.granted_at
         FROM users u
         LEFT JOIN presets p ON p.id = u.strategy_id
-        LEFT JOIN admin_users a ON a.user_id = u.user_id
+        LEFT JOIN admin_users a ON a.user_id = u.user_id AND a.role = 'admin'
         LEFT JOIN user_mode_access fx ON fx.user_id = u.user_id AND fx.mode = 'forex'
         LEFT JOIN user_mode_access bin ON bin.user_id = u.user_id AND bin.mode = 'binary'
         WHERE u.user_id = %s
@@ -2536,7 +2566,7 @@ async def admin_stats(
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             users_total = await safe_count(cur, "SELECT COUNT(*) AS cnt FROM users")
-            admins_total = await safe_count(cur, "SELECT COUNT(*) AS cnt FROM admin_users WHERE is_active = 1")
+            admins_total = await safe_count(cur, "SELECT COUNT(*) AS cnt FROM admin_users WHERE is_active = 1 AND role = 'admin'")
             active_analyses = await safe_count(cur, "SELECT COUNT(*) AS cnt FROM user_analyses WHERE status = 'active'")
             chats_total = await safe_count(cur, "SELECT COUNT(*) AS cnt FROM ai_chats")
 
@@ -2656,7 +2686,7 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
                            a.granted_at
                     FROM users u
                     LEFT JOIN presets p ON p.id = u.strategy_id
-                    LEFT JOIN admin_users a ON a.user_id = u.user_id
+                    LEFT JOIN admin_users a ON a.user_id = u.user_id AND a.role = 'admin'
                     LEFT JOIN user_mode_access fx ON fx.user_id = u.user_id AND fx.mode = 'forex'
                     LEFT JOIN user_mode_access bin ON bin.user_id = u.user_id AND bin.mode = 'binary'
                     WHERE (%s = '' OR CAST(u.user_id AS CHAR) LIKE %s OR COALESCE(u.username, '') LIKE %s OR COALESCE(u.first_name, '') LIKE %s)
@@ -2679,7 +2709,7 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
                            a.granted_at
                     FROM users u
                     LEFT JOIN presets p ON p.id = u.strategy_id
-                    LEFT JOIN admin_users a ON a.user_id = u.user_id
+                    LEFT JOIN admin_users a ON a.user_id = u.user_id AND a.role = 'admin'
                     WHERE (%s = '' OR CAST(u.user_id AS CHAR) LIKE %s OR COALESCE(u.username, '') LIKE %s OR COALESCE(u.first_name, '') LIKE %s)
                     ORDER BY u.user_id DESC
                     LIMIT %s OFFSET %s
@@ -2869,6 +2899,145 @@ async def admin_delete_user(target_user_id: int, admin=Depends(get_admin_user)):
     return {"status": "success", "user_id": target_user_id}
 
 
+async def get_active_admin_count(cur) -> int:
+    await cur.execute(
+        "SELECT COUNT(*) AS cnt FROM admin_users WHERE is_active = 1 AND role = %s",
+        (STAFF_ROLE_ADMIN,),
+    )
+    return int((await cur.fetchone() or {}).get("cnt") or 0)
+
+
+@app.get("/api/admin/staff")
+async def admin_staff(admin=Depends(get_admin_user)):
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT a.user_id, a.role, a.is_active, a.granted_at, a.granted_by,
+                       u.username, u.first_name, u.avatar_url
+                FROM admin_users a
+                LEFT JOIN users u ON u.user_id = a.user_id
+                ORDER BY a.is_active DESC, FIELD(a.role, 'admin', 'manager'), a.granted_at DESC
+                """
+            )
+            rows = await cur.fetchall()
+    return {"status": "success", "staff": rows or []}
+
+
+@app.post("/api/admin/staff")
+async def admin_staff_add(request: Request, admin=Depends(get_admin_user)):
+    data = await request.json()
+    try:
+        target_user_id = int(data.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target_user_id = 0
+    if target_user_id <= 0:
+        raise HTTPException(status_code=400, detail="Укажите корректный Telegram ID")
+    role = str(data.get("role") or "").strip().lower()
+    if role not in STAFF_ROLES:
+        raise HTTPException(status_code=400, detail="Некорректная роль сотрудника")
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO admin_users (user_id, role, is_active, granted_by)
+                VALUES (%s, %s, 1, %s)
+                ON DUPLICATE KEY UPDATE
+                    role = VALUES(role),
+                    is_active = 1,
+                    granted_by = VALUES(granted_by),
+                    granted_at = CURRENT_TIMESTAMP
+                """,
+                (target_user_id, role, int(admin["user_id"])),
+            )
+    return {"status": "success", "user_id": target_user_id, "role": role, "is_active": 1}
+
+
+@app.patch("/api/admin/staff/{target_user_id}")
+async def admin_staff_update(
+    target_user_id: int,
+    request: Request,
+    admin=Depends(get_admin_user),
+):
+    target_user_id = int(target_user_id or 0)
+    data = await request.json()
+    current_admin_id = int(admin["user_id"])
+    if target_user_id <= 0:
+        raise HTTPException(status_code=400, detail="Укажите корректный Telegram ID")
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT user_id, role, is_active FROM admin_users WHERE user_id = %s LIMIT 1",
+                (target_user_id,),
+            )
+            existing = await cur.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Сотрудник не найден")
+
+            role = (
+                str(data.get("role") or "").strip().lower()
+                if "role" in data
+                else normalize_staff_role(existing.get("role"))
+            )
+            if role not in STAFF_ROLES:
+                raise HTTPException(status_code=400, detail="Некорректная роль сотрудника")
+            if "is_active" in data:
+                raw_active = data.get("is_active")
+                if isinstance(raw_active, str):
+                    is_active = 1 if raw_active.strip().lower() in {"1", "true", "yes", "on"} else 0
+                else:
+                    is_active = 1 if bool(raw_active) else 0
+            else:
+                is_active = int(existing.get("is_active") or 0)
+            removes_admin_access = (
+                str(existing.get("role") or "") == STAFF_ROLE_ADMIN
+                and int(existing.get("is_active") or 0) == 1
+                and (role != STAFF_ROLE_ADMIN or is_active != 1)
+            )
+            if target_user_id == current_admin_id and removes_admin_access:
+                raise HTTPException(status_code=400, detail="Нельзя отключить или понизить собственную учётную запись")
+            if removes_admin_access and await get_active_admin_count(cur) <= 1:
+                raise HTTPException(status_code=400, detail="Нельзя удалить или понизить последнего администратора")
+
+            await cur.execute(
+                """
+                UPDATE admin_users
+                SET role = %s, is_active = %s, granted_by = %s
+                WHERE user_id = %s
+                """,
+                (role, is_active, current_admin_id, target_user_id),
+            )
+    return {"status": "success", "user_id": target_user_id, "role": role, "is_active": is_active}
+
+
+@app.delete("/api/admin/staff/{target_user_id}")
+async def admin_staff_delete(target_user_id: int, admin=Depends(get_admin_user)):
+    target_user_id = int(target_user_id or 0)
+    current_admin_id = int(admin["user_id"])
+    if target_user_id == current_admin_id:
+        raise HTTPException(status_code=400, detail="Нельзя удалить собственную учётную запись")
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT user_id, role, is_active FROM admin_users WHERE user_id = %s LIMIT 1",
+                (target_user_id,),
+            )
+            existing = await cur.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Сотрудник не найден")
+            if (
+                str(existing.get("role") or "") == STAFF_ROLE_ADMIN
+                and int(existing.get("is_active") or 0) == 1
+                and await get_active_admin_count(cur) <= 1
+            ):
+                raise HTTPException(status_code=400, detail="Нельзя удалить последнего администратора")
+            await cur.execute("DELETE FROM admin_users WHERE user_id = %s", (target_user_id,))
+    return {"status": "success", "user_id": target_user_id}
+
+
 @app.get("/api/admin/admins")
 async def admin_admins(admin=Depends(get_admin_user)):
     async with db_pool.acquire() as conn:
@@ -2879,7 +3048,7 @@ async def admin_admins(admin=Depends(get_admin_user)):
                        u.username, u.first_name
                 FROM admin_users a
                 LEFT JOIN users u ON u.user_id = a.user_id
-                WHERE a.is_active = 1
+                WHERE a.is_active = 1 AND a.role = 'admin'
                 ORDER BY a.granted_at DESC
                 """
             )
@@ -2916,9 +3085,10 @@ async def admin_grant(request: Request, admin=Depends(get_admin_user)):
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                INSERT INTO admin_users (user_id, is_active, granted_by)
-                VALUES (%s, 1, %s)
+                INSERT INTO admin_users (user_id, role, is_active, granted_by)
+                VALUES (%s, 'admin', 1, %s)
                 ON DUPLICATE KEY UPDATE
+                    role = 'admin',
                     is_active = 1,
                     granted_by = VALUES(granted_by),
                     granted_at = CURRENT_TIMESTAMP
@@ -2945,7 +3115,7 @@ async def admin_revoke(request: Request, admin=Depends(get_admin_user)):
                 """
                 SELECT user_id
                 FROM admin_users
-                WHERE user_id = %s AND is_active = 1
+                WHERE user_id = %s AND is_active = 1 AND role = 'admin'
                 LIMIT 1
                 """,
                 (target_user_id,),
@@ -2954,7 +3124,7 @@ async def admin_revoke(request: Request, admin=Depends(get_admin_user)):
             if not existing_admin:
                 raise HTTPException(status_code=404, detail="Admin not found")
 
-            await cur.execute("SELECT COUNT(*) AS cnt FROM admin_users WHERE is_active = 1")
+            await cur.execute("SELECT COUNT(*) AS cnt FROM admin_users WHERE is_active = 1 AND role = 'admin'")
             active_count = int((await cur.fetchone() or {}).get("cnt") or 0)
             if target_user_id == current_admin_id and active_count <= 1:
                 raise HTTPException(status_code=400, detail="Cannot revoke the last active admin")
@@ -4507,7 +4677,7 @@ async def get_profile(user=Depends(get_telegram_user)):
                        CASE WHEN a.user_id IS NULL THEN 0 ELSE a.is_active END AS is_admin
                 FROM users u
                 LEFT JOIN presets p ON u.strategy_id = p.id
-                LEFT JOIN admin_users a ON a.user_id = u.user_id
+                LEFT JOIN admin_users a ON a.user_id = u.user_id AND a.role = 'admin'
                 LEFT JOIN user_mode_access fx ON fx.user_id = u.user_id AND fx.mode = 'forex'
                 LEFT JOIN user_mode_access bin ON bin.user_id = u.user_id AND bin.mode = 'binary'
                 WHERE u.user_id = %s
@@ -6157,6 +6327,182 @@ async def route_user_after_start(message: types.Message, user_id: int, user_name
 
     await send_channel_gate(message.chat.id)
     return False
+
+
+async def write_manager_stats_audit(
+    requested_by: int,
+    target_query: str,
+    result_status: str,
+    target_user_id: Optional[int] = None,
+) -> None:
+    if not db_pool:
+        return
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO manager_stats_audit
+                        (requested_by, target_query, target_user_id, result_status)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (
+                        int(requested_by),
+                        str(target_query or "")[:255],
+                        int(target_user_id) if target_user_id else None,
+                        str(result_status or "unknown")[:32],
+                    ),
+                )
+    except Exception as exc:
+        print(f"[Manager stats] audit failed: {exc}")
+
+
+def get_country_from_pocket_rows(rows: List[Dict[str, Any]]) -> str:
+    for row in rows or []:
+        country = str(row.get("country") or "").strip()
+        if country:
+            return country
+        raw_payload = row.get("raw_payload")
+        if not raw_payload:
+            continue
+        try:
+            payload = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        lowered = {str(key).lower(): value for key, value in payload.items()}
+        country = str(lowered.get("country") or "").strip()
+        if country:
+            return country[:32]
+    return ""
+
+
+async def get_manager_stats_summary(target_kind: str, target_value: Any) -> Optional[Dict[str, Any]]:
+    if not db_pool:
+        return None
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            if target_kind == "id":
+                await cur.execute(
+                    """
+                    SELECT user_id, username, first_name, country,
+                           COALESCE(pocket_deposit_amount, 0) AS deposit_amount
+                    FROM users
+                    WHERE user_id = %s
+                    LIMIT 1
+                    """,
+                    (int(target_value),),
+                )
+            else:
+                normalized_username = str(target_value or "").strip().lower().lstrip("@")
+                await cur.execute(
+                    """
+                    SELECT user_id, username, first_name, country,
+                           COALESCE(pocket_deposit_amount, 0) AS deposit_amount
+                    FROM users
+                    WHERE LOWER(COALESCE(username, '')) IN (%s, %s)
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (normalized_username, f"@{normalized_username}"),
+                )
+            user_row = await cur.fetchone()
+            if not user_row:
+                return None
+
+            user_id = int(user_row["user_id"])
+            await cur.execute(
+                """
+                SELECT
+                    COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS wins_total,
+                    COALESCE(SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END), 0) AS losses_total,
+                    COALESCE(SUM(
+                        CASE WHEN status = 'success'
+                                  AND COALESCE(closed_at, updated_at, created_at) >= NOW() - INTERVAL 7 DAY
+                             THEN 1 ELSE 0 END
+                    ), 0) AS wins_7d,
+                    COALESCE(SUM(
+                        CASE WHEN status = 'fail'
+                                  AND COALESCE(closed_at, updated_at, created_at) >= NOW() - INTERVAL 7 DAY
+                             THEN 1 ELSE 0 END
+                    ), 0) AS losses_7d
+                FROM user_analyses
+                WHERE user_id = %s
+                  AND status IN ('success', 'fail')
+                """,
+                (user_id,),
+            )
+            result_row = await cur.fetchone() or {}
+            await cur.execute(
+                """
+                SELECT
+                    MIN(
+                        CASE WHEN event_slug IN ('ftd', 'dep') AND status = 'deposited'
+                             THEN created_at ELSE NULL END
+                    ) AS first_deposit_at
+                FROM pocket_postback_events
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            deposit_row = await cur.fetchone() or {}
+
+            if not str(user_row.get("country") or "").strip():
+                await cur.execute(
+                    """
+                    SELECT country, raw_payload
+                    FROM pocket_postback_events
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                    """,
+                    (user_id,),
+                )
+                user_row["country"] = get_country_from_pocket_rows(await cur.fetchall())
+
+    return {
+        **user_row,
+        **result_row,
+        "first_deposit_at": deposit_row.get("first_deposit_at"),
+    }
+
+
+@dp.message(Command("stats"))
+async def cmd_manager_stats(message: types.Message):
+    if not message.from_user:
+        return
+    requester_id = int(message.from_user.id)
+    target_query = str(message.text or "").strip()
+    staff_role = await get_staff_role(requester_id)
+    if staff_role not in STAFF_ROLES:
+        await write_manager_stats_audit(requester_id, target_query, "denied")
+        await message.answer("Недостаточно прав")
+        return
+    if str(message.chat.type) not in {"private", "ChatType.PRIVATE"}:
+        await write_manager_stats_audit(requester_id, target_query, "private_chat_required")
+        await message.answer("Команда /stats доступна только в личном чате с ботом.")
+        return
+
+    target_kind, target_value = parse_stats_target(target_query)
+    if not target_kind:
+        await write_manager_stats_audit(requester_id, target_query, "invalid_query")
+        await message.answer("Использование: /stats @nickname или /stats 123456789")
+        return
+
+    summary = await get_manager_stats_summary(target_kind, target_value)
+    if not summary:
+        await write_manager_stats_audit(requester_id, target_query, "not_found")
+        await message.answer("Клиент не найден")
+        return
+
+    await write_manager_stats_audit(
+        requester_id,
+        target_query,
+        "success",
+        int(summary["user_id"]),
+    )
+    await message.answer(format_manager_stats(summary))
 
 
 @dp.message(CommandStart())

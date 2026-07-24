@@ -105,6 +105,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     pocket_deposited TINYINT(1) NOT NULL DEFAULT 0,
                     pocket_registered_at VARCHAR(64) NULL,
                     pocket_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+                    country VARCHAR(32) NULL,
                     pocket_checked_at TIMESTAMP NULL DEFAULT NULL,
                     balance DECIMAL(18,2) NOT NULL DEFAULT 0.00,
                     balance_sync_enabled TINYINT(1) NOT NULL DEFAULT 0,
@@ -230,9 +231,25 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 """
                 CREATE TABLE IF NOT EXISTS admin_users (
                     user_id BIGINT NOT NULL PRIMARY KEY,
+                    role VARCHAR(16) NOT NULL DEFAULT 'admin',
                     is_active TINYINT(1) NOT NULL DEFAULT 1,
                     granted_by BIGINT NULL,
                     granted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS manager_stats_audit (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    requested_by BIGINT NOT NULL,
+                    target_query VARCHAR(255) NOT NULL,
+                    target_user_id BIGINT NULL,
+                    result_status VARCHAR(32) NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    KEY idx_manager_stats_audit_requester (requested_by, created_at),
+                    KEY idx_manager_stats_audit_target (target_user_id, created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -371,6 +388,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     click_id VARCHAR(128) NULL,
                     trader_id VARCHAR(64) NULL,
                     deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+                    country VARCHAR(32) NULL,
                     site_id VARCHAR(128) NULL,
                     cid VARCHAR(128) NULL,
                     sub_id1 VARCHAR(255) NULL,
@@ -448,6 +466,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "users", "pocket_deposited", "ALTER TABLE users ADD COLUMN pocket_deposited TINYINT(1) NOT NULL DEFAULT 0")
         await _ensure_column(conn, db_name, "users", "pocket_registered_at", "ALTER TABLE users ADD COLUMN pocket_registered_at VARCHAR(64) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_deposit_amount", "ALTER TABLE users ADD COLUMN pocket_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00")
+        await _ensure_column(conn, db_name, "users", "country", "ALTER TABLE users ADD COLUMN country VARCHAR(32) NULL AFTER pocket_deposit_amount")
         await _ensure_column(conn, db_name, "users", "pocket_checked_at", "ALTER TABLE users ADD COLUMN pocket_checked_at TIMESTAMP NULL DEFAULT NULL")
         await _ensure_column(conn, db_name, "users", "balance", "ALTER TABLE users ADD COLUMN balance DECIMAL(18,2) NOT NULL DEFAULT 0.00")
         await _ensure_column(conn, db_name, "users", "balance_sync_enabled", "ALTER TABLE users ADD COLUMN balance_sync_enabled TINYINT(1) NOT NULL DEFAULT 0")
@@ -562,6 +581,17 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             "ALTER TABLE ai_chats ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
         )
 
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_users",
+            "role",
+            "ALTER TABLE admin_users ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'admin' AFTER user_id",
+        )
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE admin_users SET role = 'admin' WHERE role IS NULL OR role NOT IN ('manager', 'admin')"
+            )
         await _ensure_column(
             conn,
             db_name,
@@ -700,6 +730,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_index(conn, db_name, "users", "idx_users_strategy_id", "CREATE INDEX idx_users_strategy_id ON users(strategy_id)")
         await _ensure_index(conn, db_name, "users", "idx_users_balance_sync", "CREATE INDEX idx_users_balance_sync ON users(balance_sync_enabled, balance_synced_at)")
         await _ensure_index(conn, db_name, "admin_users", "idx_admin_users_active", "CREATE INDEX idx_admin_users_active ON admin_users(is_active)")
+        await _ensure_index(conn, db_name, "admin_users", "idx_admin_users_role_active", "CREATE INDEX idx_admin_users_role_active ON admin_users(role, is_active)")
         await _ensure_index(
             conn,
             db_name,
@@ -738,6 +769,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "pocket_postback_events", "provider_event_id", "ALTER TABLE pocket_postback_events ADD COLUMN provider_event_id VARCHAR(128) NULL AFTER sub_id2")
         await _ensure_column(conn, db_name, "pocket_postback_events", "payload_fingerprint", "ALTER TABLE pocket_postback_events ADD COLUMN payload_fingerprint CHAR(64) NULL AFTER provider_event_id")
         await _ensure_column(conn, db_name, "pocket_postback_events", "deposit_amount", "ALTER TABLE pocket_postback_events ADD COLUMN deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00 AFTER trader_id")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "country", "ALTER TABLE pocket_postback_events ADD COLUMN country VARCHAR(32) NULL AFTER deposit_amount")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_request_url", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_request_url TEXT NULL")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_status", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_status VARCHAR(32) NULL")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_response_status", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_response_status INT NULL")
@@ -1052,9 +1084,9 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 default_admin_user_id = 7097261848
             await cur.execute(
                 """
-                INSERT INTO admin_users (user_id, is_active, granted_by)
-                VALUES (%s, 1, %s)
-                ON DUPLICATE KEY UPDATE is_active = 1
+                INSERT INTO admin_users (user_id, role, is_active, granted_by)
+                VALUES (%s, 'admin', 1, %s)
+                ON DUPLICATE KEY UPDATE role = 'admin', is_active = 1
                 """,
                 (default_admin_user_id, default_admin_user_id),
             )

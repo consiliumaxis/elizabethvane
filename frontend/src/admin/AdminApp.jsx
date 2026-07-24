@@ -5,11 +5,13 @@ import BroadcastPage from './pages/BroadcastPage';
 import SettingsPage from './pages/SettingsPage';
 import StrategiesPage from './pages/StrategiesPage';
 import AIChatterPage from './pages/AIChatterPage';
+import ManagersPage from './pages/ManagersPage';
 import './admin.css';
 
 const TABS = [
   { id: 'stats', label: 'Статистика' },
   { id: 'users', label: 'Пользователи' },
+  { id: 'managers', label: 'Менеджеры' },
   { id: 'broadcast', label: 'Рассылка' },
   { id: 'settings', label: 'Настройки' },
   { id: 'strategies', label: 'Стратегии' },
@@ -62,8 +64,9 @@ export default function AdminApp({ adminUser, authError }) {
       <main className="admin-page">
         {activeTab === 'stats' && <StatsPage />}
         {activeTab === 'users' && <UsersPage />}
+        {activeTab === 'managers' && <ManagersPage adminUser={adminUser} />}
         {activeTab === 'broadcast' && <BroadcastPage />}
-        {activeTab === 'settings' && <SettingsPage adminUser={adminUser} />}
+        {activeTab === 'settings' && <SettingsPage />}
         {activeTab === 'strategies' && <StrategiesPage />}
         {activeTab === 'aichatter' && <AIChatterPage />}
       </main>

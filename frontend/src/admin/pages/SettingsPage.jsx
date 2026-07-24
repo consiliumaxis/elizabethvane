@@ -349,15 +349,12 @@ const buildPreviewSignals = ({
   };
 };
 
-export default function SettingsPage({ adminUser }) {
+export default function SettingsPage() {
   const [activeSection, setActiveSection] = useState('menu');
   const [model, setModel] = useState('gpt-4o-mini');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [openAiApiKey, setOpenAiApiKey] = useState('');
   const [openAiKeyConfigured, setOpenAiKeyConfigured] = useState(false);
-  const [admins, setAdmins] = useState([]);
-  const [grantId, setGrantId] = useState('');
-
   const [streamEnabled, setStreamEnabled] = useState(false);
   const [streamScope, setStreamScope] = useState('all');
   const [streamStrategyId, setStreamStrategyId] = useState('');
@@ -399,18 +396,13 @@ export default function SettingsPage({ adminUser }) {
   const loadAll = useCallback(async () => {
     setError('');
     try {
-      const [settingsRes, adminsRes] = await Promise.all([
-        apiAdminFetchJson('/api/admin/settings'),
-        apiAdminFetchJson('/api/admin/admins'),
-      ]);
+      const settingsRes = await apiAdminFetchJson('/api/admin/settings');
 
       const ai = settingsRes?.settings?.ai || {};
       setModel(ai.model || 'gpt-4o-mini');
       setSystemPrompt(ai.system_prompt || '');
       setOpenAiApiKey('');
       setOpenAiKeyConfigured(Boolean(ai.openai_key_configured));
-      setAdmins(adminsRes.admins || []);
-
       const streams = settingsRes?.settings?.streams || {};
       setStreamEnabled(Boolean(Number(streams.is_enabled || 0)));
       setStreamScope((streams.scope || 'all') === 'strategy' ? 'strategy' : 'all');
@@ -750,40 +742,6 @@ export default function SettingsPage({ adminUser }) {
     }
   };
 
-  const grantAdmin = async () => {
-    const userId = Number(grantId);
-    if (!userId) return;
-
-    setError('');
-    setStatus('');
-    try {
-      await apiAdminFetchJson('/api/admin/admins/grant', {
-        method: 'POST',
-        body: JSON.stringify({ user_id: userId }),
-      });
-      setGrantId('');
-      setStatus(`Админка выдана: ${userId}`);
-      await loadAll();
-    } catch (e) {
-      setError(e.message || 'Не удалось выдать админку');
-    }
-  };
-
-  const revokeAdmin = async (userId) => {
-    setError('');
-    setStatus('');
-    try {
-      await apiAdminFetchJson('/api/admin/admins/revoke', {
-        method: 'POST',
-        body: JSON.stringify({ user_id: userId }),
-      });
-      setStatus(`Админка снята: ${userId}`);
-      await loadAll();
-    } catch (e) {
-      setError(e.message || 'Не удалось снять админку');
-    }
-  };
-
   const setIndicatorSignal = (indicatorNorm, signal) => {
     setStreamIndicatorOverrides((prev) => {
       const next = { ...prev };
@@ -997,14 +955,8 @@ export default function SettingsPage({ adminUser }) {
         title: 'API',
         subtitle: pocketPartnerId || pocketApiTokenConfigured ? `Pocket: ${pocketPartnerId || '-'} ${pocketApiTokenMasked || ''}` : 'Pocket API не настроен',
       },
-      {
-        key: 'admins',
-        icon: '🛡️',
-        title: 'Выдать админку',
-        subtitle: `Текущих админов: ${admins.length}`,
-      },
     ],
-    [admins.length, channelUrl, checkSubscriptionEnabled, model, pocketApiTokenConfigured, pocketApiTokenMasked, pocketPartnerId, streamEnabled, supportUrl, systemAccessPolicy]
+    [model, pocketApiTokenConfigured, pocketApiTokenMasked, pocketPartnerId, streamEnabled, systemAccessPolicy]
   );
 
   const goMenu = () => {
@@ -1954,42 +1906,10 @@ export default function SettingsPage({ adminUser }) {
   return (
     <div className="admin-card admin-settings-detail">
       <div className="admin-row-between">
-        <h3 className="admin-section-title">Выдать админку</h3>
+        <h3 className="admin-section-title">Раздел не найден</h3>
         <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
       </div>
-
-      <div className="admin-inline-form">
-        <input
-          className="admin-input"
-          inputMode="numeric"
-          placeholder="Введите user_id"
-          value={grantId}
-          onChange={(e) => setGrantId(e.target.value.replace(/\D/g, ''))}
-        />
-        <button className="admin-btn" onClick={grantAdmin}>Выдать</button>
-      </div>
-
-      <h4 className="admin-subtitle">Текущие админы</h4>
-      <div className="admin-list">
-        {admins.map((item) => (
-          <div className="admin-list-row" key={item.user_id}>
-            <span>
-              {item.first_name || item.username || 'Админ'} | {item.user_id}
-            </span>
-            <button
-              className="admin-btn-outline"
-              disabled={Number(item.user_id) === Number(adminUser?.user_id)}
-              onClick={() => revokeAdmin(item.user_id)}
-            >
-              Забрать
-            </button>
-          </div>
-        ))}
-        {admins.length === 0 ? <div className="admin-muted">Список админов пуст</div> : null}
-      </div>
-
-      {error ? <div className="admin-error">{error}</div> : null}
-      {status ? <div className="admin-success">{status}</div> : null}
+      <div className="admin-muted">Вернитесь к списку настроек.</div>
     </div>
   );
 }
