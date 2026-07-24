@@ -34,8 +34,15 @@ class StrategyPromotionTest(unittest.TestCase):
 
         self.assertIn("can_toggle_system", source)
         self.assertIn("Сделать системной", source)
+        self.assertIn("admin-system-switch-track", source)
         self.assertIn("Владелец сохраняется", source)
         self.assertIn("is_system: form.is_system", source)
+
+    def test_empty_timeframes_mean_all_and_do_not_block_promotion(self):
+        source = (PROJECT_ROOT / "frontend/src/admin/pages/StrategiesPage.jsx").read_text(encoding="utf-8")
+
+        self.assertNotIn("Выберите хотя бы один таймфрейм", source)
+        self.assertIn("стратегия доступна для всех таймфреймов", source)
 
 
 if __name__ == "__main__":

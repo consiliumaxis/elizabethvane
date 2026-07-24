@@ -218,10 +218,6 @@ export default function StrategiesPage() {
       setError('Название стратегии обязательно');
       return;
     }
-    if (!form.timeframes.length) {
-      setError('Выберите хотя бы один таймфрейм');
-      return;
-    }
 
     const publicWinrate = form.public_winrate === '' ? null : Number(form.public_winrate);
     if (publicWinrate !== null && (!Number.isFinite(publicWinrate) || publicWinrate < 0 || publicWinrate > 100)) {
@@ -448,6 +444,11 @@ export default function StrategiesPage() {
               );
             })}
           </div>
+          <div className="admin-note admin-timeframe-hint">
+            {form.timeframes.length
+              ? `Выбрано: ${form.timeframes.join(', ')}`
+              : 'Ничего не выбрано — стратегия доступна для всех таймфреймов.'}
+          </div>
         </div>
 
         <div className="admin-field">
@@ -466,20 +467,38 @@ export default function StrategiesPage() {
           <div className="admin-note">Текущий расчетный winrate по истории: {formatPercent(form.winrate)}.</div>
         </div>
 
-        <div className="admin-row-between">
+        <div className="admin-strategy-system-row">
           {form.can_toggle_system ? (
-            <label className="admin-muted">
+            <label className={`admin-system-toggle-card ${form.is_system ? 'is-on' : 'is-off'}`}>
               <input
+                className="admin-system-switch-input"
                 type="checkbox"
                 checked={form.is_system}
                 onChange={(e) => setForm((prev) => ({ ...prev, is_system: e.target.checked }))}
-              />{' '}
-              {form.is_system ? 'Системная — доступна всем пользователям' : 'Сделать системной'}
+                aria-label="Сделать стратегию системной"
+              />
+              <span className="admin-system-switch-track" aria-hidden="true">
+                <span className="admin-system-switch-thumb" />
+              </span>
+              <span className="admin-system-toggle-copy">
+                <strong>{form.is_system ? 'Системная стратегия' : 'Сделать системной'}</strong>
+                <small>
+                  {form.is_system
+                    ? 'Сейчас доступна всем пользователям'
+                    : 'Включите, чтобы добавить её в общий список'}
+                </small>
+              </span>
+              <span className="admin-system-toggle-status">{form.is_system ? 'ВКЛ' : 'ВЫКЛ'}</span>
             </label>
           ) : (
-            <div className="admin-note">Встроенная системная стратегия. Её нельзя перевести в пользовательские.</div>
+            <div className="admin-system-toggle-card is-locked">
+              <span className="admin-system-toggle-copy">
+                <strong>Встроенная системная стратегия</strong>
+                <small>Её нельзя перевести в пользовательские</small>
+              </span>
+            </div>
           )}
-          <div className="admin-muted">ID: {form.id}</div>
+          <div className="admin-strategy-id-badge">ID: {form.id}</div>
         </div>
         {form.can_toggle_system ? (
           <div className="admin-note">
