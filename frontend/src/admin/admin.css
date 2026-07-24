@@ -2347,7 +2347,27 @@
   }
 
   .admin-strategy-summary-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .admin-strategy-summary-card {
+    padding: 11px;
+  }
+
+  .admin-strategy-summary-item {
+    min-height: 70px;
+    padding: 9px 8px;
+  }
+
+  .admin-strategy-summary-item .admin-metric-label {
+    font-size: 0.72rem;
+    line-height: 1.2;
+  }
+
+  .admin-strategy-summary-item .admin-metric-value.small {
+    margin-top: 5px;
+    font-size: 1.12rem;
   }
 
   .admin-strategy-metrics-grid {

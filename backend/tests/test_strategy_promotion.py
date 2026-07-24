@@ -63,6 +63,14 @@ class StrategyPromotionTest(unittest.TestCase):
         self.assertGreaterEqual(styles.count("grid-template-columns: repeat(3, minmax(0, 1fr))"), 2)
         self.assertIn(".admin-strategy-mini-card .admin-metric-value.small", styles)
 
+    def test_strategy_summary_stays_compact_on_mobile(self):
+        source = (PROJECT_ROOT / "frontend/src/admin/pages/StrategiesPage.jsx").read_text(encoding="utf-8")
+        styles = (PROJECT_ROOT / "frontend/src/admin/admin.css").read_text(encoding="utf-8")
+
+        self.assertIn('<div className="admin-metric-label">Всего</div>', source)
+        self.assertIn(".admin-strategy-summary-item .admin-metric-label", styles)
+        self.assertIn(".admin-strategy-summary-item .admin-metric-value.small", styles)
+
 
 if __name__ == "__main__":
     unittest.main()

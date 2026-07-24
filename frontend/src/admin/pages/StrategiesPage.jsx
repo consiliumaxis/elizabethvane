@@ -607,7 +607,7 @@ export default function StrategiesPage() {
         <h3 className="admin-section-title">Стратегии</h3>
         <div className="admin-strategy-summary-grid">
           <div className="admin-strategy-summary-item">
-            <div className="admin-metric-label">Всего стратегий</div>
+            <div className="admin-metric-label">Всего</div>
             <div className="admin-metric-value small">{computedSummary.total}</div>
           </div>
           <div className="admin-strategy-summary-item system">
