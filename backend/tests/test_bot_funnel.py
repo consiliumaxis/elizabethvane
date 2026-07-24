@@ -8,6 +8,7 @@ from bot_funnel import (
     CHANNEL_SUBSCRIBE_EVENT,
     DEFAULT_CHANNEL_ID,
     DEFAULT_CHANNEL_URL,
+    DEFAULT_FINAL_MESSAGE_CONFIG,
     QUIZ_COMPLETE_EVENT,
     get_aio_question_field,
     get_quiz_options,
@@ -18,8 +19,10 @@ from bot_funnel import (
     is_valid_quiz_step,
     map_quiz_answer_locally,
     normalize_channel_settings,
+    normalize_final_message_config,
     normalize_quiz_answer,
     normalize_quiz_config,
+    validate_final_message_config,
 )
 
 
@@ -77,6 +80,62 @@ class BotFunnelTest(unittest.TestCase):
         self.assertEqual(custom["check_subscription_enabled"], 0)
         self.assertEqual(custom["support_url"], "https://t.me/support")
 
+    def test_final_message_config_preserves_button_order_and_types(self):
+        config = validate_final_message_config(
+            {
+                "enabled": True,
+                "trigger_button_text": "Continue",
+                "message_text": "Choose the next step",
+                "buttons": [
+                    {
+                        "id": "register",
+                        "type": "url",
+                        "text": "Register",
+                        "url": "t.me/example",
+                    },
+                    {
+                        "id": "menu",
+                        "type": "menu",
+                        "text": "Open app",
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(config["trigger_button_text"], "Continue")
+        self.assertEqual([button["id"] for button in config["buttons"]], ["register", "menu"])
+        self.assertEqual(config["buttons"][0]["url"], "https://t.me/example")
+        self.assertEqual(config["buttons"][1]["type"], "menu")
+
+    def test_final_message_config_rejects_unsafe_or_ambiguous_buttons(self):
+        with self.assertRaisesRegex(ValueError, "полную HTTP"):
+            validate_final_message_config(
+                {
+                    "enabled": True,
+                    "trigger_button_text": "Continue",
+                    "message_text": "Done",
+                    "buttons": [{"type": "url", "text": "Bad", "url": "javascript:alert(1)"}],
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "только одну"):
+            validate_final_message_config(
+                {
+                    "enabled": True,
+                    "trigger_button_text": "Continue",
+                    "message_text": "Done",
+                    "buttons": [
+                        {"type": "menu", "text": "App 1"},
+                        {"type": "menu", "text": "App 2"},
+                    ],
+                }
+            )
+
+    def test_final_message_config_has_backward_compatible_default(self):
+        config = normalize_final_message_config(None)
+
+        self.assertEqual(config["message_text"], DEFAULT_FINAL_MESSAGE_CONFIG["message_text"])
+        self.assertEqual(config["buttons"][0]["type"], "menu")
+
     def test_detects_active_channel_memberships_and_events(self):
         for status in ("member", "administrator", "creator"):
             self.assertTrue(is_active_channel_member(status))
@@ -101,15 +160,20 @@ class BotFunnelTest(unittest.TestCase):
         )
         self.assertTrue((PROJECT_ROOT / "backend" / "assets" / "elizabeth_start_video_note.mp4").exists())
 
-    def test_go_to_trading_opens_menu_after_channel_click(self):
+    def test_go_to_trading_shows_configured_final_message_with_menu_fallback(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 
         callback_handler = source.split("async def handle_funnel_continue", 1)[1].split(
             "@dp.callback_query", 1
         )[0]
         self.assertIn("SELECT channel_subscribed_at FROM user_onboarding", callback_handler)
+        self.assertIn("await show_funnel_final_message(callback)", callback_handler)
         self.assertIn("await send_main_menu", callback_handler)
         self.assertNotIn("await start_ai_chatter_from_callback(callback)", callback_handler)
+
+        self.assertIn("def build_funnel_final_keyboard", source)
+        self.assertIn('web_app=WebAppInfo(url=web_app_url)', source)
+        self.assertIn("await callback.message.edit_text", source)
 
     def test_open_channel_redirect_sends_subscription_event_and_starts_ai(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")

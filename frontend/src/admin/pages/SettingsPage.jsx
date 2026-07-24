@@ -77,6 +77,82 @@ const DEFAULT_QUIZ_CONFIG = {
     ],
   },
 };
+const FINAL_MESSAGE_MAX_BUTTONS = 8;
+const DEFAULT_FINAL_MESSAGE_CONFIG = {
+  enabled: true,
+  trigger_button_text: 'Go to trading',
+  message_text: "You're all set. Choose what you'd like to do next.",
+  buttons: [
+    {
+      id: 'open_menu',
+      type: 'menu',
+      text: 'Open Elizabeth Vane',
+      url: '',
+    },
+  ],
+};
+
+const createFinalButtonId = () =>
+  `button_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+
+const normalizeFinalMessageConfig = (rawConfig) => {
+  const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+  const rawButtons = Array.isArray(source.buttons)
+    ? source.buttons
+    : DEFAULT_FINAL_MESSAGE_CONFIG.buttons;
+  const usedIds = new Set();
+  const buttons = rawButtons.slice(0, FINAL_MESSAGE_MAX_BUTTONS).map((rawButton, index) => {
+    const item = rawButton && typeof rawButton === 'object' ? rawButton : {};
+    const type = item.type === 'menu' ? 'menu' : 'url';
+    let id = String(item.id || `button_${index + 1}`).replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 48);
+    if (!id) id = `button_${index + 1}`;
+    let uniqueId = id;
+    let suffix = 2;
+    while (usedIds.has(uniqueId)) {
+      uniqueId = `${id}_${suffix}`.slice(0, 48);
+      suffix += 1;
+    }
+    usedIds.add(uniqueId);
+    return {
+      id: uniqueId,
+      type,
+      text: String(item.text || '').slice(0, 64),
+      url: type === 'url' ? String(item.url || '').slice(0, 1000) : '',
+    };
+  });
+  return {
+    enabled: source.enabled === undefined
+      ? DEFAULT_FINAL_MESSAGE_CONFIG.enabled
+      : Boolean(Number(source.enabled) || source.enabled === true),
+    trigger_button_text: String(
+      source.trigger_button_text || DEFAULT_FINAL_MESSAGE_CONFIG.trigger_button_text
+    ).slice(0, 64),
+    message_text: String(
+      source.message_text || DEFAULT_FINAL_MESSAGE_CONFIG.message_text
+    ).slice(0, 3500),
+    buttons,
+  };
+};
+
+const normalizeFinalButtonUrl = (value) => {
+  let raw = String(value || '').trim();
+  if (raw.startsWith('@')) raw = `https://t.me/${raw.slice(1).replace(/^\/+/, '')}`;
+  if (raw.startsWith('t.me/')) raw = `https://${raw}`;
+  return raw;
+};
+
+const isValidFinalButtonUrl = (value) => {
+  const normalized = normalizeFinalButtonUrl(value);
+  try {
+    const url = new URL(normalized);
+    return (
+      ((url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.host))
+      || (url.protocol === 'tg:' && Boolean(url.host || url.pathname))
+    );
+  } catch {
+    return false;
+  }
+};
 
 const normalizeIndicatorKey = (value) =>
   String(value || '')
@@ -306,6 +382,10 @@ export default function SettingsPage({ adminUser }) {
   const [checkSubscriptionEnabled, setCheckSubscriptionEnabled] = useState(true);
   const [supportUrl, setSupportUrl] = useState('');
   const [quizConfig, setQuizConfig] = useState(() => normalizeQuizConfig());
+  const [funnelEditorTab, setFunnelEditorTab] = useState('quiz');
+  const [finalMessageConfig, setFinalMessageConfig] = useState(() =>
+    normalizeFinalMessageConfig(DEFAULT_FINAL_MESSAGE_CONFIG)
+  );
   const [pocketPartnerId, setPocketPartnerId] = useState('');
   const [pocketApiToken, setPocketApiToken] = useState('');
   const [pocketApiTokenMasked, setPocketApiTokenMasked] = useState('');
@@ -384,6 +464,7 @@ export default function SettingsPage({ adminUser }) {
       setCheckSubscriptionEnabled(Boolean(Number(support.check_subscription_enabled ?? 1)));
       setSupportUrl(support.support_url || '');
       setQuizConfig(normalizeQuizConfig(support.quiz_config));
+      setFinalMessageConfig(normalizeFinalMessageConfig(support.final_message_config));
 
       const pocket = settingsRes?.settings?.pocket_api || {};
       setPocketPartnerId(pocket.partner_id || '');
@@ -515,6 +596,17 @@ export default function SettingsPage({ adminUser }) {
       setError('Минимальная сумма депозита должна быть числом');
       return;
     }
+    const preparedFinalMessageConfig = {
+      enabled: Boolean(finalMessageConfig.enabled),
+      trigger_button_text: String(finalMessageConfig.trigger_button_text || '').trim(),
+      message_text: String(finalMessageConfig.message_text || '').trim(),
+      buttons: finalMessageConfig.buttons.map((button) => ({
+        id: button.id,
+        type: button.type,
+        text: String(button.text || '').trim(),
+        url: button.type === 'url' ? normalizeFinalButtonUrl(button.url) : '',
+      })),
+    };
     if (shouldSaveSupport) {
       const preparedQuiz = normalizeQuizConfig(quizConfig);
       const invalidStep = QUIZ_STEPS.find((step) => {
@@ -523,6 +615,40 @@ export default function SettingsPage({ adminUser }) {
       });
       if (invalidStep) {
         setError(`Заполните вопрос и хотя бы один вариант ответа: ${invalidStep.title}`);
+        return;
+      }
+      if (!preparedFinalMessageConfig.trigger_button_text) {
+        setError('Укажите название кнопки перехода после подписки');
+        setFunnelEditorTab('final');
+        return;
+      }
+      if (preparedFinalMessageConfig.enabled && !preparedFinalMessageConfig.message_text) {
+        setError('Укажите текст финального сообщения');
+        setFunnelEditorTab('final');
+        return;
+      }
+      if (
+        preparedFinalMessageConfig.enabled
+        && preparedFinalMessageConfig.buttons.length === 0
+      ) {
+        setError('Добавьте хотя бы одну кнопку финального сообщения');
+        setFunnelEditorTab('final');
+        return;
+      }
+      const menuButtons = preparedFinalMessageConfig.buttons.filter((button) => button.type === 'menu');
+      if (menuButtons.length > 1) {
+        setError('Можно добавить только одну кнопку открытия меню');
+        setFunnelEditorTab('final');
+        return;
+      }
+      const invalidFinalButtonIndex = preparedFinalMessageConfig.buttons.findIndex((button) => (
+        !button.text
+        || !['url', 'menu'].includes(button.type)
+        || (button.type === 'url' && !isValidFinalButtonUrl(button.url))
+      ));
+      if (invalidFinalButtonIndex >= 0) {
+        setError(`Проверьте название и ссылку кнопки ${invalidFinalButtonIndex + 1}`);
+        setFunnelEditorTab('final');
         return;
       }
     }
@@ -569,6 +695,7 @@ export default function SettingsPage({ adminUser }) {
           check_subscription_enabled: checkSubscriptionEnabled,
           support_url: supportUrl.trim(),
           quiz_config: normalizeQuizConfig(quizConfig),
+          final_message_config: preparedFinalMessageConfig,
         };
       }
 
@@ -740,6 +867,87 @@ export default function SettingsPage({ adminUser }) {
     }));
   };
 
+  const updateFinalMessageField = (field, value) => {
+    setFinalMessageConfig((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const addFinalMessageButton = (type) => {
+    setError('');
+    if (finalMessageConfig.buttons.length >= FINAL_MESSAGE_MAX_BUTTONS) {
+      setError(`Можно добавить не более ${FINAL_MESSAGE_MAX_BUTTONS} кнопок`);
+      return;
+    }
+    if (type === 'menu' && finalMessageConfig.buttons.some((button) => button.type === 'menu')) {
+      setError('Кнопка открытия меню уже добавлена');
+      return;
+    }
+    setFinalMessageConfig((prev) => ({
+      ...prev,
+      buttons: [
+        ...prev.buttons,
+        {
+          id: createFinalButtonId(),
+          type,
+          text: type === 'menu' ? 'Open Elizabeth Vane' : 'Open link',
+          url: type === 'url' ? 'https://' : '',
+        },
+      ],
+    }));
+  };
+
+  const updateFinalMessageButton = (buttonId, patch) => {
+    setFinalMessageConfig((prev) => ({
+      ...prev,
+      buttons: prev.buttons.map((button) => (
+        button.id === buttonId
+          ? {
+              ...button,
+              ...patch,
+              url: patch.type === 'menu' ? '' : (patch.url ?? button.url),
+            }
+          : button
+      )),
+    }));
+  };
+
+  const changeFinalMessageButtonType = (buttonId, type) => {
+    if (
+      type === 'menu'
+      && finalMessageConfig.buttons.some((button) => button.type === 'menu' && button.id !== buttonId)
+    ) {
+      setError('Можно добавить только одну кнопку открытия меню');
+      return;
+    }
+    setError('');
+    updateFinalMessageButton(buttonId, { type, url: type === 'url' ? 'https://' : '' });
+  };
+
+  const removeFinalMessageButton = (buttonId) => {
+    setFinalMessageConfig((prev) => ({
+      ...prev,
+      buttons: prev.buttons.filter((button) => button.id !== buttonId),
+    }));
+  };
+
+  const moveFinalMessageButton = (buttonId, direction) => {
+    setFinalMessageConfig((prev) => {
+      const index = prev.buttons.findIndex((button) => button.id === buttonId);
+      const targetIndex = index + direction;
+      if (index < 0 || targetIndex < 0 || targetIndex >= prev.buttons.length) return prev;
+      const buttons = [...prev.buttons];
+      [buttons[index], buttons[targetIndex]] = [buttons[targetIndex], buttons[index]];
+      return { ...prev, buttons };
+    });
+  };
+
+  const resetFinalMessage = () => {
+    setFinalMessageConfig(normalizeFinalMessageConfig(DEFAULT_FINAL_MESSAGE_CONFIG));
+    setError('');
+  };
+
   const cards = useMemo(
     () => [
       {
@@ -763,8 +971,8 @@ export default function SettingsPage({ adminUser }) {
       {
         key: 'support',
         icon: '🔗',
-        title: 'Старт и канал',
-        subtitle: 'Опросник и событие подписки из Chatterfy',
+        title: 'Воронка бота',
+        subtitle: 'Опросник, подписка и финальное сообщение',
       },
       {
         key: 'pocket',
@@ -1277,148 +1485,384 @@ export default function SettingsPage({ adminUser }) {
 
   if (activeSection === 'support') {
     const visibleQuizConfig = normalizeQuizConfig(quizConfig);
+    const hasMenuButton = finalMessageConfig.buttons.some((button) => button.type === 'menu');
     return (
       <div className="admin-card admin-settings-detail">
         <div className="admin-row-between">
-          <h3 className="admin-section-title">Старт и канал</h3>
+          <h3 className="admin-section-title">Воронка бота</h3>
           <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
         </div>
 
         <div className="admin-muted">
-          Эти настройки используются в Telegram-воронке: стартовый опросник, кнопки ответов и переход в канал.
+          Настройки основной Telegram-воронки Elizabeth Bot. Не относятся к AI Chatter и воронке кружков.
         </div>
 
-        <div className="admin-funnel-quiz">
-          <div className="admin-funnel-head">
-            <div>
-              <div className="admin-funnel-title">Стартовый опросник</div>
-              <div className="admin-muted">Каждый вариант станет отдельной inline-кнопкой в Telegram.</div>
-            </div>
+        <div className="admin-funnel-tabs" role="tablist" aria-label="Разделы воронки">
+          {[
+            ['quiz', 'Опросник'],
+            ['channel', 'Подписка'],
+            ['final', 'Финал'],
+          ].map(([key, label]) => (
             <button
+              key={key}
               type="button"
-              className="admin-btn-outline"
-              onClick={() => setQuizConfig(normalizeQuizConfig())}
+              role="tab"
+              aria-selected={funnelEditorTab === key}
+              className={funnelEditorTab === key ? 'active' : ''}
+              onClick={() => {
+                setFunnelEditorTab(key);
+                setError('');
+              }}
             >
-              Сбросить все
+              {label}
             </button>
-          </div>
+          ))}
+        </div>
 
-          {QUIZ_STEPS.map((step) => {
-            const item = visibleQuizConfig[step.key];
-            return (
-              <div className="admin-quiz-card" key={step.key}>
-                <div className="admin-row-between">
-                  <div>
-                    <div className="admin-quiz-title">{step.title}</div>
-                    <div className="admin-muted">{step.hint}</div>
+        {funnelEditorTab === 'quiz' ? (
+          <div className="admin-funnel-quiz">
+            <div className="admin-funnel-head">
+              <div>
+                <div className="admin-funnel-title">Стартовый опросник</div>
+                <div className="admin-muted">Каждый вариант станет отдельной inline-кнопкой в Telegram.</div>
+              </div>
+              <button
+                type="button"
+                className="admin-btn-outline"
+                onClick={() => setQuizConfig(normalizeQuizConfig())}
+              >
+                Сбросить все
+              </button>
+            </div>
+
+            {QUIZ_STEPS.map((step) => {
+              const item = visibleQuizConfig[step.key];
+              return (
+                <div className="admin-quiz-card" key={step.key}>
+                  <div className="admin-row-between">
+                    <div>
+                      <div className="admin-quiz-title">{step.title}</div>
+                      <div className="admin-muted">{step.hint}</div>
+                    </div>
+                    <button type="button" className="admin-mini-action" onClick={() => resetQuizStep(step.key)}>
+                      Сбросить
+                    </button>
                   </div>
-                  <button type="button" className="admin-mini-action" onClick={() => resetQuizStep(step.key)}>
-                    Сбросить
-                  </button>
+
+                  <label className="admin-label">Текст вопроса</label>
+                  <textarea
+                    className="admin-input admin-textarea admin-quiz-question"
+                    value={item.question}
+                    onChange={(e) => updateQuizQuestion(step.key, e.target.value)}
+                    rows={3}
+                    maxLength={600}
+                  />
+
+                  <div className="admin-quiz-options-head">
+                    <label className="admin-label">Кнопки ответов</label>
+                    <button
+                      type="button"
+                      className="admin-mini-action"
+                      onClick={() => addQuizOption(step.key)}
+                      disabled={item.options.length >= 8}
+                    >
+                      + Вариант
+                    </button>
+                  </div>
+
+                  <div className="admin-quiz-options">
+                    {item.options.map((option, index) => (
+                      <div className="admin-quiz-option-row" key={`${step.key}-${index}`}>
+                        <span className="admin-quiz-option-index">{index + 1}</span>
+                        <input
+                          className="admin-input"
+                          value={option}
+                          onChange={(e) => updateQuizOption(step.key, index, e.target.value)}
+                          maxLength={64}
+                        />
+                        <button
+                          type="button"
+                          className="admin-mini-action danger"
+                          onClick={() => removeQuizOption(step.key, index)}
+                          disabled={item.options.length <= 1}
+                        >
+                          Удалить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+        ) : null}
 
-                <label className="admin-label">Текст вопроса</label>
-                <textarea
-                  className="admin-input admin-textarea admin-quiz-question"
-                  value={item.question}
-                  onChange={(e) => updateQuizQuestion(step.key, e.target.value)}
-                  rows={3}
-                  maxLength={600}
-                />
+        {funnelEditorTab === 'channel' ? (
+          <div className="admin-funnel-panel">
+            <div className="admin-funnel-head">
+              <div>
+                <div className="admin-funnel-title">Подписка и канал</div>
+                <div className="admin-muted">Проверка доступа перед переходом к финальному сообщению.</div>
+              </div>
+            </div>
 
-                <div className="admin-quiz-options-head">
-                  <label className="admin-label">Кнопки ответов</label>
-                  <button
-                    type="button"
-                    className="admin-mini-action"
-                    onClick={() => addQuizOption(step.key)}
-                    disabled={item.options.length >= 8}
-                  >
-                    + Вариант
-                  </button>
+            <div className="admin-field">
+              <label className="admin-label">Событие подписки</label>
+              <label className="admin-toggle-line">
+                <input
+                  type="checkbox"
+                  checked={checkSubscriptionEnabled}
+                  onChange={(e) => setCheckSubscriptionEnabled(e.target.checked)}
+                />{' '}
+                {checkSubscriptionEnabled ? 'Chatterfy' : 'Заявка через Telegram-бота'}
+              </label>
+              <div className="admin-muted">
+                {checkSubscriptionEnabled
+                  ? 'Факт подписки приходит postback-событием из Chatterfy.'
+                  : 'Кнопка ведёт напрямую в Telegram. Бот принимает заявку, фиксирует подписку и запускает отправку кружков. Бот должен быть администратором канала с правом приглашать пользователей.'}
+              </div>
+            </div>
+
+            <div className="admin-field">
+              <label className="admin-label">ID канала</label>
+              <input
+                className="admin-input"
+                placeholder="-1003584421739"
+                value={channelId}
+                onChange={(e) => setChannelId(e.target.value)}
+              />
+            </div>
+
+            <div className="admin-field">
+              <label className="admin-label">Ссылка на канал</label>
+              <input
+                className="admin-input"
+                placeholder="https://t.me/channel"
+                value={channelUrl}
+                onChange={(e) => setChannelUrl(e.target.value)}
+              />
+            </div>
+
+            <div className="admin-field">
+              <label className="admin-label">Ссылка на личный чат / поддержку</label>
+              <input
+                className="admin-input"
+                placeholder="https://t.me/support_username"
+                value={supportUrl}
+                onChange={(e) => setSupportUrl(e.target.value)}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {funnelEditorTab === 'final' ? (
+          <div className="admin-final-message-builder">
+            <div className="admin-funnel-head">
+              <div>
+                <div className="admin-funnel-title">Финальное сообщение</div>
+                <div className="admin-muted">
+                  Бот показывает его после успешного нажатия кнопки перехода к трейдингу.
                 </div>
+              </div>
+              <button type="button" className="admin-btn-outline" onClick={resetFinalMessage}>
+                Сбросить
+              </button>
+            </div>
 
-                <div className="admin-quiz-options">
-                  {item.options.map((option, index) => (
-                    <div className="admin-quiz-option-row" key={`${step.key}-${index}`}>
-                      <span className="admin-quiz-option-index">{index + 1}</span>
-                      <input
-                        className="admin-input"
-                        value={option}
-                        onChange={(e) => updateQuizOption(step.key, index, e.target.value)}
-                        maxLength={64}
-                      />
+            <label className={`admin-final-enabled-card ${finalMessageConfig.enabled ? 'is-on' : ''}`}>
+              <input
+                type="checkbox"
+                checked={finalMessageConfig.enabled}
+                onChange={(e) => updateFinalMessageField('enabled', e.target.checked)}
+              />
+              <span>
+                <strong>Использовать финальное сообщение</strong>
+                <small>
+                  {finalMessageConfig.enabled
+                    ? 'После проверки подписки бот заменит сообщение и покажет настроенные кнопки.'
+                    : 'Выключено: бот отправит старое главное меню.'}
+                </small>
+              </span>
+              <b>{finalMessageConfig.enabled ? 'ВКЛ' : 'ВЫКЛ'}</b>
+            </label>
+
+            <div className="admin-field">
+              <label className="admin-label">Название кнопки перехода</label>
+              <input
+                className="admin-input"
+                value={finalMessageConfig.trigger_button_text}
+                onChange={(e) => updateFinalMessageField('trigger_button_text', e.target.value)}
+                maxLength={64}
+                placeholder="Go to trading"
+              />
+              <div className="admin-muted">
+                Эта кнопка показывается под ссылкой на канал и открывает финальное сообщение.
+              </div>
+            </div>
+
+            <div className="admin-field">
+              <div className="admin-row-between">
+                <label className="admin-label">Текст после нажатия</label>
+                <span className="admin-field-counter">{finalMessageConfig.message_text.length}/3500</span>
+              </div>
+              <textarea
+                className="admin-input admin-textarea admin-final-message-text"
+                value={finalMessageConfig.message_text}
+                onChange={(e) => updateFinalMessageField('message_text', e.target.value)}
+                rows={6}
+                maxLength={3500}
+                placeholder="Введите финальное сообщение для клиента"
+              />
+              <div className="admin-muted">Отправляется как обычный безопасный текст без HTML-разметки.</div>
+            </div>
+
+            <div className="admin-final-buttons-head">
+              <div>
+                <div className="admin-funnel-title">
+                  Inline-кнопки <span className="admin-count-badge">{finalMessageConfig.buttons.length}/{FINAL_MESSAGE_MAX_BUTTONS}</span>
+                </div>
+                <div className="admin-muted">Кнопки отправляются по одной строке в указанном порядке.</div>
+              </div>
+              <div className="admin-final-add-actions">
+                <button
+                  type="button"
+                  className="admin-btn-outline"
+                  onClick={() => addFinalMessageButton('url')}
+                  disabled={finalMessageConfig.buttons.length >= FINAL_MESSAGE_MAX_BUTTONS}
+                >
+                  + Ссылка
+                </button>
+                <button
+                  type="button"
+                  className="admin-btn-outline"
+                  onClick={() => addFinalMessageButton('menu')}
+                  disabled={hasMenuButton || finalMessageConfig.buttons.length >= FINAL_MESSAGE_MAX_BUTTONS}
+                >
+                  + Меню
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-final-button-list">
+              {finalMessageConfig.buttons.map((button, index) => (
+                <div className="admin-final-button-card" key={button.id}>
+                  <div className="admin-final-button-order">
+                    <strong>{index + 1}</strong>
+                    <button
+                      type="button"
+                      onClick={() => moveFinalMessageButton(button.id, -1)}
+                      disabled={index === 0}
+                      aria-label={`Поднять кнопку ${index + 1}`}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveFinalMessageButton(button.id, 1)}
+                      disabled={index === finalMessageConfig.buttons.length - 1}
+                      aria-label={`Опустить кнопку ${index + 1}`}
+                    >
+                      ↓
+                    </button>
+                  </div>
+
+                  <div className="admin-final-button-fields">
+                    <div className="admin-final-button-card-head">
+                      <span className={`admin-final-button-type ${button.type}`}>
+                        {button.type === 'menu' ? 'Мини-приложение' : 'Внешняя ссылка'}
+                      </span>
                       <button
                         type="button"
                         className="admin-mini-action danger"
-                        onClick={() => removeQuizOption(step.key, index)}
-                        disabled={item.options.length <= 1}
+                        onClick={() => removeFinalMessageButton(button.id)}
                       >
                         Удалить
                       </button>
                     </div>
+
+                    <div className="admin-final-button-grid">
+                      <label>
+                        <span>Название</span>
+                        <input
+                          className="admin-input"
+                          value={button.text}
+                          onChange={(e) => updateFinalMessageButton(button.id, { text: e.target.value })}
+                          maxLength={64}
+                          placeholder="Название кнопки"
+                        />
+                      </label>
+                      <label>
+                        <span>Действие</span>
+                        <select
+                          className="admin-input"
+                          value={button.type}
+                          onChange={(e) => changeFinalMessageButtonType(button.id, e.target.value)}
+                        >
+                          <option value="url">Открыть ссылку</option>
+                          <option
+                            value="menu"
+                            disabled={hasMenuButton && button.type !== 'menu'}
+                          >
+                            Открыть меню
+                          </option>
+                        </select>
+                      </label>
+                    </div>
+
+                    {button.type === 'url' ? (
+                      <label className="admin-final-url-field">
+                        <span>Ссылка</span>
+                        <input
+                          className="admin-input"
+                          value={button.url}
+                          onChange={(e) => updateFinalMessageButton(button.id, { url: e.target.value })}
+                          maxLength={1000}
+                          placeholder="https://example.com"
+                        />
+                      </label>
+                    ) : (
+                      <div className="admin-final-menu-note">
+                        Откроет основное мини-приложение Elizabeth Vane. Ссылка берётся из системы автоматически.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {!finalMessageConfig.buttons.length ? (
+                <div className="admin-final-empty">
+                  Кнопок пока нет. Добавьте ссылку или кнопку открытия меню.
+                </div>
+              ) : null}
+            </div>
+
+            <div className="admin-final-preview">
+              <div className="admin-final-preview-title">Предпросмотр в Telegram</div>
+              <div className="admin-final-preview-bubble">
+                <div className="admin-final-preview-text">
+                  {finalMessageConfig.message_text || 'Текст финального сообщения'}
+                </div>
+                <div className="admin-final-preview-buttons">
+                  {finalMessageConfig.buttons.map((button) => (
+                    <div key={`preview-${button.id}`}>
+                      <span>{button.text || 'Без названия'}</span>
+                      <b>{button.type === 'menu' ? 'APP' : '↗'}</b>
+                    </div>
                   ))}
                 </div>
               </div>
-            );
-          })}
-        </div>
-
-        <div className="admin-field">
-          <label className="admin-label">Событие подписки</label>
-          <label className="admin-toggle-line">
-            <input
-              type="checkbox"
-              checked={checkSubscriptionEnabled}
-              onChange={(e) => setCheckSubscriptionEnabled(e.target.checked)}
-            />{' '}
-            {checkSubscriptionEnabled ? 'Chatterfy' : 'Заявка через Telegram-бота'}
-          </label>
-          <div className="admin-muted">
-            {checkSubscriptionEnabled
-              ? 'Факт подписки приходит postback-событием из Chatterfy.'
-              : 'Кнопка ведёт напрямую в Telegram. Бот принимает заявку, фиксирует подписку и запускает отправку кружков. Бот должен быть администратором канала с правом приглашать пользователей.'}
+            </div>
           </div>
-        </div>
+        ) : null}
 
-        <div className="admin-field">
-          <label className="admin-label">ID канала</label>
-          <input
-            className="admin-input"
-            placeholder="-1003584421739"
-            value={channelId}
-            onChange={(e) => setChannelId(e.target.value)}
-          />
-        </div>
+        {error ? <div className="admin-error">{error}</div> : null}
+        {status ? <div className="admin-success">{status}</div> : null}
 
-        <div className="admin-field">
-          <label className="admin-label">Ссылка на канал</label>
-          <input
-            className="admin-input"
-            placeholder="https://t.me/channel"
-            value={channelUrl}
-            onChange={(e) => setChannelUrl(e.target.value)}
-          />
-        </div>
-
-        <div className="admin-field">
-          <label className="admin-label">Ссылка на личный чат / поддержку</label>
-          <input
-            className="admin-input"
-            placeholder="https://t.me/support_username"
-            value={supportUrl}
-            onChange={(e) => setSupportUrl(e.target.value)}
-          />
-        </div>
-
-        <div className="admin-row-actions">
+        <div className="admin-funnel-save-bar">
+          <span>Сохраняются настройки всех трёх вкладок</span>
           <button className="admin-btn" onClick={() => saveSettings('support')} disabled={saving}>
             {saving ? 'Сохранение...' : 'Сохранить воронку'}
           </button>
         </div>
-
-        {error ? <div className="admin-error">{error}</div> : null}
-        {status ? <div className="admin-success">{status}</div> : null}
       </div>
     );
   }

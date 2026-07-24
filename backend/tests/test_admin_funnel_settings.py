@@ -16,6 +16,11 @@ class AdminFunnelSettingsTest(unittest.TestCase):
         self.assertIn("addQuizOption", source)
         self.assertIn("quiz_config: normalizeQuizConfig(quizConfig)", source)
         self.assertIn("Стартовый опросник", source)
+        self.assertIn("normalizeFinalMessageConfig", source)
+        self.assertIn("final_message_config: preparedFinalMessageConfig", source)
+        self.assertIn("Финальное сообщение", source)
+        self.assertIn("Предпросмотр в Telegram", source)
+        self.assertIn("moveFinalMessageButton", source)
 
     def test_admin_support_settings_store_quiz_config(self):
         source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
@@ -25,6 +30,8 @@ class AdminFunnelSettingsTest(unittest.TestCase):
         self.assertIn("get_quiz_config_row", source)
         self.assertIn("check_subscription_enabled", source)
         self.assertIn("channel_id", source)
+        self.assertIn("validate_final_message_config", source)
+        self.assertIn("final_message_config", source)
 
     def test_schema_has_onboarding_and_quiz_columns(self):
         source = (PROJECT_ROOT / "backend/db_bootstrap.py").read_text(encoding="utf-8")
@@ -32,6 +39,7 @@ class AdminFunnelSettingsTest(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS user_onboarding", source)
         self.assertIn("quiz_broker_experience", source)
         self.assertIn("quiz_config LONGTEXT", source)
+        self.assertIn("final_message_config LONGTEXT", source)
         self.assertIn("check_subscription_enabled", source)
         self.assertIn("channel_gate_completed_at", source)
 

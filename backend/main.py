@@ -128,9 +128,11 @@ try:
         is_valid_quiz_step,
         map_quiz_answer_locally,
         normalize_channel_settings,
+        normalize_final_message_config,
         normalize_quiz_answer,
         normalize_quiz_config,
         normalize_quiz_step,
+        validate_final_message_config,
     )
 except ModuleNotFoundError:
     from bot_funnel import (
@@ -146,9 +148,11 @@ except ModuleNotFoundError:
         is_valid_quiz_step,
         map_quiz_answer_locally,
         normalize_channel_settings,
+        normalize_final_message_config,
         normalize_quiz_answer,
         normalize_quiz_config,
         normalize_quiz_step,
+        validate_final_message_config,
     )
 try:
     from backend.chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
@@ -1209,17 +1213,20 @@ async def get_support_links_row():
         "channel_id": (os.getenv("CHANNEL_ID") or "").strip(),
         "check_subscription_enabled": (os.getenv("CHECK_SUBSCRIPTION_ENABLED") or "").strip(),
         "quiz_config": {},
+        "final_message_config": {},
     }
     if not db_pool:
         settings = normalize_channel_settings(fallback)
         settings["quiz_config"] = normalize_quiz_config()
+        settings["final_message_config"] = normalize_final_message_config()
         return settings
     try:
         async with db_pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
                     """
-                    SELECT channel_id, channel_url, support_url, check_subscription_enabled, quiz_config
+                    SELECT channel_id, channel_url, support_url, check_subscription_enabled, quiz_config,
+                           final_message_config
                     FROM admin_support_links
                     WHERE id = 1
                     LIMIT 1
@@ -1230,10 +1237,12 @@ async def get_support_links_row():
         print(f"Support links fallback: {e}")
         settings = normalize_channel_settings(fallback)
         settings["quiz_config"] = normalize_quiz_config()
+        settings["final_message_config"] = normalize_final_message_config()
         return settings
     if not row:
         settings = normalize_channel_settings(fallback)
         settings["quiz_config"] = normalize_quiz_config()
+        settings["final_message_config"] = normalize_final_message_config()
         return settings
     merged = {
         "channel_id": row.get("channel_id") or fallback["channel_id"],
@@ -1243,9 +1252,11 @@ async def get_support_links_row():
         if row.get("check_subscription_enabled") is not None
         else fallback["check_subscription_enabled"],
         "quiz_config": row.get("quiz_config") or fallback["quiz_config"],
+        "final_message_config": row.get("final_message_config") or fallback["final_message_config"],
     }
     settings = normalize_channel_settings(merged)
     settings["quiz_config"] = normalize_quiz_config(merged.get("quiz_config"))
+    settings["final_message_config"] = normalize_final_message_config(merged.get("final_message_config"))
     return settings
 
 
@@ -3261,18 +3272,27 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                 check_subscription_enabled = 1 if bool(support_data.get("check_subscription_enabled")) else 0
                 quiz_config = normalize_quiz_config(support_data.get("quiz_config"))
                 quiz_config_json = json.dumps(quiz_config, ensure_ascii=False)
+                try:
+                    final_message_config = validate_final_message_config(
+                        support_data.get("final_message_config")
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc))
+                final_message_config_json = json.dumps(final_message_config, ensure_ascii=False)
                 await cur.execute(
                     """
                     INSERT INTO admin_support_links (
-                        id, channel_id, channel_url, support_url, check_subscription_enabled, quiz_config, updated_by
+                        id, channel_id, channel_url, support_url, check_subscription_enabled, quiz_config,
+                        final_message_config, updated_by
                     )
-                    VALUES (1, %s, %s, %s, %s, %s, %s)
+                    VALUES (1, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         channel_id = VALUES(channel_id),
                         channel_url = VALUES(channel_url),
                         support_url = VALUES(support_url),
                         check_subscription_enabled = VALUES(check_subscription_enabled),
                         quiz_config = VALUES(quiz_config),
+                        final_message_config = VALUES(final_message_config),
                         updated_by = VALUES(updated_by)
                     """,
                     (
@@ -3281,6 +3301,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         support_url,
                         check_subscription_enabled,
                         quiz_config_json,
+                        final_message_config_json,
                         int(admin["user_id"]),
                     ),
                 )
@@ -5884,19 +5905,78 @@ async def open_channel_from_bot(
 
 async def send_channel_gate(chat_id: int):
     settings = await get_support_links_row()
+    final_message_config = normalize_final_message_config(settings.get("final_message_config"))
     if settings["check_subscription_enabled"]:
         channel_button_url = build_channel_click_url(chat_id, settings["channel_url"])
     else:
         channel_button_url = await get_channel_join_request_url(settings)
     keyboard_rows = [
         [InlineKeyboardButton(text="Open channel", url=channel_button_url)],
-        [InlineKeyboardButton(text="Go to trading", callback_data=FUNNEL_CONTINUE_CALLBACK)],
+        [
+            InlineKeyboardButton(
+                text=final_message_config["trigger_button_text"],
+                callback_data=FUNNEL_CONTINUE_CALLBACK,
+            )
+        ],
     ]
     await bot.send_message(
         chat_id=chat_id,
         text=f"Here is the channel link:\n{settings['channel_url']}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
     )
+
+
+def build_funnel_final_keyboard(final_message_config: Dict[str, Any]) -> Optional[InlineKeyboardMarkup]:
+    config = normalize_final_message_config(final_message_config)
+    keyboard_rows = []
+    web_app_url = str(os.getenv("WEB_APP_URL") or "").strip()
+    for button in config["buttons"]:
+        if button["type"] == "menu":
+            if not web_app_url:
+                continue
+            telegram_button = InlineKeyboardButton(
+                text=button["text"],
+                web_app=WebAppInfo(url=web_app_url),
+            )
+        else:
+            telegram_button = InlineKeyboardButton(
+                text=button["text"],
+                url=button["url"],
+            )
+        keyboard_rows.append([telegram_button])
+    if not keyboard_rows:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+
+async def show_funnel_final_message(callback: types.CallbackQuery) -> bool:
+    if not callback.message:
+        return False
+    settings = await get_support_links_row()
+    final_message_config = normalize_final_message_config(settings.get("final_message_config"))
+    if not final_message_config["enabled"]:
+        return False
+    keyboard = build_funnel_final_keyboard(final_message_config)
+    if not keyboard:
+        return False
+    try:
+        await callback.message.edit_text(
+            text=final_message_config["message_text"],
+            reply_markup=keyboard,
+        )
+        return True
+    except Exception as edit_error:
+        print(f"[Bot] final funnel message edit failed: {edit_error}")
+    try:
+        await bot.send_message(
+            chat_id=callback.message.chat.id,
+            text=final_message_config["message_text"],
+            reply_markup=keyboard,
+        )
+        return True
+    except Exception as send_error:
+        print(f"[Bot] final funnel message send failed: {send_error}")
+        return False
 
 
 @dp.chat_join_request()
@@ -6238,7 +6318,9 @@ async def handle_funnel_continue(callback: types.CallbackQuery):
                     )
         user_name = callback.from_user.first_name or callback.from_user.username or "Trader"
         await callback.answer()
-        await send_main_menu(callback.message.chat.id, int(callback.from_user.id), user_name)
+        final_message_shown = await show_funnel_final_message(callback)
+        if not final_message_shown:
+            await send_main_menu(callback.message.chat.id, int(callback.from_user.id), user_name)
 
 
 @dp.callback_query(lambda callback: callback.data == FUNNEL_CHECK_CHANNEL_CALLBACK)

@@ -1,6 +1,7 @@
 import json
 import re
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 
 BOT_START_EVENT = "bot_start"
@@ -62,6 +63,22 @@ DEFAULT_QUIZ_CONFIG = {
     }
     for step in QUIZ_STEPS
 }
+FINAL_MESSAGE_BUTTON_TYPES = ("url", "menu")
+FINAL_MESSAGE_MAX_BUTTONS = 8
+FINAL_MESSAGE_TEXT_MAX_LENGTH = 3500
+DEFAULT_FINAL_MESSAGE_CONFIG = {
+    "enabled": 1,
+    "trigger_button_text": "Go to trading",
+    "message_text": "You're all set. Choose what you'd like to do next.",
+    "buttons": [
+        {
+            "id": "open_menu",
+            "type": "menu",
+            "text": "Open Elizabeth Vane",
+            "url": "",
+        }
+    ],
+}
 SKIP_PHRASES = {
     "skip",
     "later",
@@ -119,6 +136,145 @@ def normalize_quiz_config(value: Any = None) -> Dict[str, Dict[str, Any]]:
             "options": options[:8],
         }
     return normalized
+
+
+def _load_json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, str) and value.strip():
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = {}
+    return value if isinstance(value, dict) else {}
+
+
+def normalize_final_button_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("@"):
+        raw = f"https://t.me/{raw[1:].strip('/')}"
+    elif raw.startswith("t.me/"):
+        raw = f"https://{raw}"
+    parsed = urlsplit(raw)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return raw[:1000]
+    if parsed.scheme == "tg" and (parsed.netloc or parsed.path):
+        return raw[:1000]
+    return ""
+
+
+def normalize_final_message_config(value: Any = None) -> Dict[str, Any]:
+    source = _load_json_object(value)
+    has_source = bool(source)
+    defaults = DEFAULT_FINAL_MESSAGE_CONFIG
+    enabled = normalize_bool_flag(source.get("enabled"), defaults["enabled"])
+    trigger_button_text = (
+        str(source.get("trigger_button_text") or "").strip()
+        or defaults["trigger_button_text"]
+    )[:64]
+    message_text = (
+        str(source.get("message_text") or "").strip()
+        or defaults["message_text"]
+    )[:FINAL_MESSAGE_TEXT_MAX_LENGTH]
+
+    raw_buttons = source.get("buttons")
+    if not isinstance(raw_buttons, (list, tuple)):
+        raw_buttons = defaults["buttons"] if not has_source or raw_buttons is None else []
+
+    buttons = []
+    used_ids = set()
+    menu_added = False
+    for index, raw_button in enumerate(raw_buttons):
+        if not isinstance(raw_button, dict):
+            continue
+        button_type = str(raw_button.get("type") or "url").strip().lower()
+        if button_type not in FINAL_MESSAGE_BUTTON_TYPES:
+            continue
+        text = str(raw_button.get("text") or "").strip()[:64]
+        if not text:
+            continue
+        url = ""
+        if button_type == "url":
+            url = normalize_final_button_url(raw_button.get("url"))
+            if not url:
+                continue
+        elif menu_added:
+            continue
+        else:
+            menu_added = True
+
+        raw_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(raw_button.get("id") or "").strip())[:48]
+        button_id = raw_id or f"button_{index + 1}"
+        suffix = 2
+        unique_id = button_id
+        while unique_id in used_ids:
+            unique_id = f"{button_id}_{suffix}"[:48]
+            suffix += 1
+        used_ids.add(unique_id)
+        buttons.append(
+            {
+                "id": unique_id,
+                "type": button_type,
+                "text": text,
+                "url": url,
+            }
+        )
+        if len(buttons) >= FINAL_MESSAGE_MAX_BUTTONS:
+            break
+
+    return {
+        "enabled": enabled,
+        "trigger_button_text": trigger_button_text,
+        "message_text": message_text,
+        "buttons": buttons,
+    }
+
+
+def validate_final_message_config(value: Any) -> Dict[str, Any]:
+    source = _load_json_object(value)
+    if not source:
+        return normalize_final_message_config()
+    raw_buttons = source.get("buttons")
+    enabled = normalize_bool_flag(source.get("enabled"), DEFAULT_FINAL_MESSAGE_CONFIG["enabled"])
+    message_text = str(source.get("message_text") or "").strip()
+    trigger_button_text = str(source.get("trigger_button_text") or "").strip()
+
+    if not trigger_button_text:
+        raise ValueError("Укажите название кнопки перехода")
+    if len(trigger_button_text) > 64:
+        raise ValueError("Название кнопки перехода не должно превышать 64 символа")
+    if enabled and not message_text:
+        raise ValueError("Укажите текст финального сообщения")
+    if len(message_text) > FINAL_MESSAGE_TEXT_MAX_LENGTH:
+        raise ValueError(
+            f"Финальное сообщение не должно превышать {FINAL_MESSAGE_TEXT_MAX_LENGTH} символов"
+        )
+    if not isinstance(raw_buttons, list):
+        raise ValueError("Кнопки финального сообщения должны быть списком")
+    if len(raw_buttons) > FINAL_MESSAGE_MAX_BUTTONS:
+        raise ValueError(f"Можно добавить не более {FINAL_MESSAGE_MAX_BUTTONS} кнопок")
+
+    menu_count = 0
+    for index, button in enumerate(raw_buttons, start=1):
+        if not isinstance(button, dict):
+            raise ValueError(f"Некорректные данные кнопки {index}")
+        button_type = str(button.get("type") or "").strip().lower()
+        if button_type not in FINAL_MESSAGE_BUTTON_TYPES:
+            raise ValueError(f"Выберите действие для кнопки {index}")
+        text = str(button.get("text") or "").strip()
+        if not text:
+            raise ValueError(f"Укажите название кнопки {index}")
+        if len(text) > 64:
+            raise ValueError(f"Название кнопки {index} не должно превышать 64 символа")
+        if button_type == "url" and not normalize_final_button_url(button.get("url")):
+            raise ValueError(f"Укажите полную HTTP(S) или tg:// ссылку для кнопки {index}")
+        if button_type == "menu":
+            menu_count += 1
+    if menu_count > 1:
+        raise ValueError("Можно добавить только одну кнопку открытия меню")
+    if enabled and not raw_buttons:
+        raise ValueError("Добавьте хотя бы одну кнопку финального сообщения")
+    return normalize_final_message_config(source)
 
 
 def get_quiz_question(step: Optional[str], quiz_config: Any = None) -> str:
