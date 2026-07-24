@@ -44,6 +44,16 @@ class StrategyPromotionTest(unittest.TestCase):
         self.assertNotIn("Выберите хотя бы один таймфрейм", source)
         self.assertIn("стратегия доступна для всех таймфреймов", source)
 
+    def test_strategy_actions_use_visible_floating_notifications(self):
+        source = (PROJECT_ROOT / "frontend/src/admin/pages/StrategiesPage.jsx").read_text(encoding="utf-8")
+        styles = (PROJECT_ROOT / "frontend/src/admin/admin.css").read_text(encoding="utf-8")
+
+        self.assertIn("function StrategyToast", source)
+        self.assertIn("admin-floating-toast", source)
+        self.assertIn("window.setTimeout(() => setStatus(''), 4000)", source)
+        self.assertIn("position: fixed", styles)
+        self.assertIn("z-index: 10000", styles)
+
 
 if __name__ == "__main__":
     unittest.main()

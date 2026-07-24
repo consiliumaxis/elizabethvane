@@ -52,6 +52,31 @@ const parsePublicWinrate = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+function StrategyToast({ message, type = 'success', onClose }) {
+  if (!message) return null;
+  const isError = type === 'error';
+
+  return (
+    <div className="admin-toast-viewport" aria-live="polite">
+      <div className={`admin-floating-toast ${isError ? 'is-error' : 'is-success'}`} role={isError ? 'alert' : 'status'}>
+        <span className="admin-floating-toast-icon" aria-hidden="true">{isError ? '!' : '✓'}</span>
+        <span className="admin-floating-toast-copy">
+          <strong>{isError ? 'Не удалось выполнить действие' : 'Готово'}</strong>
+          <span>{message}</span>
+        </span>
+        <button
+          className="admin-floating-toast-close"
+          type="button"
+          onClick={onClose}
+          aria-label="Закрыть уведомление"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function StrategiesPage() {
   const [items, setItems] = useState([]);
   const [indicators, setIndicators] = useState([]);
@@ -108,6 +133,12 @@ export default function StrategiesPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!status) return undefined;
+    const timer = window.setTimeout(() => setStatus(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
 
   const selected = useMemo(
     () => items.find((item) => String(item.id) === String(selectedId)) || null,
@@ -384,15 +415,20 @@ export default function StrategiesPage() {
 
     return (
       <div className="admin-card">
+        <StrategyToast
+          message={error || status}
+          type={error ? 'error' : 'success'}
+          onClose={() => {
+            setError('');
+            setStatus('');
+          }}
+        />
         <div className="admin-row-between">
           <h3 className="admin-section-title">Карточка стратегии</h3>
           <button className="admin-btn-outline" onClick={closeCard}>
             ← К списку
           </button>
         </div>
-
-        {error ? <div className="admin-error">{error}</div> : null}
-        {status ? <div className="admin-success">{status}</div> : null}
 
         <div className="admin-strategy-metrics-grid">
           <div className="admin-strategy-mini-card">
@@ -559,6 +595,14 @@ export default function StrategiesPage() {
 
   return (
     <div className="admin-page">
+      <StrategyToast
+        message={error || status}
+        type={error ? 'error' : 'success'}
+        onClose={() => {
+          setError('');
+          setStatus('');
+        }}
+      />
       <div className="admin-card admin-strategy-summary-card">
         <h3 className="admin-section-title">Стратегии</h3>
         <div className="admin-strategy-summary-grid">
@@ -663,8 +707,6 @@ export default function StrategiesPage() {
         </div>
       </div>
 
-      {error ? <div className="admin-error">{error}</div> : null}
-      {status ? <div className="admin-success">{status}</div> : null}
       {loading ? <div className="admin-muted">Загрузка...</div> : null}
 
       {renderList('Системные стратегии', systemStrategies, 'Системные стратегии не найдены')}
