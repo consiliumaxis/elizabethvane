@@ -3373,6 +3373,16 @@ async def admin_strategies(admin=Depends(get_admin_user)):
                        ) AS users_count,
                        (
                            SELECT COUNT(*)
+                           FROM user_presets up
+                           WHERE up.preset_id = p.id
+                       ) AS owner_users_count,
+                       (
+                           SELECT MIN(up.user_id)
+                           FROM user_presets up
+                           WHERE up.preset_id = p.id
+                       ) AS owner_user_id,
+                       (
+                           SELECT COUNT(*)
                            FROM user_analyses ua
                            WHERE ua.strategy_id = p.id
                        ) AS signals_count,
@@ -3397,6 +3407,7 @@ async def admin_strategies(admin=Depends(get_admin_user)):
     normalized_rows = []
     for row in rows or []:
         users_count = int(row.get("users_count") or 0)
+        owner_users_count = int(row.get("owner_users_count") or 0)
         signals_count = int(row.get("signals_count") or 0)
         wins_count = int(row.get("wins_count") or 0)
         closed_signals = int(row.get("closed_signals") or 0)
@@ -3409,6 +3420,8 @@ async def admin_strategies(admin=Depends(get_admin_user)):
 
         row["users_count"] = users_count
         row["usage_count"] = users_count
+        row["owner_users_count"] = owner_users_count
+        row["can_toggle_system"] = 1 if owner_users_count > 0 else 0
         row["signals_count"] = signals_count
         row["wins_count"] = wins_count
         row["closed_signals"] = closed_signals
@@ -3547,9 +3560,15 @@ async def admin_strategies_update(request: Request, admin=Depends(get_admin_user
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT is_system
-                FROM presets
-                WHERE id = %s
+                SELECT
+                    p.is_system,
+                    (
+                        SELECT COUNT(*)
+                        FROM user_presets up
+                        WHERE up.preset_id = p.id
+                    ) AS owner_users_count
+                FROM presets p
+                WHERE p.id = %s
                 LIMIT 1
                 """,
                 (strategy_id,),
@@ -3559,10 +3578,12 @@ async def admin_strategies_update(request: Request, admin=Depends(get_admin_user
                 raise HTTPException(status_code=404, detail="Strategy not found")
 
             current_is_system = int(current_row[0] or 0)
-            if current_is_system == 0 and is_system == 1:
-                raise HTTPException(status_code=400, detail="User strategy cannot be converted to system strategy")
-            if current_is_system == 0:
-                is_system = 0
+            owner_users_count = int(current_row[1] or 0)
+            if current_is_system != is_system and owner_users_count <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Built-in system strategy cannot be converted to a user strategy",
+                )
 
             await cur.execute(
                 """
@@ -3576,6 +3597,21 @@ async def admin_strategies_update(request: Request, admin=Depends(get_admin_user
                 """,
                 (name, icon, allowed_timeframes, public_winrate, is_system, strategy_id),
             )
+
+            if current_is_system == 1 and is_system == 0:
+                await cur.execute(
+                    """
+                    UPDATE users
+                    SET strategy_id = 1
+                    WHERE strategy_id = %s
+                      AND user_id NOT IN (
+                          SELECT up.user_id
+                          FROM user_presets up
+                          WHERE up.preset_id = %s
+                      )
+                    """,
+                    (strategy_id, strategy_id),
+                )
 
             if isinstance(indicators, list):
                 valid_ids = []
@@ -4554,8 +4590,26 @@ async def manage_custom_strategy(request: Request, user=Depends(get_telegram_use
                 name = data.get("name")
                 icon = data.get("icon", "\u26A1")
                 indicators = data.get("indicators", [])
-                
-                await cur.execute("UPDATE presets SET name = %s, icon = %s WHERE id = %s AND is_system = 0", (name, icon, preset_id))
+
+                await cur.execute(
+                    """
+                    SELECT p.id
+                    FROM presets p
+                    JOIN user_presets up ON up.preset_id = p.id
+                    WHERE p.id = %s
+                      AND up.user_id = %s
+                      AND p.is_system = 0
+                    LIMIT 1
+                    """,
+                    (preset_id, user_id),
+                )
+                if not await cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Editable user strategy not found")
+
+                await cur.execute(
+                    "UPDATE presets SET name = %s, icon = %s WHERE id = %s AND is_system = 0",
+                    (name, icon, preset_id),
+                )
                 
                 await cur.execute("DELETE FROM preset_indicators WHERE preset_id = %s", (preset_id,))
                 for ind_id in indicators:
@@ -4564,6 +4618,21 @@ async def manage_custom_strategy(request: Request, user=Depends(get_telegram_use
 
             elif action == "delete":
                 preset_id = data.get("preset_id")
+                await cur.execute(
+                    """
+                    SELECT p.id
+                    FROM presets p
+                    JOIN user_presets up ON up.preset_id = p.id
+                    WHERE p.id = %s
+                      AND up.user_id = %s
+                      AND p.is_system = 0
+                    LIMIT 1
+                    """,
+                    (preset_id, user_id),
+                )
+                if not await cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Deletable user strategy not found")
+
                 await cur.execute("DELETE FROM preset_indicators WHERE preset_id = %s", (preset_id,))
                 await cur.execute("DELETE FROM user_presets WHERE preset_id = %s AND user_id = %s", (preset_id, user_id))
                 await cur.execute("DELETE FROM presets WHERE id = %s AND is_system = 0", (preset_id,))

@@ -79,6 +79,8 @@ export default function StrategiesPage() {
         ...item,
         users_count: toInt(item.users_count),
         usage_count: toInt(item.usage_count ?? item.users_count),
+        owner_users_count: toInt(item.owner_users_count),
+        can_toggle_system: Number(item.can_toggle_system) === 1,
         signals_count: toInt(item.signals_count),
         wins_count: toInt(item.wins_count),
         closed_signals: toInt(item.closed_signals),
@@ -143,6 +145,9 @@ export default function StrategiesPage() {
       timeframes: parseTimeframes(selected.allowed_timeframes),
       is_system: isSystemStrategy(selected),
       initial_is_system: isSystemStrategy(selected),
+      can_toggle_system: Boolean(selected.can_toggle_system),
+      owner_users_count: toInt(selected.owner_users_count),
+      owner_user_id: selected.owner_user_id || null,
       users_count: toInt(selected.users_count),
       signals_count: toInt(selected.signals_count),
       winrate: Number(selected.winrate || 0),
@@ -235,7 +240,7 @@ export default function StrategiesPage() {
           icon: form.icon,
           allowed_timeframes: joinTimeframes(form.timeframes),
           public_winrate: publicWinrate,
-          is_system: form.initial_is_system ? form.is_system : false,
+          is_system: form.is_system,
           indicators: form.indicators,
         }),
       });
@@ -462,20 +467,26 @@ export default function StrategiesPage() {
         </div>
 
         <div className="admin-row-between">
-          {form.initial_is_system ? (
+          {form.can_toggle_system ? (
             <label className="admin-muted">
               <input
                 type="checkbox"
                 checked={form.is_system}
                 onChange={(e) => setForm((prev) => ({ ...prev, is_system: e.target.checked }))}
               />{' '}
-              Системная стратегия
+              {form.is_system ? 'Системная — доступна всем пользователям' : 'Сделать системной'}
             </label>
           ) : (
-            <div className="admin-note">Пользовательская стратегия не может быть включена как системная.</div>
+            <div className="admin-note">Встроенная системная стратегия. Её нельзя перевести в пользовательские.</div>
           )}
           <div className="admin-muted">ID: {form.id}</div>
         </div>
+        {form.can_toggle_system ? (
+          <div className="admin-note">
+            Владелец сохраняется. После отключения стратегия исчезнет у остальных пользователей и вернётся
+            владельцу{form.owner_user_id ? ` (Telegram ID ${form.owner_user_id})` : ''}.
+          </div>
+        ) : null}
 
         <div className="admin-field">
           <label className="admin-label">Подключенные индикаторы ({form.indicators.length})</label>
