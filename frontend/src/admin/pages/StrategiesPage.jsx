@@ -414,7 +414,7 @@ export default function StrategiesPage() {
     const shownWinrate = form.public_winrate === '' ? form.winrate : Number(form.public_winrate);
 
     return (
-      <div className="admin-card">
+      <div className="admin-card admin-strategy-editor">
         <StrategyToast
           message={error || status}
           type={error ? 'error' : 'success'}
@@ -423,7 +423,7 @@ export default function StrategiesPage() {
             setStatus('');
           }}
         />
-        <div className="admin-row-between">
+        <div className="admin-row-between admin-strategy-editor-head">
           <h3 className="admin-section-title">Карточка стратегии</h3>
           <button className="admin-btn-outline" onClick={closeCard}>
             ← К списку
@@ -432,15 +432,15 @@ export default function StrategiesPage() {
 
         <div className="admin-strategy-metrics-grid">
           <div className="admin-strategy-mini-card">
-            <div className="admin-metric-label">Пользователей выбрало</div>
+            <div className="admin-metric-label">Пользователи</div>
             <div className="admin-metric-value small">{form.users_count}</div>
           </div>
           <div className="admin-strategy-mini-card">
-            <div className="admin-metric-label">Сигналов выдано</div>
+            <div className="admin-metric-label">Сигналы</div>
             <div className="admin-metric-value small">{form.signals_count}</div>
           </div>
           <div className="admin-strategy-mini-card">
-            <div className="admin-metric-label">Отображаемый Winrate</div>
+            <div className="admin-metric-label">Winrate</div>
             <div className="admin-metric-value small">{formatPercent(shownWinrate)}</div>
           </div>
         </div>

@@ -1076,6 +1076,16 @@
   margin-bottom: 10px;
 }
 
+.admin-strategy-editor-head {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(143, 106, 46, 0.16);
+}
+
+.admin-strategy-editor-head .admin-section-title {
+  margin: 0;
+}
+
 .admin-strategy-mini-card {
   border: 1px solid rgba(143, 106, 46, 0.2);
   border-radius: 12px;
@@ -2341,7 +2351,27 @@
   }
 
   .admin-strategy-metrics-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .admin-strategy-editor {
+    padding: 11px;
+  }
+
+  .admin-strategy-mini-card {
+    min-height: 70px;
+    padding: 9px 8px;
+  }
+
+  .admin-strategy-mini-card .admin-metric-label {
+    font-size: 0.72rem;
+    line-height: 1.2;
+  }
+
+  .admin-strategy-mini-card .admin-metric-value.small {
+    margin-top: 5px;
+    font-size: 1.12rem;
   }
 
   .admin-key-row {
