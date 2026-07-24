@@ -15,9 +15,41 @@ const ROLE_OPTIONS = [
   },
 ];
 
+const AUDIT_PAGE_SIZE = 15;
+
+const AUDIT_STATUS_OPTIONS = [
+  { value: '', label: 'Все результаты' },
+  { value: 'success', label: 'Успешно' },
+  { value: 'not_found', label: 'Клиент не найден' },
+  { value: 'invalid_query', label: 'Неверный запрос' },
+  { value: 'denied', label: 'Нет доступа' },
+  { value: 'private_chat_required', label: 'Не личный чат' },
+];
+
+const AUDIT_STATUS_META = {
+  success: { label: 'Успешно', tone: 'success' },
+  not_found: { label: 'Клиент не найден', tone: 'warning' },
+  invalid_query: { label: 'Неверный запрос', tone: 'warning' },
+  denied: { label: 'Нет доступа', tone: 'danger' },
+  private_chat_required: { label: 'Не личный чат', tone: 'warning' },
+};
+
 const roleLabel = (role) => (
   ROLE_OPTIONS.find((item) => item.value === role)?.label || 'Менеджер'
 );
+
+const formatAuditDate = (value) => {
+  if (!value) return 'Время не указано';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
 
 const initials = (item) => {
   const source = String(item.first_name || item.username || item.user_id || '?').trim();
@@ -31,6 +63,13 @@ export default function ManagersPage({ adminUser }) {
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState('');
+  const [auditRows, setAuditRows] = useState([]);
+  const [auditTotal, setAuditTotal] = useState(0);
+  const [auditOffset, setAuditOffset] = useState(0);
+  const [auditStatus, setAuditStatus] = useState('');
+  const [auditSearch, setAuditSearch] = useState('');
+  const [appliedAuditSearch, setAppliedAuditSearch] = useState('');
+  const [auditLoading, setAuditLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -38,6 +77,25 @@ export default function ManagersPage({ adminUser }) {
     const result = await apiAdminFetchJson('/api/admin/staff');
     setStaff(result.staff || []);
   }, []);
+
+  const loadAudit = useCallback(async () => {
+    setAuditLoading(true);
+    try {
+      const params = new URLSearchParams({
+        limit: String(AUDIT_PAGE_SIZE),
+        offset: String(auditOffset),
+      });
+      if (auditStatus) params.set('status', auditStatus);
+      if (appliedAuditSearch) params.set('search', appliedAuditSearch);
+      const result = await apiAdminFetchJson(`/api/admin/staff/audit?${params.toString()}`);
+      setAuditRows(result.audit || []);
+      setAuditTotal(Number(result.total || 0));
+    } catch (requestError) {
+      setError(requestError.message || 'Не удалось загрузить историю запросов');
+    } finally {
+      setAuditLoading(false);
+    }
+  }, [appliedAuditSearch, auditOffset, auditStatus]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -47,6 +105,13 @@ export default function ManagersPage({ adminUser }) {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [loadStaff]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadAudit();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadAudit]);
 
   const flashSuccess = (message) => {
     setSuccess(message);
@@ -108,6 +173,20 @@ export default function ManagersPage({ adminUser }) {
       setSavingId('');
     }
   };
+
+  const applyAuditSearch = (event) => {
+    event.preventDefault();
+    const normalized = auditSearch.trim();
+    if (normalized === appliedAuditSearch && auditOffset === 0) {
+      loadAudit();
+      return;
+    }
+    setAuditOffset(0);
+    setAppliedAuditSearch(normalized);
+  };
+
+  const auditPage = Math.floor(auditOffset / AUDIT_PAGE_SIZE) + 1;
+  const auditPages = Math.max(1, Math.ceil(auditTotal / AUDIT_PAGE_SIZE));
 
   return (
     <div className="admin-managers-layout">
@@ -262,6 +341,122 @@ export default function ManagersPage({ adminUser }) {
             );
           })}
         </div>
+      </section>
+
+      <section className="admin-card admin-managers-audit">
+        <div className="admin-row-between admin-managers-list-head">
+          <div>
+            <h3 className="admin-section-title">История запросов /stats</h3>
+            <div className="admin-muted">
+              Кто запрашивал статистику, какого клиента искал и чем завершился запрос. Всего: {auditTotal}
+            </div>
+          </div>
+          <button
+            className="admin-btn-outline"
+            type="button"
+            disabled={auditLoading}
+            onClick={loadAudit}
+          >
+            Обновить
+          </button>
+        </div>
+
+        <form className="admin-audit-filters" onSubmit={applyAuditSearch}>
+          <label>
+            <span>Поиск</span>
+            <input
+              className="admin-input"
+              value={auditSearch}
+              placeholder="ID, username или команда"
+              onChange={(event) => setAuditSearch(event.target.value.slice(0, 100))}
+            />
+          </label>
+          <label>
+            <span>Результат</span>
+            <select
+              className="admin-input"
+              value={auditStatus}
+              onChange={(event) => {
+                setAuditOffset(0);
+                setAuditStatus(event.target.value);
+              }}
+            >
+              {AUDIT_STATUS_OPTIONS.map((option) => (
+                <option key={option.value || 'all'} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <button className="admin-btn" type="submit" disabled={auditLoading}>Найти</button>
+        </form>
+
+        {auditLoading ? <div className="admin-muted admin-audit-loading">Загрузка истории…</div> : null}
+        {!auditLoading && !auditRows.length ? (
+          <div className="admin-managers-empty">По выбранным условиям запросов пока нет.</div>
+        ) : null}
+
+        <div className="admin-audit-list">
+          {auditRows.map((item) => {
+            const statusMeta = AUDIT_STATUS_META[item.result_status] || {
+              label: item.result_status || 'Неизвестно',
+              tone: 'neutral',
+            };
+            const requesterName = item.requester_first_name
+              || (item.requester_username ? `@${item.requester_username}` : 'Профиль не получен');
+            const targetName = item.target_user_id
+              ? (
+                item.target_first_name
+                || (item.target_username ? `@${item.target_username}` : `ID ${item.target_user_id}`)
+              )
+              : 'Клиент не определён';
+            return (
+              <article className="admin-audit-card" key={item.id}>
+                <div className="admin-audit-card-head">
+                  <span className={`admin-audit-status ${statusMeta.tone}`}>{statusMeta.label}</span>
+                  <time>{formatAuditDate(item.created_at)}</time>
+                </div>
+                <div className="admin-audit-grid">
+                  <div>
+                    <span className="admin-audit-label">Запросил</span>
+                    <strong>{requesterName}</strong>
+                    <small>
+                      ID {item.requested_by}
+                      {' · '}
+                      {item.requester_role ? roleLabel(item.requester_role) : 'роль не назначена'}
+                    </small>
+                  </div>
+                  <div>
+                    <span className="admin-audit-label">Искали</span>
+                    <strong>{targetName}</strong>
+                    <small>{item.target_user_id ? `ID ${item.target_user_id}` : 'Совпадение не найдено'}</small>
+                  </div>
+                </div>
+                <code className="admin-audit-query">{item.target_query || '/stats'}</code>
+              </article>
+            );
+          })}
+        </div>
+
+        {auditTotal > AUDIT_PAGE_SIZE ? (
+          <div className="admin-audit-pagination">
+            <button
+              className="admin-btn-outline"
+              type="button"
+              disabled={auditLoading || auditOffset === 0}
+              onClick={() => setAuditOffset(Math.max(0, auditOffset - AUDIT_PAGE_SIZE))}
+            >
+              ← Назад
+            </button>
+            <span>Страница {auditPage} из {auditPages}</span>
+            <button
+              className="admin-btn-outline"
+              type="button"
+              disabled={auditLoading || auditOffset + AUDIT_PAGE_SIZE >= auditTotal}
+              onClick={() => setAuditOffset(auditOffset + AUDIT_PAGE_SIZE)}
+            >
+              Далее →
+            </button>
+          </div>
+        ) : null}
       </section>
     </div>
   );

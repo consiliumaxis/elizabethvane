@@ -7,6 +7,13 @@ from typing import Any, Dict, Optional, Tuple
 STAFF_ROLE_MANAGER = "manager"
 STAFF_ROLE_ADMIN = "admin"
 STAFF_ROLES = (STAFF_ROLE_MANAGER, STAFF_ROLE_ADMIN)
+MANAGER_STATS_AUDIT_STATUSES = (
+    "success",
+    "not_found",
+    "invalid_query",
+    "denied",
+    "private_chat_required",
+)
 
 _STATS_COMMAND_RE = re.compile(
     r"^/stats(?:@[A-Za-z0-9_]+)?(?:\s+(?P<target>\S+))?\s*$",

@@ -186,6 +186,7 @@ except ModuleNotFoundError:
     )
 try:
     from backend.manager_stats import (
+        MANAGER_STATS_AUDIT_STATUSES,
         STAFF_ROLE_ADMIN,
         STAFF_ROLES,
         format_manager_stats,
@@ -194,6 +195,7 @@ try:
     )
 except ModuleNotFoundError:
     from manager_stats import (
+        MANAGER_STATS_AUDIT_STATUSES,
         STAFF_ROLE_ADMIN,
         STAFF_ROLES,
         format_manager_stats,
@@ -2922,6 +2924,90 @@ async def admin_staff(admin=Depends(get_admin_user)):
             )
             rows = await cur.fetchall()
     return {"status": "success", "staff": rows or []}
+
+
+@app.get("/api/admin/staff/audit")
+async def admin_staff_audit(
+    limit: int = Query(default=15, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    status: str = Query(default=""),
+    search: str = Query(default=""),
+    admin=Depends(get_admin_user),
+):
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status and normalized_status not in MANAGER_STATS_AUDIT_STATUSES:
+        raise HTTPException(status_code=400, detail="Некорректный статус журнала")
+
+    normalized_search = str(search or "").strip()[:100]
+    where_parts = []
+    params: List[Any] = []
+    if normalized_status:
+        where_parts.append("audit.result_status = %s")
+        params.append(normalized_status)
+    if normalized_search:
+        like_value = f"%{normalized_search}%"
+        where_parts.append(
+            """
+            (
+                CAST(audit.requested_by AS CHAR) LIKE %s
+                OR CAST(COALESCE(audit.target_user_id, 0) AS CHAR) LIKE %s
+                OR audit.target_query LIKE %s
+                OR COALESCE(requester.username, '') LIKE %s
+                OR COALESCE(requester.first_name, '') LIKE %s
+                OR COALESCE(target_user.username, '') LIKE %s
+                OR COALESCE(target_user.first_name, '') LIKE %s
+            )
+            """
+        )
+        params.extend([like_value] * 7)
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT COUNT(*) AS cnt
+                FROM manager_stats_audit audit
+                LEFT JOIN users requester ON requester.user_id = audit.requested_by
+                LEFT JOIN users target_user ON target_user.user_id = audit.target_user_id
+                {where_sql}
+                """,
+                tuple(params),
+            )
+            total = int((await cur.fetchone() or {}).get("cnt") or 0)
+            await cur.execute(
+                f"""
+                SELECT
+                    audit.id,
+                    audit.requested_by,
+                    audit.target_query,
+                    audit.target_user_id,
+                    audit.result_status,
+                    audit.created_at,
+                    requester.username AS requester_username,
+                    requester.first_name AS requester_first_name,
+                    requester_staff.role AS requester_role,
+                    target_user.username AS target_username,
+                    target_user.first_name AS target_first_name
+                FROM manager_stats_audit audit
+                LEFT JOIN users requester ON requester.user_id = audit.requested_by
+                LEFT JOIN admin_users requester_staff ON requester_staff.user_id = audit.requested_by
+                LEFT JOIN users target_user ON target_user.user_id = audit.target_user_id
+                {where_sql}
+                ORDER BY audit.created_at DESC, audit.id DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple([*params, int(limit), int(offset)]),
+            )
+            rows = await cur.fetchall()
+
+    return {
+        "status": "success",
+        "audit": rows or [],
+        "total": total,
+        "limit": int(limit),
+        "offset": int(offset),
+    }
 
 
 @app.post("/api/admin/staff")

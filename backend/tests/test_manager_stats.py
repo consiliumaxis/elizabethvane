@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from manager_stats import (
+    MANAGER_STATS_AUDIT_STATUSES,
     STAFF_ROLE_ADMIN,
     STAFF_ROLE_MANAGER,
     calculate_winrate,
@@ -30,6 +31,8 @@ class ManagerStatsTest(unittest.TestCase):
         self.assertEqual(normalize_staff_role("unknown"), STAFF_ROLE_MANAGER)
         self.assertEqual(calculate_winrate(5, 2), 71.4)
         self.assertIsNone(calculate_winrate(0, 0))
+        self.assertIn("success", MANAGER_STATS_AUDIT_STATUSES)
+        self.assertIn("denied", MANAGER_STATS_AUDIT_STATUSES)
 
     def test_formats_copy_friendly_summary(self):
         text = format_manager_stats(
@@ -78,6 +81,8 @@ class ManagerStatsTest(unittest.TestCase):
         self.assertIn('@dp.message(Command("stats"))', backend)
         self.assertIn('await message.answer("Недостаточно прав")', backend)
         self.assertIn("async def get_manager_stats_summary", backend)
+        self.assertIn('@app.get("/api/admin/staff/audit")', backend)
+        self.assertIn("ORDER BY audit.created_at DESC, audit.id DESC", backend)
         self.assertIn("NOW() - INTERVAL 7 DAY", backend)
         self.assertIn("format_manager_stats(summary)", backend)
         self.assertLess(
@@ -92,6 +97,8 @@ class ManagerStatsTest(unittest.TestCase):
         self.assertIn("{ id: 'managers', label: 'Менеджеры' }", app)
         self.assertIn("<ManagersPage adminUser={adminUser} />", app)
         self.assertIn("/api/admin/staff", page)
+        self.assertIn("/api/admin/staff/audit", page)
+        self.assertIn("История запросов /stats", page)
         self.assertIn("Менеджеры и администраторы", page)
         self.assertIn("/stats @nickname", page)
 
