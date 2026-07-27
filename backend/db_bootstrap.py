@@ -256,6 +256,23 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS admin_studio_daily_stats (
+                    stat_date DATE NOT NULL PRIMARY KEY,
+                    new_users BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                    total_users BIGINT UNSIGNED NULL,
+                    deals BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                    volume DECIMAL(24,2) NOT NULL DEFAULT 0.00,
+                    strategy_winrates LONGTEXT NOT NULL,
+                    updated_by BIGINT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    KEY idx_admin_studio_stats_updated (updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS admin_stream_settings (
                     id INT NOT NULL PRIMARY KEY,
                     is_enabled TINYINT(1) NOT NULL DEFAULT 0,

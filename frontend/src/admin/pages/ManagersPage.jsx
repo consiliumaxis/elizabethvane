@@ -1,48 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
+import { useAdminLocale } from '../useAdminLocale';
 
-
-const ROLE_OPTIONS = [
-  {
-    value: 'manager',
-    label: 'Менеджер',
-    hint: 'Может использовать только команду /stats.',
-  },
-  {
-    value: 'admin',
-    label: 'Администратор',
-    hint: 'Имеет доступ к админцентру и команде /stats.',
-  },
-];
 
 const AUDIT_PAGE_SIZE = 15;
 
-const AUDIT_STATUS_OPTIONS = [
-  { value: '', label: 'Все результаты' },
-  { value: 'success', label: 'Успешно' },
-  { value: 'not_found', label: 'Клиент не найден' },
-  { value: 'invalid_query', label: 'Неверный запрос' },
-  { value: 'denied', label: 'Нет доступа' },
-  { value: 'private_chat_required', label: 'Не личный чат' },
-];
-
-const AUDIT_STATUS_META = {
-  success: { label: 'Успешно', tone: 'success' },
-  not_found: { label: 'Клиент не найден', tone: 'warning' },
-  invalid_query: { label: 'Неверный запрос', tone: 'warning' },
-  denied: { label: 'Нет доступа', tone: 'danger' },
-  private_chat_required: { label: 'Не личный чат', tone: 'warning' },
-};
-
-const roleLabel = (role) => (
-  ROLE_OPTIONS.find((item) => item.value === role)?.label || 'Менеджер'
-);
-
-const formatAuditDate = (value) => {
-  if (!value) return 'Время не указано';
+const formatAuditDate = (value, locale, emptyLabel) => {
+  if (!value) return emptyLabel;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString('ru-RU', {
+  return date.toLocaleString(locale, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -57,6 +24,37 @@ const initials = (item) => {
 };
 
 export default function ManagersPage({ adminUser }) {
+  const { locale, tr } = useAdminLocale();
+  const roleOptions = [
+    {
+      value: 'manager',
+      label: tr('Manager', 'Менеджер'),
+      hint: tr('Can only use the /stats command.', 'Может использовать только команду /stats.'),
+    },
+    {
+      value: 'admin',
+      label: tr('Administrator', 'Администратор'),
+      hint: tr('Can open the Admin Center and use /stats.', 'Имеет доступ к админцентру и команде /stats.'),
+    },
+  ];
+  const auditStatusOptions = [
+    { value: '', label: tr('All results', 'Все результаты') },
+    { value: 'success', label: tr('Success', 'Успешно') },
+    { value: 'not_found', label: tr('Client not found', 'Клиент не найден') },
+    { value: 'invalid_query', label: tr('Invalid query', 'Неверный запрос') },
+    { value: 'denied', label: tr('Access denied', 'Нет доступа') },
+    { value: 'private_chat_required', label: tr('Not a private chat', 'Не личный чат') },
+  ];
+  const auditStatusMeta = {
+    success: { label: tr('Success', 'Успешно'), tone: 'success' },
+    not_found: { label: tr('Client not found', 'Клиент не найден'), tone: 'warning' },
+    invalid_query: { label: tr('Invalid query', 'Неверный запрос'), tone: 'warning' },
+    denied: { label: tr('Access denied', 'Нет доступа'), tone: 'danger' },
+    private_chat_required: { label: tr('Not a private chat', 'Не личный чат'), tone: 'warning' },
+  };
+  const roleLabel = (role) => (
+    roleOptions.find((item) => item.value === role)?.label || tr('Manager', 'Менеджер')
+  );
   const [staff, setStaff] = useState([]);
   const [telegramId, setTelegramId] = useState('');
   const [newRole, setNewRole] = useState('manager');
@@ -91,20 +89,20 @@ export default function ManagersPage({ adminUser }) {
       setAuditRows(result.audit || []);
       setAuditTotal(Number(result.total || 0));
     } catch (requestError) {
-      setError(requestError.message || 'Не удалось загрузить историю запросов');
+      setError(requestError.message || tr('Could not load the request history', 'Не удалось загрузить историю запросов'));
     } finally {
       setAuditLoading(false);
     }
-  }, [appliedAuditSearch, auditOffset, auditStatus]);
+  }, [appliedAuditSearch, auditOffset, auditStatus, tr]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       loadStaff()
-        .catch((requestError) => setError(requestError.message || 'Не удалось загрузить сотрудников'))
+        .catch((requestError) => setError(requestError.message || tr('Could not load staff', 'Не удалось загрузить сотрудников')))
         .finally(() => setLoading(false));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadStaff]);
+  }, [loadStaff, tr]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -121,7 +119,7 @@ export default function ManagersPage({ adminUser }) {
   const addStaff = async () => {
     const userId = Number(telegramId);
     if (!Number.isSafeInteger(userId) || userId <= 0) {
-      setError('Введите корректный Telegram ID сотрудника');
+      setError(tr('Enter a valid staff Telegram ID', 'Введите корректный Telegram ID сотрудника'));
       return;
     }
     setSavingId('new');
@@ -132,10 +130,13 @@ export default function ManagersPage({ adminUser }) {
         body: JSON.stringify({ user_id: userId, role: newRole }),
       });
       setTelegramId('');
-      flashSuccess(`${roleLabel(newRole)} добавлен: ${userId}`);
+      flashSuccess(tr(
+        `${roleLabel(newRole)} added: ${userId}`,
+        `${roleLabel(newRole)} добавлен: ${userId}`
+      ));
       await loadStaff();
     } catch (requestError) {
-      setError(requestError.message || 'Не удалось добавить сотрудника');
+      setError(requestError.message || tr('Could not add the staff member', 'Не удалось добавить сотрудника'));
     } finally {
       setSavingId('');
     }
@@ -150,10 +151,10 @@ export default function ManagersPage({ adminUser }) {
         method: 'PATCH',
         body: JSON.stringify(patch),
       });
-      flashSuccess('Доступ сотрудника обновлён');
+      flashSuccess(tr('Staff access has been updated', 'Доступ сотрудника обновлён'));
       await loadStaff();
     } catch (requestError) {
-      setError(requestError.message || 'Не удалось обновить доступ');
+      setError(requestError.message || tr('Could not update access', 'Не удалось обновить доступ'));
     } finally {
       setSavingId('');
     }
@@ -165,10 +166,10 @@ export default function ManagersPage({ adminUser }) {
     try {
       await apiAdminFetchJson(`/api/admin/staff/${item.user_id}`, { method: 'DELETE' });
       setDeleteConfirmId('');
-      flashSuccess(`Сотрудник ${item.user_id} удалён`);
+      flashSuccess(tr(`Staff member ${item.user_id} has been removed`, `Сотрудник ${item.user_id} удалён`));
       await loadStaff();
     } catch (requestError) {
-      setError(requestError.message || 'Не удалось удалить сотрудника');
+      setError(requestError.message || tr('Could not remove the staff member', 'Не удалось удалить сотрудника'));
     } finally {
       setSavingId('');
     }
@@ -192,14 +193,15 @@ export default function ManagersPage({ adminUser }) {
     <div className="admin-managers-layout">
       <section className="admin-card admin-managers-hero">
         <div>
-          <div className="admin-badge">Доступ сотрудников</div>
-          <h3 className="admin-section-title">Менеджеры и администраторы</h3>
+          <div className="admin-badge">{tr('Staff access', 'Доступ сотрудников')}</div>
+          <h3 className="admin-section-title">{tr('Managers and administrators', 'Менеджеры и администраторы')}</h3>
           <p className="admin-muted">
-            Менеджер получает только команду <code>/stats</code>. Администратор также может открывать весь админцентр.
+            {tr('A manager can only use ', 'Менеджер получает только команду ')}<code>/stats</code>.
+            {' '}{tr('An administrator can also open the entire Admin Center.', 'Администратор также может открывать весь админцентр.')}
           </p>
         </div>
         <div className="admin-managers-command">
-          <strong>Быстрый поиск клиента</strong>
+          <strong>{tr('Quick client lookup', 'Быстрый поиск клиента')}</strong>
           <code>/stats @nickname</code>
           <code>/stats 123456789</code>
         </div>
@@ -211,9 +213,12 @@ export default function ManagersPage({ adminUser }) {
       <section className="admin-card admin-managers-add">
         <div className="admin-section-head">
           <div>
-            <h3 className="admin-section-title">Добавить сотрудника</h3>
+            <h3 className="admin-section-title">{tr('Add staff member', 'Добавить сотрудника')}</h3>
             <p className="admin-muted">
-              Можно добавить ID заранее. Имя и username появятся после первого запуска бота сотрудником.
+              {tr(
+                'You can add an ID in advance. Name and username appear after the staff member starts the bot.',
+                'Можно добавить ID заранее. Имя и username появятся после первого запуска бота сотрудником.'
+              )}
             </p>
           </div>
         </div>
@@ -223,46 +228,46 @@ export default function ManagersPage({ adminUser }) {
             <input
               className="admin-input"
               inputMode="numeric"
-              placeholder="Например 123456789"
+              placeholder={tr('For example, 123456789', 'Например 123456789')}
               value={telegramId}
               onChange={(event) => setTelegramId(event.target.value.replace(/\D/g, '').slice(0, 20))}
             />
           </label>
           <label>
-            <span>Роль</span>
+            <span>{tr('Role', 'Роль')}</span>
             <select
               className="admin-input"
               value={newRole}
               onChange={(event) => setNewRole(event.target.value)}
             >
-              {ROLE_OPTIONS.map((option) => (
+              {roleOptions.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
           </label>
           <button className="admin-btn" type="button" disabled={savingId === 'new'} onClick={addStaff}>
-            {savingId === 'new' ? 'Добавление…' : 'Добавить'}
+            {savingId === 'new' ? tr('Adding…', 'Добавление…') : tr('Add', 'Добавить')}
           </button>
         </div>
         <div className="admin-managers-role-hint">
-          {ROLE_OPTIONS.find((option) => option.value === newRole)?.hint}
+          {roleOptions.find((option) => option.value === newRole)?.hint}
         </div>
       </section>
 
       <section className="admin-card">
         <div className="admin-row-between admin-managers-list-head">
           <div>
-            <h3 className="admin-section-title">Список сотрудников</h3>
-            <div className="admin-muted">Всего: {staff.length}</div>
+            <h3 className="admin-section-title">{tr('Staff list', 'Список сотрудников')}</h3>
+            <div className="admin-muted">{tr('Total', 'Всего')}: {staff.length}</div>
           </div>
           <button className="admin-btn-outline" type="button" disabled={loading} onClick={loadStaff}>
-            Обновить
+            {tr('Refresh', 'Обновить')}
           </button>
         </div>
 
-        {loading ? <div className="admin-muted">Загрузка сотрудников…</div> : null}
+        {loading ? <div className="admin-muted">{tr('Loading staff…', 'Загрузка сотрудников…')}</div> : null}
         {!loading && !staff.length ? (
-          <div className="admin-managers-empty">Сотрудники пока не добавлены.</div>
+          <div className="admin-managers-empty">{tr('No staff members have been added yet.', 'Сотрудники пока не добавлены.')}</div>
         ) : null}
 
         <div className="admin-managers-list">
@@ -281,8 +286,8 @@ export default function ManagersPage({ adminUser }) {
                   </div>
                   <div>
                     <div className="admin-manager-name">
-                      {item.first_name || (item.username ? `@${item.username}` : 'Профиль ещё не получен')}
-                      {isSelf ? <span>Вы</span> : null}
+                      {item.first_name || (item.username ? `@${item.username}` : tr('Profile not loaded yet', 'Профиль ещё не получен'))}
+                      {isSelf ? <span>{tr('You', 'Вы')}</span> : null}
                     </div>
                     {item.username && item.first_name ? (
                       <div className="admin-muted">@{item.username}</div>
@@ -293,14 +298,14 @@ export default function ManagersPage({ adminUser }) {
 
                 <div className="admin-manager-controls">
                   <label>
-                    <span>Роль</span>
+                    <span>{tr('Role', 'Роль')}</span>
                     <select
                       className="admin-input"
                       value={item.role || 'manager'}
                       disabled={isSelf || isSaving}
                       onChange={(event) => updateStaff(item, { role: event.target.value })}
                     >
-                      {ROLE_OPTIONS.map((option) => (
+                      {roleOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -312,7 +317,7 @@ export default function ManagersPage({ adminUser }) {
                     onClick={() => updateStaff(item, { is_active: !active })}
                   >
                     <span />
-                    {active ? 'Доступ включён' : 'Доступ выключен'}
+                    {active ? tr('Access enabled', 'Доступ включён') : tr('Access disabled', 'Доступ выключен')}
                   </button>
                 </div>
 
@@ -322,9 +327,9 @@ export default function ManagersPage({ adminUser }) {
                   </span>
                   {deleteConfirmId === String(item.user_id) ? (
                     <div className="admin-manager-confirm">
-                      <span>Удалить доступ?</span>
-                      <button type="button" disabled={isSaving} onClick={() => deleteStaff(item)}>Да</button>
-                      <button type="button" disabled={isSaving} onClick={() => setDeleteConfirmId('')}>Нет</button>
+                      <span>{tr('Remove access?', 'Удалить доступ?')}</span>
+                      <button type="button" disabled={isSaving} onClick={() => deleteStaff(item)}>{tr('Yes', 'Да')}</button>
+                      <button type="button" disabled={isSaving} onClick={() => setDeleteConfirmId('')}>{tr('No', 'Нет')}</button>
                     </div>
                   ) : (
                     <button
@@ -333,7 +338,7 @@ export default function ManagersPage({ adminUser }) {
                       disabled={isSelf || isSaving}
                       onClick={() => setDeleteConfirmId(String(item.user_id))}
                     >
-                      Удалить
+                      {tr('Remove', 'Удалить')}
                     </button>
                   )}
                 </div>
@@ -346,9 +351,12 @@ export default function ManagersPage({ adminUser }) {
       <section className="admin-card admin-managers-audit">
         <div className="admin-row-between admin-managers-list-head">
           <div>
-            <h3 className="admin-section-title">История запросов /stats</h3>
+            <h3 className="admin-section-title">{tr('/stats request history', 'История запросов /stats')}</h3>
             <div className="admin-muted">
-              Кто запрашивал статистику, какого клиента искал и чем завершился запрос. Всего: {auditTotal}
+              {tr(
+                'Who requested statistics, which client was searched for, and the result. Total',
+                'Кто запрашивал статистику, какого клиента искал и чем завершился запрос. Всего'
+              )}: {auditTotal}
             </div>
           </div>
           <button
@@ -357,22 +365,22 @@ export default function ManagersPage({ adminUser }) {
             disabled={auditLoading}
             onClick={loadAudit}
           >
-            Обновить
+            {tr('Refresh', 'Обновить')}
           </button>
         </div>
 
         <form className="admin-audit-filters" onSubmit={applyAuditSearch}>
           <label>
-            <span>Поиск</span>
+            <span>{tr('Search', 'Поиск')}</span>
             <input
               className="admin-input"
               value={auditSearch}
-              placeholder="ID, username или команда"
+              placeholder={tr('ID, username or command', 'ID, username или команда')}
               onChange={(event) => setAuditSearch(event.target.value.slice(0, 100))}
             />
           </label>
           <label>
-            <span>Результат</span>
+            <span>{tr('Result', 'Результат')}</span>
             <select
               className="admin-input"
               value={auditStatus}
@@ -381,53 +389,53 @@ export default function ManagersPage({ adminUser }) {
                 setAuditStatus(event.target.value);
               }}
             >
-              {AUDIT_STATUS_OPTIONS.map((option) => (
+              {auditStatusOptions.map((option) => (
                 <option key={option.value || 'all'} value={option.value}>{option.label}</option>
               ))}
             </select>
           </label>
-          <button className="admin-btn" type="submit" disabled={auditLoading}>Найти</button>
+          <button className="admin-btn" type="submit" disabled={auditLoading}>{tr('Search', 'Найти')}</button>
         </form>
 
-        {auditLoading ? <div className="admin-muted admin-audit-loading">Загрузка истории…</div> : null}
+        {auditLoading ? <div className="admin-muted admin-audit-loading">{tr('Loading history…', 'Загрузка истории…')}</div> : null}
         {!auditLoading && !auditRows.length ? (
-          <div className="admin-managers-empty">По выбранным условиям запросов пока нет.</div>
+          <div className="admin-managers-empty">{tr('No requests match these filters.', 'По выбранным условиям запросов пока нет.')}</div>
         ) : null}
 
         <div className="admin-audit-list">
           {auditRows.map((item) => {
-            const statusMeta = AUDIT_STATUS_META[item.result_status] || {
-              label: item.result_status || 'Неизвестно',
+            const statusMeta = auditStatusMeta[item.result_status] || {
+              label: item.result_status || tr('Unknown', 'Неизвестно'),
               tone: 'neutral',
             };
             const requesterName = item.requester_first_name
-              || (item.requester_username ? `@${item.requester_username}` : 'Профиль не получен');
+              || (item.requester_username ? `@${item.requester_username}` : tr('Profile not loaded', 'Профиль не получен'));
             const targetName = item.target_user_id
               ? (
                 item.target_first_name
                 || (item.target_username ? `@${item.target_username}` : `ID ${item.target_user_id}`)
               )
-              : 'Клиент не определён';
+              : tr('Client not identified', 'Клиент не определён');
             return (
               <article className="admin-audit-card" key={item.id}>
                 <div className="admin-audit-card-head">
                   <span className={`admin-audit-status ${statusMeta.tone}`}>{statusMeta.label}</span>
-                  <time>{formatAuditDate(item.created_at)}</time>
+                  <time>{formatAuditDate(item.created_at, locale, tr('Time not specified', 'Время не указано'))}</time>
                 </div>
                 <div className="admin-audit-grid">
                   <div>
-                    <span className="admin-audit-label">Запросил</span>
+                    <span className="admin-audit-label">{tr('Requested by', 'Запросил')}</span>
                     <strong>{requesterName}</strong>
                     <small>
                       ID {item.requested_by}
                       {' · '}
-                      {item.requester_role ? roleLabel(item.requester_role) : 'роль не назначена'}
+                      {item.requester_role ? roleLabel(item.requester_role) : tr('role not assigned', 'роль не назначена')}
                     </small>
                   </div>
                   <div>
-                    <span className="admin-audit-label">Искали</span>
+                    <span className="admin-audit-label">{tr('Searched for', 'Искали')}</span>
                     <strong>{targetName}</strong>
-                    <small>{item.target_user_id ? `ID ${item.target_user_id}` : 'Совпадение не найдено'}</small>
+                    <small>{item.target_user_id ? `ID ${item.target_user_id}` : tr('No match found', 'Совпадение не найдено')}</small>
                   </div>
                 </div>
                 <code className="admin-audit-query">{item.target_query || '/stats'}</code>
@@ -444,16 +452,16 @@ export default function ManagersPage({ adminUser }) {
               disabled={auditLoading || auditOffset === 0}
               onClick={() => setAuditOffset(Math.max(0, auditOffset - AUDIT_PAGE_SIZE))}
             >
-              ← Назад
+              {tr('← Previous', '← Назад')}
             </button>
-            <span>Страница {auditPage} из {auditPages}</span>
+            <span>{tr('Page', 'Страница')} {auditPage} {tr('of', 'из')} {auditPages}</span>
             <button
               className="admin-btn-outline"
               type="button"
               disabled={auditLoading || auditOffset + AUDIT_PAGE_SIZE >= auditTotal}
               onClick={() => setAuditOffset(auditOffset + AUDIT_PAGE_SIZE)}
             >
-              Далее →
+              {tr('Next →', 'Далее →')}
             </button>
           </div>
         ) : null}

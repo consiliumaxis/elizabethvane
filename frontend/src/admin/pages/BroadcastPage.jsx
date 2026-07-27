@@ -1,7 +1,9 @@
 ﻿import { useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
+import { useAdminLocale } from '../useAdminLocale';
 
 export default function BroadcastPage() {
+  const { tr } = useAdminLocale();
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -23,7 +25,7 @@ export default function BroadcastPage() {
       setResult(res.result || null);
       setText('');
     } catch (e) {
-      setError(e.message || 'Не удалось отправить рассылку');
+      setError(e.message || tr('Could not send the broadcast', 'Не удалось отправить рассылку'));
     } finally {
       setLoading(false);
     }
@@ -31,27 +33,29 @@ export default function BroadcastPage() {
 
   return (
     <div className="admin-card">
-      <h3 className="admin-section-title">Рассылка</h3>
+      <h3 className="admin-section-title">{tr('Broadcast', 'Рассылка')}</h3>
       <textarea
         className="admin-textarea"
         rows={8}
-        placeholder="Напишите сообщение для всех пользователей..."
+        placeholder={tr('Write a message for all users…', 'Напишите сообщение для всех пользователей...')}
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
       <div className="admin-row-between">
-        <div className="admin-muted">Сообщение отправится всем пользователям из таблицы users.</div>
+        <div className="admin-muted">
+          {tr('The message will be sent to every user in the users table.', 'Сообщение отправится всем пользователям из таблицы users.')}
+        </div>
         <button className="admin-btn" onClick={handleSend} disabled={loading || !text.trim()}>
-          {loading ? 'Отправка...' : 'Запустить рассылку'}
+          {loading ? tr('Sending…', 'Отправка...') : tr('Send broadcast', 'Запустить рассылку')}
         </button>
       </div>
 
       {error ? <div className="admin-error">{error}</div> : null}
       {result ? (
         <div className="admin-result">
-          <div>Всего: <strong>{result.total}</strong></div>
-          <div>Отправлено: <strong>{result.sent}</strong></div>
-          <div>Ошибок: <strong>{result.failed}</strong></div>
+          <div>{tr('Total', 'Всего')}: <strong>{result.total}</strong></div>
+          <div>{tr('Sent', 'Отправлено')}: <strong>{result.sent}</strong></div>
+          <div>{tr('Failed', 'Ошибок')}: <strong>{result.failed}</strong></div>
         </div>
       ) : null}
     </div>

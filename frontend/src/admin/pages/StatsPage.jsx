@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
+import { useAdminLocale } from '../useAdminLocale';
 
 const CHART_W = 760;
 const CHART_H = 260;
@@ -20,22 +21,22 @@ const shiftDays = (base, days) => {
   return d;
 };
 
-const formatShortDate = (isoDate) => {
+const formatShortDate = (isoDate, locale) => {
   const d = new Date(`${isoDate}T00:00:00`);
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+  return d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit' });
 };
 
-const formatFullDate = (isoDate) => {
+const formatFullDate = (isoDate, locale) => {
   const d = new Date(`${isoDate}T00:00:00`);
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
-function buildRangePoints(stats, fromDate, toDate) {
+function buildRangePoints(stats, fromDate, toDate, locale) {
   const usersByDay = stats?.users_by_day || [];
   if (usersByDay.length) {
     return usersByDay.map((row) => ({
       date: row.date,
-      label: formatShortDate(row.date),
+      label: formatShortDate(row.date, locale),
       total: Number(row.total || 0),
       newCount: Number(row.new || 0),
     }));
@@ -56,7 +57,7 @@ function buildRangePoints(stats, fromDate, toDate) {
     runningTotal += newCount;
     points.push({
       date: iso,
-      label: formatShortDate(iso),
+      label: formatShortDate(iso, locale),
       total: runningTotal,
       newCount,
     });
@@ -66,9 +67,9 @@ function buildRangePoints(stats, fromDate, toDate) {
   return points;
 }
 
-function GrowthChart({ points, selectedDate, onSelect }) {
+function GrowthChart({ points, selectedDate, onSelect, locale, emptyText }) {
   if (!points.length) {
-    return <div className="admin-muted">Нет данных за выбранный период</div>;
+    return <div className="admin-muted">{emptyText}</div>;
   }
 
   const innerW = CHART_W - CHART_PAD_X * 2;
@@ -160,7 +161,7 @@ function GrowthChart({ points, selectedDate, onSelect }) {
                 style={{ cursor: 'pointer' }}
                 onClick={() => onSelect(point.date)}
               >
-                <title>{`${formatFullDate(point.date)}: ${point.total}`}</title>
+                <title>{`${formatFullDate(point.date, locale)}: ${point.total}`}</title>
               </circle>
             </g>
           );
@@ -187,6 +188,7 @@ function GrowthChart({ points, selectedDate, onSelect }) {
 }
 
 export default function StatsPage() {
+  const { locale, tr } = useAdminLocale();
   const now = useMemo(() => new Date(), []);
   const defaultTo = useMemo(() => toIsoDate(now), [now]);
   const defaultFrom = useMemo(() => toIsoDate(shiftDays(now, -6)), [now]);
@@ -213,28 +215,22 @@ export default function StatsPage() {
       if (apiPeriod.from) setDateFrom(apiPeriod.from);
       if (apiPeriod.to) setDateTo(apiPeriod.to);
     } catch (e) {
-      setError(e.message || 'Не удалось загрузить статистику');
+      setError(e.message || tr('Could not load statistics', 'Не удалось загрузить статистику'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tr]);
 
   useEffect(() => {
-    loadStats(defaultFrom, defaultTo);
+    const timer = window.setTimeout(() => loadStats(defaultFrom, defaultTo), 0);
+    return () => window.clearTimeout(timer);
   }, [defaultFrom, defaultTo, loadStats]);
 
   const modeEntries = useMemo(() => Object.entries(stats?.mode_breakdown || {}), [stats]);
-  const chartPoints = useMemo(() => buildRangePoints(stats, dateFrom, dateTo), [stats, dateFrom, dateTo]);
-
-  useEffect(() => {
-    if (!chartPoints.length) {
-      setSelectedDate('');
-      return;
-    }
-    if (!chartPoints.some((p) => p.date === selectedDate)) {
-      setSelectedDate(chartPoints[chartPoints.length - 1].date);
-    }
-  }, [chartPoints, selectedDate]);
+  const chartPoints = useMemo(
+    () => buildRangePoints(stats, dateFrom, dateTo, locale),
+    [stats, dateFrom, dateTo, locale]
+  );
 
   const selectedPoint = useMemo(
     () => chartPoints.find((point) => point.date === selectedDate) || chartPoints[chartPoints.length - 1] || null,
@@ -259,68 +255,74 @@ export default function StatsPage() {
   }
 
   if (!stats && loading) {
-    return <div className="admin-card admin-muted">Загрузка статистики...</div>;
+    return <div className="admin-card admin-muted">{tr('Loading statistics…', 'Загрузка статистики...')}</div>;
   }
 
   if (!stats) {
-    return <div className="admin-card admin-muted">Нет данных</div>;
+    return <div className="admin-card admin-muted">{tr('No data', 'Нет данных')}</div>;
   }
 
   return (
     <div className="admin-card admin-stats-single">
       <div className="admin-row-between admin-chart-head">
-        <h3 className="admin-section-title">📊 Статистика</h3>
-        {loading ? <span className="admin-muted">Обновление...</span> : null}
+        <h3 className="admin-section-title">📊 {tr('Real dashboard', 'Реальная статистика')}</h3>
+        {loading ? <span className="admin-muted">{tr('Refreshing…', 'Обновление...')}</span> : null}
       </div>
 
       <div className="admin-kpi-grid">
         <div className="admin-kpi-chip">
-          <div className="admin-kpi-label">👥 Пользователи</div>
+          <div className="admin-kpi-label">👥 {tr('Users', 'Пользователи')}</div>
           <div className="admin-kpi-value">{stats.users_total}</div>
         </div>
         <div className="admin-kpi-chip">
-          <div className="admin-kpi-label">🛡️ Админы</div>
+          <div className="admin-kpi-label">🛡️ {tr('Admins', 'Админы')}</div>
           <div className="admin-kpi-value">{stats.admins_total}</div>
         </div>
         <div className="admin-kpi-chip">
-          <div className="admin-kpi-label">📈 Анализы</div>
+          <div className="admin-kpi-label">📈 {tr('Analyses', 'Анализы')}</div>
           <div className="admin-kpi-value">{stats.active_analyses}</div>
         </div>
         <div className="admin-kpi-chip">
-          <div className="admin-kpi-label">🤖 AI чаты</div>
+          <div className="admin-kpi-label">🤖 {tr('AI chats', 'AI чаты')}</div>
           <div className="admin-kpi-value">{stats.chats_total}</div>
         </div>
       </div>
 
       <div className="admin-date-filter compact">
         <label className="admin-date-field">
-          <span>С</span>
+          <span>{tr('From', 'С')}</span>
           <input type="date" className="admin-input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         </label>
         <label className="admin-date-field">
-          <span>По</span>
+          <span>{tr('To', 'По')}</span>
           <input type="date" className="admin-input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
         </label>
-        <button className="admin-btn" onClick={applyRange}>Применить</button>
+        <button className="admin-btn" onClick={applyRange}>{tr('Apply', 'Применить')}</button>
       </div>
 
       <div className="admin-quick-ranges compact">
-        <button className="admin-btn-outline" onClick={() => quickRange(1)}>🗓️ Сегодня</button>
-        <button className="admin-btn-outline" onClick={() => quickRange(7)}>7 дней</button>
-        <button className="admin-btn-outline" onClick={() => quickRange(30)}>30 дней</button>
+        <button className="admin-btn-outline" onClick={() => quickRange(1)}>🗓️ {tr('Today', 'Сегодня')}</button>
+        <button className="admin-btn-outline" onClick={() => quickRange(7)}>{tr('7 days', '7 дней')}</button>
+        <button className="admin-btn-outline" onClick={() => quickRange(30)}>{tr('30 days', '30 дней')}</button>
       </div>
 
-      <GrowthChart points={chartPoints} selectedDate={selectedDate} onSelect={setSelectedDate} />
+      <GrowthChart
+        points={chartPoints}
+        selectedDate={selectedDate}
+        onSelect={setSelectedDate}
+        locale={locale}
+        emptyText={tr('No data for the selected period', 'Нет данных за выбранный период')}
+      />
 
       {selectedPoint ? (
         <div className="admin-point-info">
-          🎯 {formatFullDate(selectedPoint.date)} | Всего: <strong>{selectedPoint.total}</strong> | Новых: <strong>{selectedPoint.newCount}</strong>
+          🎯 {formatFullDate(selectedPoint.date, locale)} | {tr('Total', 'Всего')}: <strong>{selectedPoint.total}</strong> | {tr('New', 'Новых')}: <strong>{selectedPoint.newCount}</strong>
         </div>
       ) : null}
 
       <div className="admin-modes-inline">
         {modeEntries.length === 0 ? (
-          <span className="admin-muted">Нет данных по режимам</span>
+          <span className="admin-muted">{tr('No mode data', 'Нет данных по режимам')}</span>
         ) : (
           modeEntries.map(([mode, count]) => (
             <div className="admin-mode-chip" key={mode}>

@@ -33,7 +33,7 @@ class StrategyPromotionTest(unittest.TestCase):
         source = (PROJECT_ROOT / "frontend/src/admin/pages/StrategiesPage.jsx").read_text(encoding="utf-8")
 
         self.assertIn("can_toggle_system", source)
-        self.assertIn("Сделать системной", source)
+        self.assertIn("tr('Make system-wide', 'Сделать системной')", source)
         self.assertIn("admin-system-switch-track", source)
         self.assertIn("Владелец сохраняется", source)
         self.assertIn("is_system: form.is_system", source)
@@ -42,6 +42,7 @@ class StrategyPromotionTest(unittest.TestCase):
         source = (PROJECT_ROOT / "frontend/src/admin/pages/StrategiesPage.jsx").read_text(encoding="utf-8")
 
         self.assertNotIn("Выберите хотя бы один таймфрейм", source)
+        self.assertIn("Nothing selected — the strategy is available for all timeframes.", source)
         self.assertIn("стратегия доступна для всех таймфреймов", source)
 
     def test_strategy_actions_use_visible_floating_notifications(self):
@@ -59,7 +60,7 @@ class StrategyPromotionTest(unittest.TestCase):
         styles = (PROJECT_ROOT / "frontend/src/admin/admin.css").read_text(encoding="utf-8")
 
         self.assertIn("admin-strategy-editor-head", source)
-        self.assertIn('<div className="admin-metric-label">Пользователи</div>', source)
+        self.assertIn('<div className="admin-metric-label">{tr(\'Users\', \'Пользователи\')}</div>', source)
         self.assertGreaterEqual(styles.count("grid-template-columns: repeat(3, minmax(0, 1fr))"), 2)
         self.assertIn(".admin-strategy-mini-card .admin-metric-value.small", styles)
 
@@ -67,7 +68,7 @@ class StrategyPromotionTest(unittest.TestCase):
         source = (PROJECT_ROOT / "frontend/src/admin/pages/StrategiesPage.jsx").read_text(encoding="utf-8")
         styles = (PROJECT_ROOT / "frontend/src/admin/admin.css").read_text(encoding="utf-8")
 
-        self.assertIn('<div className="admin-metric-label">Всего</div>', source)
+        self.assertIn('<div className="admin-metric-label">{tr(\'Total\', \'Всего\')}</div>', source)
         self.assertIn(".admin-strategy-summary-item .admin-metric-label", styles)
         self.assertIn(".admin-strategy-summary-item .admin-metric-value.small", styles)
 

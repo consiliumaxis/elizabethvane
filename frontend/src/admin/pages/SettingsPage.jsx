@@ -1,23 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
+import { useAdminLocale } from '../useAdminLocale';
 
 const STREAM_SIGNALS = ['BUY', 'SELL'];
 const INDICATOR_SIGNAL_OPTIONS = ['AUTO', 'BUY', 'SELL', 'NEUTRAL'];
 const ACCESS_POLICIES = [
   {
     key: 'registration',
-    title: 'После регистрации',
-    description: 'Сигналы откроются после Pocket registration postback.',
+    title: 'After registration',
+    description: 'Signals unlock after a Pocket registration postback.',
   },
   {
     key: 'registration_deposit',
-    title: 'После регистрации и депозита',
-    description: 'Считаем общую сумму FTD и повторных депозитов.',
+    title: 'After registration and deposit',
+    description: 'FTD and repeat deposits are added together.',
   },
   {
     key: 'all',
-    title: 'Доступ к сигналам открыт всем',
-    description: 'Сигналы доступны без проверки регистрации и депозита.',
+    title: 'Signal access is open to everyone',
+    description: 'Signals are available without registration or deposit checks.',
   },
 ];
 const STREAM_ANALYSIS_TYPES = [
@@ -25,22 +26,22 @@ const STREAM_ANALYSIS_TYPES = [
   { key: 'binary', title: 'Binary' },
 ];
 const FOREX_STREAM_MARKETS = [
-  { key: 'currencies', title: 'Валюты' },
-  { key: 'indices', title: 'Индексы' },
-  { key: 'commodities', title: 'Сырье' },
-  { key: 'stocks', title: 'Акции' },
+  { key: 'currencies', title: 'Currencies' },
+  { key: 'indices', title: 'Indices' },
+  { key: 'commodities', title: 'Commodities' },
+  { key: 'stocks', title: 'Stocks' },
 ];
 const BINARY_STREAM_MARKETS = [
   { key: 'forex', title: 'Forex' },
   { key: 'otc', title: 'OTC' },
-  { key: 'commodities', title: 'Сырье' },
-  { key: 'stocks', title: 'Акции' },
+  { key: 'commodities', title: 'Commodities' },
+  { key: 'stocks', title: 'Stocks' },
   { key: 'crypto', title: 'Crypto' },
 ];
 const QUIZ_STEPS = [
-  { key: 'experience', title: 'Вопрос 1', hint: 'Опыт в трейдинге' },
-  { key: 'broker_experience', title: 'Вопрос 2', hint: 'Опыт с брокером' },
-  { key: 'capital', title: 'Вопрос 3', hint: 'Капитал / депозит' },
+  { key: 'experience', title: 'Question 1', hint: 'Trading experience' },
+  { key: 'broker_experience', title: 'Question 2', hint: 'Broker experience' },
+  { key: 'capital', title: 'Question 3', hint: 'Capital / deposit' },
 ];
 const DEFAULT_QUIZ_CONFIG = {
   experience: {
@@ -350,6 +351,42 @@ const buildPreviewSignals = ({
 };
 
 export default function SettingsPage() {
+  const { language, setLanguage, tr } = useAdminLocale();
+  const accessPolicies = useMemo(() => [
+    {
+      key: 'registration',
+      title: tr('After registration', 'После регистрации'),
+      description: tr('Signals unlock after a Pocket registration postback.', 'Сигналы откроются после Pocket registration postback.'),
+    },
+    {
+      key: 'registration_deposit',
+      title: tr('After registration and deposit', 'После регистрации и депозита'),
+      description: tr('FTD and repeat deposits are added together.', 'Считаем общую сумму FTD и повторных депозитов.'),
+    },
+    {
+      key: 'all',
+      title: tr('Signal access is open to everyone', 'Доступ к сигналам открыт всем'),
+      description: tr('Signals are available without registration or deposit checks.', 'Сигналы доступны без проверки регистрации и депозита.'),
+    },
+  ], [tr]);
+  const localizedForexMarkets = useMemo(() => [
+    { key: 'currencies', title: tr('Currencies', 'Валюты') },
+    { key: 'indices', title: tr('Indices', 'Индексы') },
+    { key: 'commodities', title: tr('Commodities', 'Сырье') },
+    { key: 'stocks', title: tr('Stocks', 'Акции') },
+  ], [tr]);
+  const localizedBinaryMarkets = useMemo(() => [
+    { key: 'forex', title: 'Forex' },
+    { key: 'otc', title: 'OTC' },
+    { key: 'commodities', title: tr('Commodities', 'Сырье') },
+    { key: 'stocks', title: tr('Stocks', 'Акции') },
+    { key: 'crypto', title: 'Crypto' },
+  ], [tr]);
+  const localizedQuizSteps = useMemo(() => [
+    { key: 'experience', title: tr('Question 1', 'Вопрос 1'), hint: tr('Trading experience', 'Опыт в трейдинге') },
+    { key: 'broker_experience', title: tr('Question 2', 'Вопрос 2'), hint: tr('Broker experience', 'Опыт с брокером') },
+    { key: 'capital', title: tr('Question 3', 'Вопрос 3'), hint: tr('Capital / deposit', 'Капитал / депозит') },
+  ], [tr]);
   const [activeSection, setActiveSection] = useState('menu');
   const [model, setModel] = useState('gpt-4o-mini');
   const [systemPrompt, setSystemPrompt] = useState('');
@@ -473,9 +510,9 @@ export default function SettingsPage() {
       setSystemMinDeposit(access.min_deposit_amount !== null && access.min_deposit_amount !== undefined ? String(access.min_deposit_amount) : '0.00');
       setSystemRegistrationUrl(access.registration_url || '');
     } catch (e) {
-      setError(e.message || 'Не удалось загрузить настройки');
+      setError(e.message || tr('Could not load settings', 'Не удалось загрузить настройки'));
     }
-  }, []);
+  }, [tr]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => loadAll(), 0);
@@ -511,8 +548,8 @@ export default function SettingsPage() {
   }, [activeSection, streamAnalysisType, streamMarket]);
 
   const activeStreamMarkets = useMemo(
-    () => (streamAnalysisType === 'binary' ? BINARY_STREAM_MARKETS : FOREX_STREAM_MARKETS),
-    [streamAnalysisType]
+    () => (streamAnalysisType === 'binary' ? localizedBinaryMarkets : localizedForexMarkets),
+    [streamAnalysisType, localizedBinaryMarkets, localizedForexMarkets]
   );
 
   const selectedStreamMarketTitle = useMemo(() => {
@@ -569,7 +606,7 @@ export default function SettingsPage() {
     const shouldSaveAccess = source === 'access' || source === 'all';
 
     if (shouldSaveStreams && streamEnabled && streamScope === 'strategy' && !streamStrategyId) {
-      setError('Выберите стратегию для стрима');
+      setError(tr('Select a strategy for the stream', 'Выберите стратегию для стрима'));
       return;
     }
 
@@ -577,16 +614,16 @@ export default function SettingsPage() {
     const manualTP = toMaybeNumber(streamManualTP);
     const emulationPrice = toMaybeNumber(streamManualPrice);
     if (shouldSaveStreams && streamEnabled && streamLevelsMode === 'manual' && (manualSL === null || manualTP === null)) {
-      setError('Для ручных уровней нужно указать Conservative SL и Target (Take Profit)');
+      setError(tr('Manual levels require Conservative SL and Target (Take Profit)', 'Для ручных уровней нужно указать Conservative SL и Target (Take Profit)'));
       return;
     }
     if (shouldSaveStreams && streamManualPrice.trim() && emulationPrice === null) {
-      setError('Текущая цена должна быть числом');
+      setError(tr('Current price must be a number', 'Текущая цена должна быть числом'));
       return;
     }
     const minDeposit = toMaybeNumber(systemMinDeposit);
     if (shouldSaveAccess && systemAccessPolicy === 'registration_deposit' && minDeposit === null) {
-      setError('Минимальная сумма депозита должна быть числом');
+      setError(tr('Minimum deposit must be a number', 'Минимальная сумма депозита должна быть числом'));
       return;
     }
     const preparedFinalMessageConfig = {
@@ -602,21 +639,24 @@ export default function SettingsPage() {
     };
     if (shouldSaveSupport) {
       const preparedQuiz = normalizeQuizConfig(quizConfig);
-      const invalidStep = QUIZ_STEPS.find((step) => {
+      const invalidStep = localizedQuizSteps.find((step) => {
         const item = preparedQuiz[step.key];
         return !String(item.question || '').trim() || !Array.isArray(item.options) || item.options.length === 0;
       });
       if (invalidStep) {
-        setError(`Заполните вопрос и хотя бы один вариант ответа: ${invalidStep.title}`);
+        setError(tr(
+          `Fill in the question and at least one answer: ${invalidStep.title}`,
+          `Заполните вопрос и хотя бы один вариант ответа: ${invalidStep.title}`
+        ));
         return;
       }
       if (!preparedFinalMessageConfig.trigger_button_text) {
-        setError('Укажите название кнопки перехода после подписки');
+        setError(tr('Enter the post-subscription button label', 'Укажите название кнопки перехода после подписки'));
         setFunnelEditorTab('final');
         return;
       }
       if (preparedFinalMessageConfig.enabled && !preparedFinalMessageConfig.message_text) {
-        setError('Укажите текст финального сообщения');
+        setError(tr('Enter the final message text', 'Укажите текст финального сообщения'));
         setFunnelEditorTab('final');
         return;
       }
@@ -624,19 +664,19 @@ export default function SettingsPage() {
         preparedFinalMessageConfig.enabled
         && preparedFinalMessageConfig.buttons.length === 0
       ) {
-        setError('Добавьте хотя бы одну кнопку финального сообщения');
+        setError(tr('Add at least one final-message button', 'Добавьте хотя бы одну кнопку финального сообщения'));
         setFunnelEditorTab('final');
         return;
       }
       const menuButtons = preparedFinalMessageConfig.buttons.filter((button) => button.type === 'menu');
       if (menuButtons.length > 1) {
-        setError('Можно добавить только одну кнопку открытия меню');
+        setError(tr('Only one menu button can be added', 'Можно добавить только одну кнопку открытия меню'));
         setFunnelEditorTab('final');
         return;
       }
       const webAppButtons = preparedFinalMessageConfig.buttons.filter((button) => button.type === 'web_app');
       if (webAppButtons.length > 1) {
-        setError('Можно добавить только одну кнопку открытия мини-приложения');
+        setError(tr('Only one mini-app button can be added', 'Можно добавить только одну кнопку открытия мини-приложения'));
         setFunnelEditorTab('final');
         return;
       }
@@ -646,7 +686,10 @@ export default function SettingsPage() {
         || (button.type === 'url' && !isValidFinalButtonUrl(button.url))
       ));
       if (invalidFinalButtonIndex >= 0) {
-        setError(`Проверьте название и ссылку кнопки ${invalidFinalButtonIndex + 1}`);
+        setError(tr(
+          `Check the label and URL of button ${invalidFinalButtonIndex + 1}`,
+          `Проверьте название и ссылку кнопки ${invalidFinalButtonIndex + 1}`
+        ));
         setFunnelEditorTab('final');
         return;
       }
@@ -719,24 +762,24 @@ export default function SettingsPage() {
       });
 
       if (source === 'ai') {
-        setStatus('Настройки AI чата сохранены');
+        setStatus(tr('AI chat settings saved', 'Настройки AI чата сохранены'));
         setOpenAiApiKey('');
         await loadAll();
       } else if (source === 'streams') {
-        setStatus('Настройки стримов сохранены');
+        setStatus(tr('Stream settings saved', 'Настройки стримов сохранены'));
       } else if (source === 'support') {
-        setStatus('Ссылки поддержки сохранены');
+        setStatus(tr('Bot funnel settings saved', 'Ссылки поддержки сохранены'));
       } else if (source === 'pocket') {
-        setStatus('Pocket API сохранен');
+        setStatus(tr('Pocket API saved', 'Pocket API сохранен'));
         setPocketApiToken('');
         await loadAll();
       } else if (source === 'access') {
-        setStatus('Настройки доступа сохранены');
+        setStatus(tr('Access settings saved', 'Настройки доступа сохранены'));
       } else {
-        setStatus('Настройки сохранены');
+        setStatus(tr('Settings saved', 'Настройки сохранены'));
       }
     } catch (e) {
-      setError(e.message || 'Не удалось сохранить настройки');
+      setError(e.message || tr('Could not save settings', 'Не удалось сохранить настройки'));
     } finally {
       setSaving(false);
     }
@@ -842,15 +885,15 @@ export default function SettingsPage() {
   const addFinalMessageButton = (type) => {
     setError('');
     if (finalMessageConfig.buttons.length >= FINAL_MESSAGE_MAX_BUTTONS) {
-      setError(`Можно добавить не более ${FINAL_MESSAGE_MAX_BUTTONS} кнопок`);
+      setError(tr(`No more than ${FINAL_MESSAGE_MAX_BUTTONS} buttons can be added`, `Можно добавить не более ${FINAL_MESSAGE_MAX_BUTTONS} кнопок`));
       return;
     }
     if (type === 'menu' && finalMessageConfig.buttons.some((button) => button.type === 'menu')) {
-      setError('Кнопка открытия меню уже добавлена');
+      setError(tr('A menu button has already been added', 'Кнопка открытия меню уже добавлена'));
       return;
     }
     if (type === 'web_app' && finalMessageConfig.buttons.some((button) => button.type === 'web_app')) {
-      setError('Кнопка открытия мини-приложения уже добавлена');
+      setError(tr('A mini-app button has already been added', 'Кнопка открытия мини-приложения уже добавлена'));
       return;
     }
     setFinalMessageConfig((prev) => ({
@@ -891,8 +934,8 @@ export default function SettingsPage() {
     ) {
       setError(
         type === 'menu'
-          ? 'Можно добавить только одну кнопку открытия меню'
-          : 'Можно добавить только одну кнопку открытия мини-приложения'
+          ? tr('Only one menu button can be added', 'Можно добавить только одну кнопку открытия меню')
+          : tr('Only one mini-app button can be added', 'Можно добавить только одну кнопку открытия мини-приложения')
       );
       return;
     }
@@ -928,35 +971,43 @@ export default function SettingsPage() {
       {
         key: 'streams',
         icon: '📡',
-        title: 'Стримы',
-        subtitle: streamEnabled ? 'Fallback включен' : 'Fallback выключен',
+        title: tr('Streams', 'Стримы'),
+        subtitle: streamEnabled ? tr('Fallback enabled', 'Fallback включен') : tr('Fallback disabled', 'Fallback выключен'),
       },
       {
         key: 'ai',
         icon: '🤖',
-        title: 'AI чат',
-        subtitle: `Модель: ${model || '-'}`,
+        title: tr('AI chat', 'AI чат'),
+        subtitle: `${tr('Model', 'Модель')}: ${model || '-'}`,
       },
       {
         key: 'access',
         icon: '✅',
-        title: 'Доступ к системе',
-        subtitle: ACCESS_POLICIES.find((item) => item.key === systemAccessPolicy)?.title || 'Правило доступа',
+        title: tr('System access', 'Доступ к системе'),
+        subtitle: accessPolicies.find((item) => item.key === systemAccessPolicy)?.title || tr('Access rule', 'Правило доступа'),
       },
       {
         key: 'support',
         icon: '🔗',
-        title: 'Воронка бота',
-        subtitle: 'Опросник, подписка и финальное сообщение',
+        title: tr('Bot funnel', 'Воронка бота'),
+        subtitle: tr('Quiz, subscription and final message', 'Опросник, подписка и финальное сообщение'),
       },
       {
         key: 'pocket',
         icon: '🔑',
         title: 'API',
-        subtitle: pocketPartnerId || pocketApiTokenConfigured ? `Pocket: ${pocketPartnerId || '-'} ${pocketApiTokenMasked || ''}` : 'Pocket API не настроен',
+        subtitle: pocketPartnerId || pocketApiTokenConfigured
+          ? `Pocket: ${pocketPartnerId || '-'} ${pocketApiTokenMasked || ''}`
+          : tr('Pocket API is not configured', 'Pocket API не настроен'),
+      },
+      {
+        key: 'interface',
+        icon: '🌐',
+        title: tr('Interface language', 'Язык интерфейса'),
+        subtitle: language === 'ru' ? 'Русский' : 'English',
       },
     ],
-    [model, pocketApiTokenConfigured, pocketApiTokenMasked, pocketPartnerId, streamEnabled, systemAccessPolicy]
+    [accessPolicies, language, model, pocketApiTokenConfigured, pocketApiTokenMasked, pocketPartnerId, streamEnabled, systemAccessPolicy, tr]
   );
 
   const goMenu = () => {
@@ -969,8 +1020,10 @@ export default function SettingsPage() {
     return (
       <div className="admin-page">
         <div className="admin-card">
-          <h3 className="admin-section-title">Настройки</h3>
-          <div className="admin-muted">Откройте карточку нужного раздела</div>
+          <h3 className="admin-section-title">{tr('Settings', 'Настройки')}</h3>
+          <div className="admin-muted">
+            {tr('Open the section you need', 'Откройте карточку нужного раздела')}
+          </div>
 
           <div className="admin-settings-menu-grid">
             {cards.map((card) => (
@@ -996,36 +1049,91 @@ export default function SettingsPage() {
     );
   }
 
+  if (activeSection === 'interface') {
+    return (
+      <div className="admin-card admin-settings-detail">
+        <div className="admin-row-between">
+          <div>
+            <div className="admin-badge">{tr('Interface', 'Интерфейс')}</div>
+            <h3 className="admin-section-title">
+              {tr('Interface language', 'Язык интерфейса')}
+            </h3>
+          </div>
+          <button className="admin-btn-outline" onClick={goMenu}>
+            {tr('← Back to settings', '← К настройкам')}
+          </button>
+        </div>
+
+        <div className="admin-language-panel">
+          <p className="admin-muted">
+            {tr(
+              'English is the default language for client-facing recordings. Your choice is saved only in this browser.',
+              'Английский используется по умолчанию для клиентских записей. Выбор сохраняется только в этом браузере.'
+            )}
+          </p>
+          <div className="admin-language-options">
+            <button
+              type="button"
+              className={language === 'en' ? 'active' : ''}
+              onClick={() => setLanguage('en')}
+            >
+              <span className="admin-language-code">EN</span>
+              <span>
+                <strong>English</strong>
+                <small>{tr('Default for Admin Center', 'По умолчанию для админ-центра')}</small>
+              </span>
+              <b>{language === 'en' ? '✓' : ''}</b>
+            </button>
+            <button
+              type="button"
+              className={language === 'ru' ? 'active' : ''}
+              onClick={() => setLanguage('ru')}
+            >
+              <span className="admin-language-code">RU</span>
+              <span>
+                <strong>Русский</strong>
+                <small>{tr('Optional working language', 'Дополнительный рабочий язык')}</small>
+              </span>
+              <b>{language === 'ru' ? '✓' : ''}</b>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (activeSection === 'ai') {
     return (
       <div className="admin-card admin-settings-detail">
         <div className="admin-row-between">
-          <h3 className="admin-section-title">AI чат</h3>
-          <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
+          <h3 className="admin-section-title">{tr('AI chat', 'AI чат')}</h3>
+          <button className="admin-btn-outline" onClick={goMenu}>{tr('← Back to settings', '← К карточкам')}</button>
         </div>
 
         <div className="admin-field">
-          <label className="admin-label">Модель</label>
+          <label className="admin-label">{tr('Model', 'Модель')}</label>
           <input className="admin-input" value={model} onChange={(e) => setModel(e.target.value)} />
         </div>
 
         <div className="admin-field">
-          <label className="admin-label">OpenAI API-ключ</label>
+          <label className="admin-label">{tr('OpenAI API key', 'OpenAI API-ключ')}</label>
           <input
             className="admin-input"
             type="password"
             autoComplete="off"
             value={openAiApiKey}
             onChange={(e) => setOpenAiApiKey(e.target.value)}
-            placeholder={openAiKeyConfigured ? 'Ключ настроен — введите новый только для замены' : 'sk-proj-…'}
+            placeholder={openAiKeyConfigured ? tr('Key configured — enter a new key only to replace it', 'Ключ настроен — введите новый только для замены') : 'sk-proj-…'}
           />
           <div className="admin-muted">
-            {openAiKeyConfigured ? 'Ключ сохранён и скрыт. Его используют AI-чат, EL CHATTER и основной бот Elizabeth.' : 'Ключ ещё не настроен.'}
+            {openAiKeyConfigured
+              ? tr('The key is saved and hidden. It is shared by AI chat, EL CHATTER and the main Elizabeth bot.', 'Ключ сохранён и скрыт. Его используют AI-чат, EL CHATTER и основной бот Elizabeth.')
+              : tr('The key is not configured yet.', 'Ключ ещё не настроен.')}
           </div>
         </div>
 
         <div className="admin-field">
-          <label className="admin-label">Системный промпт</label>
+          <label className="admin-label">{tr('System prompt', 'Системный промпт')}</label>
           <textarea
             className="admin-textarea"
             rows={8}
@@ -1036,7 +1144,7 @@ export default function SettingsPage() {
 
         <div className="admin-row-actions">
           <button className="admin-btn" onClick={() => saveSettings('ai')} disabled={saving}>
-            {saving ? 'Сохранение...' : 'Сохранить AI чат'}
+            {saving ? tr('Saving…', 'Сохранение...') : tr('Save AI chat', 'Сохранить AI чат')}
           </button>
         </div>
 
@@ -1052,57 +1160,57 @@ export default function SettingsPage() {
     return (
       <div className="admin-card admin-settings-detail admin-streams-detail">
         <div className="admin-row-between">
-          <h3 className="admin-section-title">Стримы</h3>
-          <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
+          <h3 className="admin-section-title">{tr('Streams', 'Стримы')}</h3>
+          <button className="admin-btn-outline" onClick={goMenu}>{tr('← Back to settings', '← К карточкам')}</button>
         </div>
 
         <div className="admin-stream-guide">
-          <div>Этот раздел управляет fallback-режимом сигнала, когда админ задаёт приоритетное направление.</div>
-          <div>Обязательно: выберите направление BUY/SELL. Для режима «По выбранной стратегии» укажите стратегию.</div>
-          <div>Опционально: ручные уровни SL/TP и ручные сигналы индикаторов. Если пропустить, система рассчитает автоматически.</div>
+          <div>{tr('This section controls the signal fallback mode when an administrator sets a preferred direction.', 'Этот раздел управляет fallback-режимом сигнала, когда админ задаёт приоритетное направление.')}</div>
+          <div>{tr('Required: select BUY/SELL. Select a strategy when using “Selected strategy”.', 'Обязательно: выберите направление BUY/SELL. Для режима «По выбранной стратегии» укажите стратегию.')}</div>
+          <div>{tr('Optional: manual SL/TP levels and indicator signals. If omitted, the system calculates them automatically.', 'Опционально: ручные уровни SL/TP и ручные сигналы индикаторов. Если пропустить, система рассчитает автоматически.')}</div>
         </div>
 
         <div className="admin-stream-block">
-          <label className="admin-label">Режим стрима</label>
+          <label className="admin-label">{tr('Stream mode', 'Режим стрима')}</label>
           <label className="admin-switch-line">
             <input
               type="checkbox"
               checked={streamEnabled}
               onChange={(e) => setStreamEnabled(e.target.checked)}
             />
-            <span>{streamEnabled ? 'Включен' : 'Выключен'}</span>
+            <span>{streamEnabled ? tr('Enabled', 'Включен') : tr('Disabled', 'Выключен')}</span>
           </label>
         </div>
 
         <div className="admin-stream-block">
-          <label className="admin-label">Применять fallback</label>
+          <label className="admin-label">{tr('Apply fallback', 'Применять fallback')}</label>
           <div className="admin-pill-group">
             <button
               type="button"
               className={`admin-pill-btn ${streamScope === 'all' ? 'active' : ''}`}
               onClick={() => setStreamScope('all')}
             >
-              По всем стратегиям
+              {tr('All strategies', 'По всем стратегиям')}
             </button>
             <button
               type="button"
               className={`admin-pill-btn ${streamScope === 'strategy' ? 'active' : ''}`}
               onClick={() => setStreamScope('strategy')}
             >
-              По выбранной стратегии
+              {tr('Selected strategy', 'По выбранной стратегии')}
             </button>
           </div>
         </div>
 
         {streamScope === 'strategy' ? (
           <div className="admin-stream-block">
-            <label className="admin-label">Стратегия</label>
+            <label className="admin-label">{tr('Strategy', 'Стратегия')}</label>
             <select
               className="admin-input"
               value={streamStrategyId}
               onChange={(e) => setStreamStrategyId(e.target.value)}
             >
-              <option value="">Выберите стратегию</option>
+              <option value="">{tr('Select strategy', 'Выберите стратегию')}</option>
               {streamStrategies.map((strategy) => (
                 <option key={strategy.id} value={strategy.id}>
                   {(strategy.icon || '📌') + ' ' + strategy.name}
@@ -1113,9 +1221,12 @@ export default function SettingsPage() {
         ) : null}
 
         <div className="admin-stream-block admin-stream-emulation-block">
-          <label className="admin-label">Актив и цена для эмуляции записи</label>
+          <label className="admin-label">{tr('Asset and price for record emulation', 'Актив и цена для эмуляции записи')}</label>
           <div className="admin-stream-hint">
-            Сначала выберите тип сигнала. Для Forex подтягиваются рынки и пары из Forex-раздела: валюты, индексы, сырье и акции. Для Binary подтягиваются binary-рынки с payout.
+            {tr(
+              'Select the signal type first. Forex uses markets and pairs from the Forex section; Binary uses binary markets with payout.',
+              'Сначала выберите тип сигнала. Для Forex подтягиваются рынки и пары из Forex-раздела: валюты, индексы, сырье и акции. Для Binary подтягиваются binary-рынки с payout.'
+            )}
           </div>
           <div className="admin-stream-type-row">
             {STREAM_ANALYSIS_TYPES.map((type) => (
@@ -1134,11 +1245,14 @@ export default function SettingsPage() {
             ))}
           </div>
           <div className="admin-stream-hint compact">
-            Можно оставить актив пустым: тогда пользовательский актив и live-цена останутся как обычно. Если указать актив, именно он попадёт в карточку и историю сигнала.
+            {tr(
+              'The asset can be left empty to keep the user-selected asset and live price. If set, this asset is written to the card and signal history.',
+              'Можно оставить актив пустым: тогда пользовательский актив и live-цена останутся как обычно. Если указать актив, именно он попадёт в карточку и историю сигнала.'
+            )}
           </div>
           <div className="admin-stream-emulation-grid">
             <div className="admin-field">
-              <label className="admin-label">Рынок</label>
+              <label className="admin-label">{tr('Market', 'Рынок')}</label>
               <select
                 className="admin-input"
                 value={streamMarket}
@@ -1153,11 +1267,15 @@ export default function SettingsPage() {
               </select>
             </div>
             <div className="admin-field">
-              <label className="admin-label">Актив</label>
+              <label className="admin-label">{tr('Asset', 'Актив')}</label>
               <input
                 className="admin-input"
                 list={`stream-asset-options-${streamAnalysisType}-${streamMarket}`}
-                placeholder={streamMarketLoading ? 'Загружаем активы...' : streamAnalysisType === 'binary' ? 'Например Netflix OTC' : 'Например AUD/CHF'}
+                placeholder={streamMarketLoading
+                  ? tr('Loading assets…', 'Загружаем активы...')
+                  : streamAnalysisType === 'binary'
+                    ? tr('For example, Netflix OTC', 'Например Netflix OTC')
+                    : tr('For example, AUD/CHF', 'Например AUD/CHF')}
                 value={streamSymbol}
                 onChange={(e) => setStreamSymbol(e.target.value)}
               />
@@ -1170,11 +1288,11 @@ export default function SettingsPage() {
               </datalist>
             </div>
             <div className="admin-field">
-              <label className="admin-label">Текущая цена</label>
+              <label className="admin-label">{tr('Current price', 'Текущая цена')}</label>
               <input
                 className="admin-input"
                 inputMode="decimal"
-                placeholder="Автоматически, если пусто"
+                placeholder={tr('Automatic when empty', 'Автоматически, если пусто')}
                 value={streamManualPrice}
                 onChange={(e) => setStreamManualPrice(e.target.value)}
               />
@@ -1183,7 +1301,7 @@ export default function SettingsPage() {
         </div>
 
         <div className="admin-stream-block">
-          <label className="admin-label">Итоговый вердикт системы</label>
+          <label className="admin-label">{tr('Final system verdict', 'Итоговый вердикт системы')}</label>
           <div className="admin-pill-group">
             {STREAM_SIGNALS.map((signal) => (
               <button
@@ -1199,21 +1317,21 @@ export default function SettingsPage() {
         </div>
 
         <div className="admin-stream-block">
-          <label className="admin-label">Conservative SL и Target (Take Profit)</label>
+          <label className="admin-label">Conservative SL {tr('and', 'и')} Target (Take Profit)</label>
           <div className="admin-pill-group">
             <button
               type="button"
               className={`admin-pill-btn ${streamLevelsMode === 'auto' ? 'active' : ''}`}
               onClick={() => setStreamLevelsMode('auto')}
             >
-              Автоматически
+              {tr('Automatic', 'Автоматически')}
             </button>
             <button
               type="button"
               className={`admin-pill-btn ${streamLevelsMode === 'manual' ? 'active' : ''}`}
               onClick={() => setStreamLevelsMode('manual')}
             >
-              Вручную
+              {tr('Manual', 'Вручную')}
             </button>
           </div>
           {streamLevelsMode === 'manual' ? (
@@ -1223,7 +1341,7 @@ export default function SettingsPage() {
                 <input
                   className="admin-input"
                   inputMode="decimal"
-                  placeholder="Например 1.23456"
+                  placeholder={tr('For example 1.23456', 'Например 1.23456')}
                   value={streamManualSL}
                   onChange={(e) => setStreamManualSL(e.target.value)}
                 />
@@ -1233,21 +1351,21 @@ export default function SettingsPage() {
                 <input
                   className="admin-input"
                   inputMode="decimal"
-                  placeholder="Например 1.24567"
+                  placeholder={tr('For example 1.24567', 'Например 1.24567')}
                   value={streamManualTP}
                   onChange={(e) => setStreamManualTP(e.target.value)}
                 />
               </div>
             </div>
           ) : (
-            <div className="admin-muted">Уровни будут взяты из стандартного анализа автоматически.</div>
+            <div className="admin-muted">{tr('Levels will be taken automatically from the standard analysis.', 'Уровни будут взяты из стандартного анализа автоматически.')}</div>
           )}
         </div>
 
         <div className="admin-stream-block">
-          <label className="admin-label">Сигналы индикаторов (для выбранной стратегии)</label>
+          <label className="admin-label">{tr('Indicator signals (for selected strategy)', 'Сигналы индикаторов (для выбранной стратегии)')}</label>
           {streamScope !== 'strategy' ? (
-            <div className="admin-muted">Этот блок доступен только в режиме «По выбранной стратегии».</div>
+            <div className="admin-muted">{tr('This block is available only in “Selected strategy” mode.', 'Этот блок доступен только в режиме «По выбранной стратегии».')}</div>
           ) : (
             <>
               <div className="admin-pill-group">
@@ -1256,7 +1374,7 @@ export default function SettingsPage() {
                   className={`admin-pill-btn ${streamIndicatorMode === 'auto' ? 'active' : ''}`}
                   onClick={() => setStreamIndicatorMode('auto')}
                 >
-                  Автоматически
+                  {tr('Automatic', 'Автоматически')}
                 </button>
                 <button
                   type="button"
@@ -1264,7 +1382,7 @@ export default function SettingsPage() {
                   onClick={() => setStreamIndicatorMode('manual')}
                   disabled={!selectedStrategy}
                 >
-                  Вручную
+                  {tr('Manual', 'Вручную')}
                 </button>
               </div>
 
@@ -1302,13 +1420,13 @@ export default function SettingsPage() {
                       })}
                     </div>
                   ) : (
-                    <div className="admin-muted">У выбранной стратегии нет подключенных индикаторов.</div>
+                    <div className="admin-muted">{tr('The selected strategy has no connected indicators.', 'У выбранной стратегии нет подключенных индикаторов.')}</div>
                   )
                 ) : (
-                  <div className="admin-muted">Сначала выберите стратегию, затем настройте индикаторы.</div>
+                  <div className="admin-muted">{tr('Select a strategy before configuring indicators.', 'Сначала выберите стратегию, затем настройте индикаторы.')}</div>
                 )
               ) : (
-                <div className="admin-muted">Система сама распределит сигналы индикаторов с перевесом в выбранный вердикт.</div>
+                <div className="admin-muted">{tr('The system will distribute indicator signals toward the selected verdict.', 'Система сама распределит сигналы индикаторов с перевесом в выбранный вердикт.')}</div>
               )}
             </>
           )}
@@ -1317,15 +1435,15 @@ export default function SettingsPage() {
         <div className="admin-stream-preview-card">
           <div className="admin-stream-preview-head">
             <div>
-              <div className="admin-stream-preview-title">Превью итогового сигнала</div>
+              <div className="admin-stream-preview-title">{tr('Final signal preview', 'Превью итогового сигнала')}</div>
               <div className="admin-stream-preview-meta">
-                {previewStrategy ? `${previewStrategy.icon || '📌'} ${previewStrategy.name}` : 'Без выбранной стратегии'}
+                {previewStrategy ? `${previewStrategy.icon || '📌'} ${previewStrategy.name}` : tr('No selected strategy', 'Без выбранной стратегии')}
                 {previewStrategy?.allowed_timeframes ? ` | ${previewStrategy.allowed_timeframes}` : ''}
               </div>
               <div className="admin-stream-preview-note">
-                Тип: {streamAnalysisType === 'binary' ? 'Binary' : 'Forex'} · Актив: {streamSymbol.trim() ? `${selectedStreamMarketTitle} · ${streamSymbol.trim()}` : 'как выбрал пользователь'}
+                {tr('Type', 'Тип')}: {streamAnalysisType === 'binary' ? 'Binary' : 'Forex'} · {tr('Asset', 'Актив')}: {streamSymbol.trim() ? `${selectedStreamMarketTitle} · ${streamSymbol.trim()}` : tr('user selection', 'как выбрал пользователь')}
                 {' · '}
-                Цена: {toMaybeNumber(streamManualPrice) !== null ? formatLevel(streamManualPrice) : 'live'}
+                {tr('Price', 'Цена')}: {toMaybeNumber(streamManualPrice) !== null ? formatLevel(streamManualPrice) : 'live'}
               </div>
             </div>
             <div className={`admin-stream-verdict ${previewVerdict === 'BUY' ? 'buy' : previewVerdict === 'SELL' ? 'sell' : 'off'}`}>
@@ -1371,7 +1489,7 @@ export default function SettingsPage() {
 
         <div className="admin-row-actions admin-stream-save-row">
           <button className="admin-btn" onClick={() => saveSettings('streams')} disabled={saving}>
-            {saving ? 'Сохранение...' : 'Сохранить стримы'}
+            {saving ? tr('Saving…', 'Сохранение...') : tr('Save streams', 'Сохранить стримы')}
           </button>
         </div>
 
@@ -1385,16 +1503,19 @@ export default function SettingsPage() {
     return (
       <div className="admin-card admin-settings-detail">
         <div className="admin-row-between">
-          <h3 className="admin-section-title">Доступ к системе</h3>
-          <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
+          <h3 className="admin-section-title">{tr('System access', 'Доступ к системе')}</h3>
+          <button className="admin-btn-outline" onClick={goMenu}>{tr('← Back to settings', '← К карточкам')}</button>
         </div>
 
         <div className="admin-muted">
-          Эти переменные управляют доступом к получению сигналов. Ручная выдача доступа в карточке пользователя остается персональным override.
+          {tr(
+            'These settings control access to signals. Manual access configured in a user profile remains a personal override.',
+            'Эти переменные управляют доступом к получению сигналов. Ручная выдача доступа в карточке пользователя остается персональным override.'
+          )}
         </div>
 
         <div className="admin-access-policy-list">
-          {ACCESS_POLICIES.map((item) => (
+          {accessPolicies.map((item) => (
             <button
               key={item.key}
               type="button"
@@ -1412,7 +1533,7 @@ export default function SettingsPage() {
 
         {systemAccessPolicy === 'registration_deposit' ? (
           <div className="admin-field">
-            <label className="admin-label">Минимальная общая сумма депозитов, $</label>
+            <label className="admin-label">{tr('Minimum total deposits, $', 'Минимальная общая сумма депозитов, $')}</label>
             <input
               className="admin-input"
               value={systemMinDeposit}
@@ -1421,13 +1542,16 @@ export default function SettingsPage() {
               inputMode="decimal"
             />
             <div className="admin-muted">
-              FTD и повторные депозиты суммируются. Когда сумма станет равна или выше этого значения, доступ к сигналам откроется автоматически.
+              {tr(
+                'FTD and repeat deposits are added together. Signal access unlocks automatically when the total reaches this value.',
+                'FTD и повторные депозиты суммируются. Когда сумма станет равна или выше этого значения, доступ к сигналам откроется автоматически.'
+              )}
             </div>
           </div>
         ) : null}
 
         <div className="admin-field">
-          <label className="admin-label">Ссылка регистрации на Pocket Option</label>
+          <label className="admin-label">{tr('Pocket Option registration URL', 'Ссылка регистрации на Pocket Option')}</label>
           <input
             className="admin-input"
             type="url"
@@ -1436,13 +1560,15 @@ export default function SettingsPage() {
             placeholder="https://pocketoption.com/..."
           />
           <div className="admin-muted">
-            Одна общая ссылка для переписки от аккаунта и основного бота. Шаблон {'{click_id}'} заменяется ID пользователя, остальные неизвестные параметры передаются пустыми.
+            {tr('One shared URL for account conversations and the main bot. The ', 'Одна общая ссылка для переписки от аккаунта и основного бота. Шаблон ')}
+            {'{click_id}'}
+            {tr(' placeholder is replaced with the user ID; other unknown parameters are sent empty.', ' заменяется ID пользователя, остальные неизвестные параметры передаются пустыми.')}
           </div>
         </div>
 
         <div className="admin-row-actions">
           <button className="admin-btn" onClick={() => saveSettings('access')} disabled={saving}>
-            {saving ? 'Сохранение...' : 'Сохранить доступ'}
+            {saving ? tr('Saving…', 'Сохранение...') : tr('Save access', 'Сохранить доступ')}
           </button>
         </div>
 
@@ -1459,19 +1585,22 @@ export default function SettingsPage() {
     return (
       <div className="admin-card admin-settings-detail">
         <div className="admin-row-between">
-          <h3 className="admin-section-title">Воронка бота</h3>
-          <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
+          <h3 className="admin-section-title">{tr('Bot funnel', 'Воронка бота')}</h3>
+          <button className="admin-btn-outline" onClick={goMenu}>{tr('← Back to settings', '← К карточкам')}</button>
         </div>
 
         <div className="admin-muted">
-          Настройки основной Telegram-воронки Elizabeth Bot. Не относятся к AI Chatter и воронке кружков.
+          {tr(
+            'Settings for the main Elizabeth Bot Telegram funnel. They do not affect AI Chatter or the video-note funnel.',
+            'Настройки основной Telegram-воронки Elizabeth Bot. Не относятся к AI Chatter и воронке кружков.'
+          )}
         </div>
 
-        <div className="admin-funnel-tabs" role="tablist" aria-label="Разделы воронки">
+        <div className="admin-funnel-tabs" role="tablist" aria-label={tr('Funnel sections', 'Разделы воронки')}>
           {[
-            ['quiz', 'Опросник'],
-            ['channel', 'Подписка'],
-            ['final', 'Финал'],
+            ['quiz', tr('Quiz', 'Опросник')],
+            ['channel', tr('Subscription', 'Подписка')],
+            ['final', tr('Final', 'Финал')],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -1493,19 +1622,19 @@ export default function SettingsPage() {
           <div className="admin-funnel-quiz">
             <div className="admin-funnel-head">
               <div>
-                <div className="admin-funnel-title">Стартовый опросник</div>
-                <div className="admin-muted">Каждый вариант станет отдельной inline-кнопкой в Telegram.</div>
+                <div className="admin-funnel-title">{tr('Onboarding quiz', 'Стартовый опросник')}</div>
+                <div className="admin-muted">{tr('Each answer becomes a separate Telegram inline button.', 'Каждый вариант станет отдельной inline-кнопкой в Telegram.')}</div>
               </div>
               <button
                 type="button"
                 className="admin-btn-outline"
                 onClick={() => setQuizConfig(normalizeQuizConfig())}
               >
-                Сбросить все
+                {tr('Reset all', 'Сбросить все')}
               </button>
             </div>
 
-            {QUIZ_STEPS.map((step) => {
+            {localizedQuizSteps.map((step) => {
               const item = visibleQuizConfig[step.key];
               return (
                 <div className="admin-quiz-card" key={step.key}>
@@ -1515,11 +1644,11 @@ export default function SettingsPage() {
                       <div className="admin-muted">{step.hint}</div>
                     </div>
                     <button type="button" className="admin-mini-action" onClick={() => resetQuizStep(step.key)}>
-                      Сбросить
+                      {tr('Reset', 'Сбросить')}
                     </button>
                   </div>
 
-                  <label className="admin-label">Текст вопроса</label>
+                  <label className="admin-label">{tr('Question text', 'Текст вопроса')}</label>
                   <textarea
                     className="admin-input admin-textarea admin-quiz-question"
                     value={item.question}
@@ -1529,14 +1658,14 @@ export default function SettingsPage() {
                   />
 
                   <div className="admin-quiz-options-head">
-                    <label className="admin-label">Кнопки ответов</label>
+                    <label className="admin-label">{tr('Answer buttons', 'Кнопки ответов')}</label>
                     <button
                       type="button"
                       className="admin-mini-action"
                       onClick={() => addQuizOption(step.key)}
                       disabled={item.options.length >= 8}
                     >
-                      + Вариант
+                      + {tr('Answer', 'Вариант')}
                     </button>
                   </div>
 
@@ -1556,7 +1685,7 @@ export default function SettingsPage() {
                           onClick={() => removeQuizOption(step.key, index)}
                           disabled={item.options.length <= 1}
                         >
-                          Удалить
+                          {tr('Delete', 'Удалить')}
                         </button>
                       </div>
                     ))}
@@ -1571,30 +1700,30 @@ export default function SettingsPage() {
           <div className="admin-funnel-panel">
             <div className="admin-funnel-head">
               <div>
-                <div className="admin-funnel-title">Подписка и канал</div>
-                <div className="admin-muted">Проверка доступа перед переходом к финальному сообщению.</div>
+                <div className="admin-funnel-title">{tr('Subscription and channel', 'Подписка и канал')}</div>
+                <div className="admin-muted">{tr('Access check before showing the final message.', 'Проверка доступа перед переходом к финальному сообщению.')}</div>
               </div>
             </div>
 
             <div className="admin-field">
-              <label className="admin-label">Событие подписки</label>
+              <label className="admin-label">{tr('Subscription event', 'Событие подписки')}</label>
               <label className="admin-toggle-line">
                 <input
                   type="checkbox"
                   checked={checkSubscriptionEnabled}
                   onChange={(e) => setCheckSubscriptionEnabled(e.target.checked)}
                 />{' '}
-                {checkSubscriptionEnabled ? 'Chatterfy' : 'Заявка через Telegram-бота'}
+                {checkSubscriptionEnabled ? 'Chatterfy' : tr('Request via Telegram bot', 'Заявка через Telegram-бота')}
               </label>
               <div className="admin-muted">
                 {checkSubscriptionEnabled
-                  ? 'Факт подписки приходит postback-событием из Chatterfy.'
-                  : 'Кнопка ведёт напрямую в Telegram. Бот принимает заявку, фиксирует подписку и запускает отправку кружков. Бот должен быть администратором канала с правом приглашать пользователей.'}
+                  ? tr('Subscription confirmation arrives as a Chatterfy postback event.', 'Факт подписки приходит postback-событием из Chatterfy.')
+                  : tr('The button opens Telegram directly. The bot accepts the join request, records the subscription and starts video notes. The bot must be a channel administrator with permission to invite users.', 'Кнопка ведёт напрямую в Telegram. Бот принимает заявку, фиксирует подписку и запускает отправку кружков. Бот должен быть администратором канала с правом приглашать пользователей.')}
               </div>
             </div>
 
             <div className="admin-field">
-              <label className="admin-label">ID канала</label>
+              <label className="admin-label">{tr('Channel ID', 'ID канала')}</label>
               <input
                 className="admin-input"
                 placeholder="-1003584421739"
@@ -1604,7 +1733,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="admin-field">
-              <label className="admin-label">Ссылка на канал</label>
+              <label className="admin-label">{tr('Channel URL', 'Ссылка на канал')}</label>
               <input
                 className="admin-input"
                 placeholder="https://t.me/channel"
@@ -1614,7 +1743,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="admin-field">
-              <label className="admin-label">Ссылка на личный чат / поддержку</label>
+              <label className="admin-label">{tr('Personal chat / support URL', 'Ссылка на личный чат / поддержку')}</label>
               <input
                 className="admin-input"
                 placeholder="https://t.me/support_username"
@@ -1629,13 +1758,13 @@ export default function SettingsPage() {
           <div className="admin-final-message-builder">
             <div className="admin-funnel-head">
               <div>
-                <div className="admin-funnel-title">Финальное сообщение</div>
+                <div className="admin-funnel-title">{tr('Final message', 'Финальное сообщение')}</div>
                 <div className="admin-muted">
-                  Бот показывает его после успешного нажатия кнопки перехода к трейдингу.
+                  {tr('The bot shows it after the trading button is successfully pressed.', 'Бот показывает его после успешного нажатия кнопки перехода к трейдингу.')}
                 </div>
               </div>
               <button type="button" className="admin-btn-outline" onClick={resetFinalMessage}>
-                Сбросить
+                {tr('Reset', 'Сбросить')}
               </button>
             </div>
 
@@ -1646,18 +1775,18 @@ export default function SettingsPage() {
                 onChange={(e) => updateFinalMessageField('enabled', e.target.checked)}
               />
               <span>
-                <strong>Использовать финальное сообщение</strong>
+                <strong>{tr('Use final message', 'Использовать финальное сообщение')}</strong>
                 <small>
                   {finalMessageConfig.enabled
-                    ? 'После проверки подписки бот заменит сообщение и покажет настроенные кнопки.'
-                    : 'Выключено: бот отправит старое главное меню.'}
+                    ? tr('After subscription verification, the bot replaces the message and shows the configured buttons.', 'После проверки подписки бот заменит сообщение и покажет настроенные кнопки.')
+                    : tr('Disabled: the bot sends the legacy main menu.', 'Выключено: бот отправит старое главное меню.')}
                 </small>
               </span>
-              <b>{finalMessageConfig.enabled ? 'ВКЛ' : 'ВЫКЛ'}</b>
+              <b>{finalMessageConfig.enabled ? tr('ON', 'ВКЛ') : tr('OFF', 'ВЫКЛ')}</b>
             </label>
 
             <div className="admin-field">
-              <label className="admin-label">Название кнопки перехода</label>
+              <label className="admin-label">{tr('Continue button label', 'Название кнопки перехода')}</label>
               <input
                 className="admin-input"
                 value={finalMessageConfig.trigger_button_text}
@@ -1666,13 +1795,13 @@ export default function SettingsPage() {
                 placeholder="Go to trading"
               />
               <div className="admin-muted">
-                Эта кнопка показывается под ссылкой на канал и открывает финальное сообщение.
+                {tr('This button appears under the channel URL and opens the final message.', 'Эта кнопка показывается под ссылкой на канал и открывает финальное сообщение.')}
               </div>
             </div>
 
             <div className="admin-field">
               <div className="admin-row-between">
-                <label className="admin-label">Текст после нажатия</label>
+                <label className="admin-label">{tr('Message after click', 'Текст после нажатия')}</label>
                 <span className="admin-field-counter">{finalMessageConfig.message_text.length}/3500</span>
               </div>
               <textarea
@@ -1681,17 +1810,17 @@ export default function SettingsPage() {
                 onChange={(e) => updateFinalMessageField('message_text', e.target.value)}
                 rows={6}
                 maxLength={3500}
-                placeholder="Введите финальное сообщение для клиента"
+                placeholder={tr('Enter the final message for the client', 'Введите финальное сообщение для клиента')}
               />
-              <div className="admin-muted">Отправляется как обычный безопасный текст без HTML-разметки.</div>
+              <div className="admin-muted">{tr('Sent as plain safe text without HTML markup.', 'Отправляется как обычный безопасный текст без HTML-разметки.')}</div>
             </div>
 
             <div className="admin-final-buttons-head">
               <div>
                 <div className="admin-funnel-title">
-                  Inline-кнопки <span className="admin-count-badge">{finalMessageConfig.buttons.length}/{FINAL_MESSAGE_MAX_BUTTONS}</span>
+                  {tr('Inline buttons', 'Inline-кнопки')} <span className="admin-count-badge">{finalMessageConfig.buttons.length}/{FINAL_MESSAGE_MAX_BUTTONS}</span>
                 </div>
-                <div className="admin-muted">Кнопки отправляются по одной строке в указанном порядке.</div>
+                <div className="admin-muted">{tr('Buttons are sent one per row in the specified order.', 'Кнопки отправляются по одной строке в указанном порядке.')}</div>
               </div>
               <div className="admin-final-add-actions">
                 <button
@@ -1700,7 +1829,7 @@ export default function SettingsPage() {
                   onClick={() => addFinalMessageButton('url')}
                   disabled={finalMessageConfig.buttons.length >= FINAL_MESSAGE_MAX_BUTTONS}
                 >
-                  + Ссылка
+                  + {tr('URL', 'Ссылка')}
                 </button>
                 <button
                   type="button"
@@ -1708,7 +1837,7 @@ export default function SettingsPage() {
                   onClick={() => addFinalMessageButton('menu')}
                   disabled={hasMenuButton || finalMessageConfig.buttons.length >= FINAL_MESSAGE_MAX_BUTTONS}
                 >
-                  + Меню бота
+                  + {tr('Bot menu', 'Меню бота')}
                 </button>
                 <button
                   type="button"
@@ -1716,7 +1845,7 @@ export default function SettingsPage() {
                   onClick={() => addFinalMessageButton('web_app')}
                   disabled={hasWebAppButton || finalMessageConfig.buttons.length >= FINAL_MESSAGE_MAX_BUTTONS}
                 >
-                  + Мини-апка
+                  + {tr('Mini app', 'Мини-апка')}
                 </button>
               </div>
             </div>
@@ -1730,7 +1859,7 @@ export default function SettingsPage() {
                       type="button"
                       onClick={() => moveFinalMessageButton(button.id, -1)}
                       disabled={index === 0}
-                      aria-label={`Поднять кнопку ${index + 1}`}
+                      aria-label={tr(`Move button ${index + 1} up`, `Поднять кнопку ${index + 1}`)}
                     >
                       ↑
                     </button>
@@ -1738,7 +1867,7 @@ export default function SettingsPage() {
                       type="button"
                       onClick={() => moveFinalMessageButton(button.id, 1)}
                       disabled={index === finalMessageConfig.buttons.length - 1}
-                      aria-label={`Опустить кнопку ${index + 1}`}
+                      aria-label={tr(`Move button ${index + 1} down`, `Опустить кнопку ${index + 1}`)}
                     >
                       ↓
                     </button>
@@ -1748,48 +1877,48 @@ export default function SettingsPage() {
                     <div className="admin-final-button-card-head">
                       <span className={`admin-final-button-type ${button.type}`}>
                         {button.type === 'menu'
-                          ? 'Меню бота'
-                          : (button.type === 'web_app' ? 'Мини-приложение' : 'Внешняя ссылка')}
+                          ? tr('Bot menu', 'Меню бота')
+                          : (button.type === 'web_app' ? tr('Mini app', 'Мини-приложение') : tr('External URL', 'Внешняя ссылка'))}
                       </span>
                       <button
                         type="button"
                         className="admin-mini-action danger"
                         onClick={() => removeFinalMessageButton(button.id)}
                       >
-                        Удалить
+                        {tr('Delete', 'Удалить')}
                       </button>
                     </div>
 
                     <div className="admin-final-button-grid">
                       <label>
-                        <span>Название</span>
+                        <span>{tr('Label', 'Название')}</span>
                         <input
                           className="admin-input"
                           value={button.text}
                           onChange={(e) => updateFinalMessageButton(button.id, { text: e.target.value })}
                           maxLength={64}
-                          placeholder="Название кнопки"
+                          placeholder={tr('Button label', 'Название кнопки')}
                         />
                       </label>
                       <label>
-                        <span>Действие</span>
+                        <span>{tr('Action', 'Действие')}</span>
                         <select
                           className="admin-input"
                           value={button.type}
                           onChange={(e) => changeFinalMessageButtonType(button.id, e.target.value)}
                         >
-                          <option value="url">Открыть ссылку</option>
+                          <option value="url">{tr('Open URL', 'Открыть ссылку')}</option>
                           <option
                             value="menu"
                             disabled={hasMenuButton && button.type !== 'menu'}
                           >
-                            Показать меню бота
+                            {tr('Show bot menu', 'Показать меню бота')}
                           </option>
                           <option
                             value="web_app"
                             disabled={hasWebAppButton && button.type !== 'web_app'}
                           >
-                            Открыть мини-приложение
+                            {tr('Open mini app', 'Открыть мини-приложение')}
                           </option>
                         </select>
                       </label>
@@ -1797,7 +1926,7 @@ export default function SettingsPage() {
 
                     {button.type === 'url' ? (
                       <label className="admin-final-url-field">
-                        <span>Ссылка</span>
+                        <span>{tr('URL', 'Ссылка')}</span>
                         <input
                           className="admin-input"
                           value={button.url}
@@ -1808,11 +1937,11 @@ export default function SettingsPage() {
                       </label>
                     ) : button.type === 'menu' ? (
                       <div className="admin-final-menu-note">
-                        Отправит полноценное главное меню бота — такое же, как после команды /start.
+                        {tr('Sends the complete main bot menu, identical to the /start response.', 'Отправит полноценное главное меню бота — такое же, как после команды /start.')}
                       </div>
                     ) : (
                       <div className="admin-final-menu-note">
-                        Сразу откроет мини-приложение Elizabeth Vane. Ссылка берётся из системы автоматически.
+                        {tr('Opens the Elizabeth Vane mini app immediately. Its URL is loaded automatically.', 'Сразу откроет мини-приложение Elizabeth Vane. Ссылка берётся из системы автоматически.')}
                       </div>
                     )}
                   </div>
@@ -1820,21 +1949,21 @@ export default function SettingsPage() {
               ))}
               {!finalMessageConfig.buttons.length ? (
                 <div className="admin-final-empty">
-                  Кнопок пока нет. Добавьте ссылку, меню бота или мини-приложение.
+                  {tr('No buttons yet. Add a URL, bot menu or mini app.', 'Кнопок пока нет. Добавьте ссылку, меню бота или мини-приложение.')}
                 </div>
               ) : null}
             </div>
 
             <div className="admin-final-preview">
-              <div className="admin-final-preview-title">Предпросмотр в Telegram</div>
+              <div className="admin-final-preview-title">{tr('Telegram preview', 'Предпросмотр в Telegram')}</div>
               <div className="admin-final-preview-bubble">
                 <div className="admin-final-preview-text">
-                  {finalMessageConfig.message_text || 'Текст финального сообщения'}
+                  {finalMessageConfig.message_text || tr('Final message text', 'Текст финального сообщения')}
                 </div>
                 <div className="admin-final-preview-buttons">
                   {finalMessageConfig.buttons.map((button) => (
                     <div key={`preview-${button.id}`}>
-                      <span>{button.text || 'Без названия'}</span>
+                      <span>{button.text || tr('Untitled', 'Без названия')}</span>
                       <b>{button.type === 'menu' ? 'MENU' : (button.type === 'web_app' ? 'APP' : '↗')}</b>
                     </div>
                   ))}
@@ -1848,9 +1977,9 @@ export default function SettingsPage() {
         {status ? <div className="admin-success">{status}</div> : null}
 
         <div className="admin-funnel-save-bar">
-          <span>Сохраняются настройки всех трёх вкладок</span>
+          <span>{tr('Settings from all three tabs are saved together', 'Сохраняются настройки всех трёх вкладок')}</span>
           <button className="admin-btn" onClick={() => saveSettings('support')} disabled={saving}>
-            {saving ? 'Сохранение...' : 'Сохранить воронку'}
+            {saving ? tr('Saving…', 'Сохранение...') : tr('Save funnel', 'Сохранить воронку')}
           </button>
         </div>
       </div>
@@ -1862,18 +1991,21 @@ export default function SettingsPage() {
       <div className="admin-card admin-settings-detail">
         <div className="admin-row-between">
           <h3 className="admin-section-title">API</h3>
-          <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
+          <button className="admin-btn-outline" onClick={goMenu}>{tr('← Back to settings', '← К карточкам')}</button>
         </div>
 
         <div className="admin-muted">
-          Настройки Pocket Partners. Токен хранится на backend и показывается только маской: первые 2 и последние 2 символа.
+          {tr(
+            'Pocket Partners settings. The token is stored on the backend and shown only as a mask: first 2 and last 2 characters.',
+            'Настройки Pocket Partners. Токен хранится на backend и показывается только маской: первые 2 и последние 2 символа.'
+          )}
         </div>
 
         <div className="admin-field">
-          <label className="admin-label">ID кабинета / Partner ID</label>
+          <label className="admin-label">{tr('Account ID / Partner ID', 'ID кабинета / Partner ID')}</label>
           <input
             className="admin-input"
-            placeholder="Например 123456"
+            placeholder={tr('For example 123456', 'Например 123456')}
             value={pocketPartnerId}
             onChange={(e) => setPocketPartnerId(e.target.value.replace(/[^\w.-]/g, '').slice(0, 64))}
           />
@@ -1884,7 +2016,9 @@ export default function SettingsPage() {
           <input
             className="admin-input"
             type="password"
-            placeholder={pocketApiTokenConfigured ? `Текущий: ${pocketApiTokenMasked}. Введите новый для замены` : 'Введите API token'}
+            placeholder={pocketApiTokenConfigured
+              ? tr(`Current: ${pocketApiTokenMasked}. Enter a new value to replace it`, `Текущий: ${pocketApiTokenMasked}. Введите новый для замены`)
+              : tr('Enter API token', 'Введите API token')}
             value={pocketApiToken}
             onChange={(e) => setPocketApiToken(e.target.value)}
             autoComplete="new-password"
@@ -1893,7 +2027,7 @@ export default function SettingsPage() {
 
         <div className="admin-row-actions">
           <button className="admin-btn" onClick={() => saveSettings('pocket')} disabled={saving}>
-            {saving ? 'Сохранение...' : 'Сохранить API'}
+            {saving ? tr('Saving…', 'Сохранение...') : tr('Save API', 'Сохранить API')}
           </button>
         </div>
 
@@ -1906,10 +2040,10 @@ export default function SettingsPage() {
   return (
     <div className="admin-card admin-settings-detail">
       <div className="admin-row-between">
-        <h3 className="admin-section-title">Раздел не найден</h3>
-        <button className="admin-btn-outline" onClick={goMenu}>← К карточкам</button>
+        <h3 className="admin-section-title">{tr('Section not found', 'Раздел не найден')}</h3>
+        <button className="admin-btn-outline" onClick={goMenu}>{tr('← Back to settings', '← К карточкам')}</button>
       </div>
-      <div className="admin-muted">Вернитесь к списку настроек.</div>
+      <div className="admin-muted">{tr('Return to the settings list.', 'Вернитесь к списку настроек.')}</div>
     </div>
   );
 }

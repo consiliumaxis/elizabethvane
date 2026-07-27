@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
+import { useAdminLocale } from '../useAdminLocale';
 
 const getDisplayName = (user) => user?.first_name || user?.username || `User ${user?.user_id || ''}`;
 const getAvatarUrl = (user) => String(user?.avatar_url || '').trim();
@@ -14,6 +15,7 @@ const formatBalance = (value) => {
 const hasAccess = (value) => Number(value) === 1;
 
 export default function UsersPage() {
+  const { tr } = useAdminLocale();
   const [search, setSearch] = useState('');
   const [users, setUsers] = useState([]);
   const [total, setTotal] = useState(0);
@@ -40,14 +42,15 @@ export default function UsersPage() {
       setUsers(rows);
       setTotal(Number(res.total || 0));
     } catch (e) {
-      setError(e.message || 'Не удалось загрузить пользователей');
+      setError(e.message || tr('Could not load users', 'Не удалось загрузить пользователей'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tr]);
 
   useEffect(() => {
-    loadUsers('');
+    const timer = window.setTimeout(() => loadUsers(''), 0);
+    return () => window.clearTimeout(timer);
   }, [loadUsers]);
 
   const selectedUser = useMemo(
@@ -113,7 +116,7 @@ export default function UsersPage() {
       const updatedUser = res.user || { ...user, is_blocked: Number(user.is_blocked) === 1 ? 0 : 1 };
       replaceUser(updatedUser);
     } catch (e) {
-      setError(e.message || 'Не удалось изменить блокировку');
+      setError(e.message || tr('Could not update the block status', 'Не удалось изменить блокировку'));
     } finally {
       setActionLoading(false);
     }
@@ -135,7 +138,7 @@ export default function UsersPage() {
       replaceUser(res.user);
       setAccessModalOpen(false);
     } catch (e) {
-      setError(e.message || 'Не удалось изменить доступ');
+      setError(e.message || tr('Could not update access', 'Не удалось изменить доступ'));
     } finally {
       setActionLoading(false);
     }
@@ -157,7 +160,7 @@ export default function UsersPage() {
       replaceUser(res.user);
       setBalanceModalOpen(false);
     } catch (e) {
-      setError(e.message || 'Не удалось изменить баланс');
+      setError(e.message || tr('Could not update the balance', 'Не удалось изменить баланс'));
     } finally {
       setActionLoading(false);
     }
@@ -166,7 +169,10 @@ export default function UsersPage() {
   const deleteUser = async () => {
     if (!selectedUser || actionLoading) return;
     const userName = getDisplayName(selectedUser);
-    if (!window.confirm(`Удалить пользователя ${userName} и все его данные в приложении?`)) return;
+    if (!window.confirm(tr(
+      `Delete ${userName} and all of their application data?`,
+      `Удалить пользователя ${userName} и все его данные в приложении?`
+    ))) return;
     setActionLoading(true);
     setError('');
     try {
@@ -177,7 +183,7 @@ export default function UsersPage() {
       setTotal((prev) => Math.max(0, Number(prev || 0) - 1));
       closeUserCard();
     } catch (e) {
-      setError(e.message || 'Не удалось удалить пользователя');
+      setError(e.message || tr('Could not delete the user', 'Не удалось удалить пользователя'));
     } finally {
       setActionLoading(false);
     }
@@ -188,9 +194,9 @@ export default function UsersPage() {
     return (
       <div className="admin-card">
         <div className="admin-row-between">
-          <h3 className="admin-section-title">Карточка пользователя</h3>
+          <h3 className="admin-section-title">{tr('User profile', 'Карточка пользователя')}</h3>
           <button className="admin-btn-outline" onClick={closeUserCard}>
-            ← К списку
+            {tr('← Back to list', '← К списку')}
           </button>
         </div>
 
@@ -204,7 +210,9 @@ export default function UsersPage() {
                 ) : null}
               </div>
               <div>
-                <span className="admin-user-state">{isBlocked ? '⛔ Заблокирован' : '✅ Активен'}</span>
+                <span className="admin-user-state">
+                  {isBlocked ? tr('⛔ Blocked', '⛔ Заблокирован') : tr('✅ Active', '✅ Активен')}
+                </span>
                 <strong>{getDisplayName(selectedUser)}</strong>
               </div>
             </div>
@@ -212,28 +220,28 @@ export default function UsersPage() {
 
           <div className="admin-user-grid">
             <div><span>ID:</span> {selectedUser.user_id}</div>
-            <div><span>Trader ID:</span> {selectedUser.trader_id || 'Не указан'}</div>
-            <div><span>Баланс:</span> {formatBalance(selectedUser.balance)}</div>
-            <div><span>Доступ Forex:</span> {hasAccess(selectedUser.forex_access) ? 'Есть' : 'Нету'}</div>
-            <div><span>Доступ Binary:</span> {hasAccess(selectedUser.binary_access) ? 'Есть' : 'Нету'}</div>
+            <div><span>Trader ID:</span> {selectedUser.trader_id || tr('Not set', 'Не указан')}</div>
+            <div><span>{tr('Balance', 'Баланс')}:</span> {formatBalance(selectedUser.balance)}</div>
+            <div><span>{tr('Forex access', 'Доступ Forex')}:</span> {hasAccess(selectedUser.forex_access) ? tr('Enabled', 'Есть') : tr('Disabled', 'Нету')}</div>
+            <div><span>{tr('Binary access', 'Доступ Binary')}:</span> {hasAccess(selectedUser.binary_access) ? tr('Enabled', 'Есть') : tr('Disabled', 'Нету')}</div>
             <div><span>Username:</span> {selectedUser.username || '-'}</div>
-            <div><span>Имя:</span> {selectedUser.first_name || '-'}</div>
-            <div><span>Режим:</span> {selectedUser.mode || '-'}</div>
-            <div><span>Стратегия:</span> {selectedUser.strategy_name || selectedUser.strategy_id || '-'}</div>
-            <div><span>Язык:</span> {selectedUser.lang || '-'}</div>
-            <div><span>Админ:</span> {Number(selectedUser.is_admin) === 1 ? 'Да' : 'Нет'}</div>
-            <div><span>Синхронизация баланса:</span> {Number(selectedUser.balance_sync_enabled) === 1 ? 'Включена' : 'Выключена'}</div>
-            <div><span>Блокировка:</span> {isBlocked ? `Да${selectedUser.blocked_at ? `, ${selectedUser.blocked_at}` : ''}` : 'Нет'}</div>
-            <div><span>Создан:</span> {selectedUser.created_at || '-'}</div>
+            <div><span>{tr('Name', 'Имя')}:</span> {selectedUser.first_name || '-'}</div>
+            <div><span>{tr('Mode', 'Режим')}:</span> {selectedUser.mode || '-'}</div>
+            <div><span>{tr('Strategy', 'Стратегия')}:</span> {selectedUser.strategy_name || selectedUser.strategy_id || '-'}</div>
+            <div><span>{tr('Language', 'Язык')}:</span> {selectedUser.lang || '-'}</div>
+            <div><span>{tr('Admin', 'Админ')}:</span> {Number(selectedUser.is_admin) === 1 ? tr('Yes', 'Да') : tr('No', 'Нет')}</div>
+            <div><span>{tr('Balance sync', 'Синхронизация баланса')}:</span> {Number(selectedUser.balance_sync_enabled) === 1 ? tr('Enabled', 'Включена') : tr('Disabled', 'Выключена')}</div>
+            <div><span>{tr('Blocked', 'Блокировка')}:</span> {isBlocked ? `${tr('Yes', 'Да')}${selectedUser.blocked_at ? `, ${selectedUser.blocked_at}` : ''}` : tr('No', 'Нет')}</div>
+            <div><span>{tr('Created', 'Создан')}:</span> {selectedUser.created_at || '-'}</div>
           </div>
 
           <div className="admin-user-actions">
             <div className="admin-row-actions">
               <button className="admin-btn-outline" onClick={openAccessModal} disabled={actionLoading}>
-                Редактировать доступ
+                {tr('Edit access', 'Редактировать доступ')}
               </button>
               <button className="admin-btn-outline" onClick={openBalanceModal} disabled={actionLoading}>
-                Изменить баланс
+                {tr('Edit balance', 'Изменить баланс')}
               </button>
             </div>
             <button
@@ -241,12 +249,17 @@ export default function UsersPage() {
               onClick={() => toggleBlocked(selectedUser)}
               disabled={actionLoading}
             >
-              {isBlocked ? 'Разблокировать' : 'Заблокировать'}
+              {isBlocked ? tr('Unblock', 'Разблокировать') : tr('Block', 'Заблокировать')}
             </button>
             <button className="admin-btn-outline danger" onClick={deleteUser} disabled={actionLoading}>
-              Удалить пользователя
+              {tr('Delete user', 'Удалить пользователя')}
             </button>
-            <div className="admin-muted">Заблокированный пользователь увидит экран ограничения при входе в приложение.</div>
+            <div className="admin-muted">
+              {tr(
+                'A blocked user will see a restriction screen when opening the application.',
+                'Заблокированный пользователь увидит экран ограничения при входе в приложение.'
+              )}
+            </div>
           </div>
         </div>
 
@@ -254,8 +267,8 @@ export default function UsersPage() {
           <div className="admin-modal-backdrop" onClick={() => setAccessModalOpen(false)}>
             <div className="admin-modal" onClick={(e) => e.stopPropagation()}>
               <div className="admin-row-between">
-                <h3 className="admin-section-title">Редактировать доступ</h3>
-                <button className="admin-btn-outline" onClick={() => setAccessModalOpen(false)}>Закрыть</button>
+                <h3 className="admin-section-title">{tr('Edit access', 'Редактировать доступ')}</h3>
+                <button className="admin-btn-outline" onClick={() => setAccessModalOpen(false)}>{tr('Close', 'Закрыть')}</button>
               </div>
               <div className="admin-toggle-list">
                 <label className="admin-pretty-toggle">
@@ -281,7 +294,7 @@ export default function UsersPage() {
               </div>
               <div className="admin-row-actions">
                 <button className="admin-btn" onClick={saveAccess} disabled={actionLoading}>
-                  Сохранить
+                  {tr('Save', 'Сохранить')}
                 </button>
               </div>
             </div>
@@ -292,15 +305,15 @@ export default function UsersPage() {
           <div className="admin-modal-backdrop" onClick={() => setBalanceModalOpen(false)}>
             <div className="admin-modal" onClick={(e) => e.stopPropagation()}>
               <div className="admin-row-between">
-                <h3 className="admin-section-title">Изменить баланс</h3>
-                <button className="admin-btn-outline" onClick={() => setBalanceModalOpen(false)}>Закрыть</button>
+                <h3 className="admin-section-title">{tr('Edit balance', 'Изменить баланс')}</h3>
+                <button className="admin-btn-outline" onClick={() => setBalanceModalOpen(false)}>{tr('Close', 'Закрыть')}</button>
               </div>
               <div className="admin-field">
-                <label className="admin-label">Текущий баланс</label>
+                <label className="admin-label">{tr('Current balance', 'Текущий баланс')}</label>
                 <div className="admin-readonly-value">{formatBalance(selectedUser.balance)}</div>
               </div>
               <div className="admin-field">
-                <label className="admin-label">Новый баланс</label>
+                <label className="admin-label">{tr('New balance', 'Новый баланс')}</label>
                 <input
                   className="admin-input"
                   inputMode="decimal"
@@ -309,7 +322,7 @@ export default function UsersPage() {
                 />
               </div>
               <label className="admin-pretty-toggle wide">
-                <span>Синхронизация баланса</span>
+                <span>{tr('Balance synchronization', 'Синхронизация баланса')}</span>
                 <button
                   type="button"
                   className={`admin-toggle-btn ${balanceForm.sync ? 'on' : 'off'}`}
@@ -324,12 +337,12 @@ export default function UsersPage() {
               </label>
               <div className="admin-muted">
                 {selectedUser.trader_id
-                  ? 'При активной синхронизации баланс будет подтягиваться с Pocket.'
-                  : 'Баланс можно задать вручную. Синхронизация доступна только после указания Trader ID.'}
+                  ? tr('When synchronization is active, the balance is loaded from Pocket.', 'При активной синхронизации баланс будет подтягиваться с Pocket.')
+                  : tr('The balance can be set manually. Synchronization becomes available after a Trader ID is assigned.', 'Баланс можно задать вручную. Синхронизация доступна только после указания Trader ID.')}
               </div>
               <div className="admin-row-actions">
                 <button className="admin-btn" onClick={saveBalance} disabled={actionLoading}>
-                  Сохранить
+                  {tr('Save', 'Сохранить')}
                 </button>
               </div>
             </div>
@@ -342,22 +355,22 @@ export default function UsersPage() {
   return (
     <div className="admin-card">
       <div className="admin-row-between">
-        <h3 className="admin-section-title">Пользователи</h3>
-        <div className="admin-muted">Всего: {total}</div>
+        <h3 className="admin-section-title">{tr('Users', 'Пользователи')}</h3>
+        <div className="admin-muted">{tr('Total', 'Всего')}: {total}</div>
       </div>
 
       <form className="admin-inline-form" onSubmit={onSubmit}>
         <input
           className="admin-input"
-          placeholder="ID / username / имя"
+          placeholder={tr('ID / username / name', 'ID / username / имя')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <button className="admin-btn" type="submit">Найти</button>
+        <button className="admin-btn" type="submit">{tr('Search', 'Найти')}</button>
       </form>
 
       {error ? <div className="admin-error">{error}</div> : null}
-      {loading ? <div className="admin-muted">Загрузка...</div> : null}
+      {loading ? <div className="admin-muted">{tr('Loading…', 'Загрузка...')}</div> : null}
 
       <div className="admin-entity-list">
         {users.map((user) => {
@@ -392,14 +405,14 @@ export default function UsersPage() {
                 </span>
               </div>
               <div className="admin-entity-meta">
-                ID: {user.user_id} | Trader: {user.trader_id || '-'} | {formatBalance(user.balance)} | Forex {hasAccess(user.forex_access) ? 'есть' : 'нет'} | Binary {hasAccess(user.binary_access) ? 'есть' : 'нет'} | {blocked ? 'blocked' : (user.mode || '-')}
+                ID: {user.user_id} | Trader: {user.trader_id || '-'} | {formatBalance(user.balance)} | Forex {hasAccess(user.forex_access) ? tr('enabled', 'есть') : tr('disabled', 'нет')} | Binary {hasAccess(user.binary_access) ? tr('enabled', 'есть') : tr('disabled', 'нет')} | {blocked ? 'blocked' : (user.mode || '-')}
               </div>
             </button>
           );
         })}
       </div>
 
-      {!loading && users.length === 0 ? <div className="admin-muted">Пользователи не найдены</div> : null}
+      {!loading && users.length === 0 ? <div className="admin-muted">{tr('No users found', 'Пользователи не найдены')}</div> : null}
     </div>
   );
 }

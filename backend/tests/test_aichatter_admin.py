@@ -94,13 +94,13 @@ class AichatterAdminTest(unittest.TestCase):
     def test_admin_uses_a_model_picker(self):
         source = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
 
-        self.assertIn("AI_MODEL_OPTIONS", source)
+        self.assertIn("const aiModelOptions", source)
         self.assertIn("gpt-4.1-mini", source)
         self.assertIn("gpt-4.1-nano", source)
         self.assertIn("gpt-5.6-sol", source)
         self.assertIn("gpt-5.6-terra", source)
         self.assertIn("gpt-5.6-luna", source)
-        self.assertIn("<label>Модель OpenAI<select", source)
+        self.assertIn("<label>{tr('OpenAI model', 'Модель OpenAI')}<select", source)
 
     def test_registration_link_is_managed_at_runtime(self):
         backend = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
@@ -237,11 +237,11 @@ class AichatterAdminTest(unittest.TestCase):
     def test_admin_contains_funnel_management_section(self):
         source = (PROJECT_ROOT / "frontend/src/admin/pages/AIChatterPage.jsx").read_text(encoding="utf-8")
 
-        self.assertIn("{ id: 'funnel', label: 'Воронка' }", source)
+        self.assertIn("{ id: 'funnel', label: tr('Funnel', 'Воронка') }", source)
         self.assertIn("saveFunnel", source)
         self.assertIn("uploadFunnelMedia", source)
-        self.assertIn("Маршрутизация тегов и кружков", source)
-        self.assertIn("Когда AI должен отправить этот кружок", source)
+        self.assertIn("tr('Tag and video-note routing', 'Маршрутизация тегов и кружков')", source)
+        self.assertIn("tr('When AI should send this video note', 'Когда AI должен отправить этот кружок')", source)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import hmac
 import json
 import secrets
 import random
+from decimal import Decimal
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlencode, urlsplit
 from fastapi import FastAPI, Request, Depends, HTTPException, Header, Query, BackgroundTasks
@@ -30,6 +31,22 @@ try:
     from backend.telegram_auth import get_telegram_user
 except ModuleNotFoundError:
     from telegram_auth import get_telegram_user
+try:
+    from backend.studio_statistics import (
+        aggregate_studio_statistics,
+        decode_strategy_winrates,
+        normalize_daily_stat,
+        normalize_date_range,
+        parse_iso_date,
+    )
+except ModuleNotFoundError:
+    from studio_statistics import (
+        aggregate_studio_statistics,
+        decode_strategy_winrates,
+        normalize_daily_stat,
+        normalize_date_range,
+        parse_iso_date,
+    )
 try:
     from backend.db_bootstrap import ensure_database_schema
 except ModuleNotFoundError:
@@ -2663,6 +2680,220 @@ async def admin_stats(
                 "to": to_date,
             },
         },
+    }
+
+
+def serialize_studio_stat_day(row: Dict[str, Any]) -> Dict[str, Any]:
+    stat_date = row.get("stat_date") or row.get("date")
+    return {
+        "date": stat_date.isoformat() if hasattr(stat_date, "isoformat") else str(stat_date or ""),
+        "new_users": int(row.get("new_users") or 0),
+        "total_users": (
+            int(row["total_users"])
+            if row.get("total_users") not in (None, "")
+            else None
+        ),
+        "deals": int(row.get("deals") or 0),
+        "volume": f"{Decimal(str(row.get('volume') or 0)):.2f}",
+        "strategy_winrates": decode_strategy_winrates(row.get("strategy_winrates")),
+        "updated_by": row.get("updated_by"),
+        "updated_at": (
+            row["updated_at"].isoformat()
+            if hasattr(row.get("updated_at"), "isoformat")
+            else str(row.get("updated_at") or "")
+        ),
+    }
+
+
+async def get_studio_strategy_options(cur) -> List[Dict[str, Any]]:
+    await cur.execute(
+        """
+        SELECT id, name, icon, is_system
+        FROM presets
+        ORDER BY is_system DESC, id ASC
+        """
+    )
+    return [
+        {
+            "id": int(row["id"]),
+            "name": str(row.get("name") or f"Strategy {row['id']}"),
+            "icon": str(row.get("icon") or ""),
+            "is_system": int(row.get("is_system") or 0),
+        }
+        for row in (await cur.fetchall() or [])
+    ]
+
+
+@app.get("/api/admin/studio-statistics")
+async def admin_studio_statistics(
+    date_from: str = Query(default=""),
+    date_to: str = Query(default=""),
+    admin=Depends(get_admin_user),
+):
+    try:
+        range_start, range_end = normalize_date_range(date_from, date_to)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT stat_date, new_users, total_users, deals, volume,
+                       strategy_winrates, updated_by, updated_at
+                FROM admin_studio_daily_stats
+                WHERE stat_date BETWEEN %s AND %s
+                ORDER BY stat_date ASC
+                """,
+                (range_start.isoformat(), range_end.isoformat()),
+            )
+            rows = await cur.fetchall() or []
+
+            await cur.execute(
+                """
+                SELECT total_users
+                FROM admin_studio_daily_stats
+                WHERE stat_date <= %s
+                  AND total_users IS NOT NULL
+                ORDER BY stat_date DESC
+                LIMIT 1
+                """,
+                (range_end.isoformat(),),
+            )
+            total_row = await cur.fetchone() or {}
+            cumulative_total_users = total_row.get("total_users")
+            if cumulative_total_users is None:
+                await cur.execute(
+                    """
+                    SELECT COALESCE(SUM(new_users), 0) AS total_users
+                    FROM admin_studio_daily_stats
+                    WHERE stat_date <= %s
+                    """,
+                    (range_end.isoformat(),),
+                )
+                cumulative_total_users = int((await cur.fetchone() or {}).get("total_users") or 0)
+
+            strategies = await get_studio_strategy_options(cur)
+
+    summary = aggregate_studio_statistics(
+        rows,
+        cumulative_total_users=int(cumulative_total_users or 0),
+    )
+    return {
+        "status": "success",
+        "period": {
+            "from": range_start.isoformat(),
+            "to": range_end.isoformat(),
+        },
+        "summary": summary,
+        "days": [serialize_studio_stat_day(row) for row in rows],
+        "strategies": strategies,
+    }
+
+
+@app.get("/api/admin/studio-statistics/day/{stat_date}")
+async def admin_studio_statistics_day(
+    stat_date: str,
+    admin=Depends(get_admin_user),
+):
+    try:
+        normalized_date = parse_iso_date(stat_date, "date")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT stat_date, new_users, total_users, deals, volume,
+                       strategy_winrates, updated_by, updated_at
+                FROM admin_studio_daily_stats
+                WHERE stat_date = %s
+                LIMIT 1
+                """,
+                (normalized_date.isoformat(),),
+            )
+            row = await cur.fetchone()
+            strategies = await get_studio_strategy_options(cur)
+    return {
+        "status": "success",
+        "day": serialize_studio_stat_day(row) if row else None,
+        "strategies": strategies,
+    }
+
+
+@app.post("/api/admin/studio-statistics/day")
+async def admin_studio_statistics_save_day(
+    request: Request,
+    admin=Depends(get_admin_user),
+):
+    try:
+        normalized = normalize_daily_stat(await request.json())
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                INSERT INTO admin_studio_daily_stats (
+                    stat_date, new_users, total_users, deals, volume,
+                    strategy_winrates, updated_by
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    new_users = VALUES(new_users),
+                    total_users = VALUES(total_users),
+                    deals = VALUES(deals),
+                    volume = VALUES(volume),
+                    strategy_winrates = VALUES(strategy_winrates),
+                    updated_by = VALUES(updated_by)
+                """,
+                (
+                    normalized["date"].isoformat(),
+                    normalized["new_users"],
+                    normalized["total_users"],
+                    normalized["deals"],
+                    str(normalized["volume"]),
+                    json.dumps(normalized["strategy_winrates"], ensure_ascii=False),
+                    int(admin["user_id"]),
+                ),
+            )
+            await cur.execute(
+                """
+                SELECT stat_date, new_users, total_users, deals, volume,
+                       strategy_winrates, updated_by, updated_at
+                FROM admin_studio_daily_stats
+                WHERE stat_date = %s
+                LIMIT 1
+                """,
+                (normalized["date"].isoformat(),),
+            )
+            row = await cur.fetchone()
+    return {"status": "success", "day": serialize_studio_stat_day(row or {})}
+
+
+@app.delete("/api/admin/studio-statistics/day/{stat_date}")
+async def admin_studio_statistics_delete_day(
+    stat_date: str,
+    admin=Depends(get_admin_user),
+):
+    try:
+        normalized_date = parse_iso_date(stat_date, "date")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM admin_studio_daily_stats WHERE stat_date = %s",
+                (normalized_date.isoformat(),),
+            )
+            deleted = cur.rowcount > 0
+    return {
+        "status": "success",
+        "date": normalized_date.isoformat(),
+        "deleted": deleted,
     }
 
 

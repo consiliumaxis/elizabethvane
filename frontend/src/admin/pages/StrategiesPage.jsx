@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
+import { useAdminLocale } from '../useAdminLocale';
 
 const toInt = (value) => {
   const parsed = Number(value);
@@ -52,7 +53,7 @@ const parsePublicWinrate = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-function StrategyToast({ message, type = 'success', onClose }) {
+function StrategyToast({ message, type = 'success', onClose, tr }) {
   if (!message) return null;
   const isError = type === 'error';
 
@@ -61,14 +62,14 @@ function StrategyToast({ message, type = 'success', onClose }) {
       <div className={`admin-floating-toast ${isError ? 'is-error' : 'is-success'}`} role={isError ? 'alert' : 'status'}>
         <span className="admin-floating-toast-icon" aria-hidden="true">{isError ? '!' : '✓'}</span>
         <span className="admin-floating-toast-copy">
-          <strong>{isError ? 'Не удалось выполнить действие' : 'Готово'}</strong>
+          <strong>{isError ? tr('Action failed', 'Не удалось выполнить действие') : tr('Done', 'Готово')}</strong>
           <span>{message}</span>
         </span>
         <button
           className="admin-floating-toast-close"
           type="button"
           onClick={onClose}
-          aria-label="Закрыть уведомление"
+          aria-label={tr('Close notification', 'Закрыть уведомление')}
         >
           ×
         </button>
@@ -78,6 +79,7 @@ function StrategyToast({ message, type = 'success', onClose }) {
 }
 
 export default function StrategiesPage() {
+  const { tr } = useAdminLocale();
   const [items, setItems] = useState([]);
   const [indicators, setIndicators] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -124,11 +126,11 @@ export default function StrategiesPage() {
       setIndicators(Array.isArray(res.indicators) ? res.indicators : []);
       setSummary(res.summary || null);
     } catch (e) {
-      setError(e.message || 'Не удалось загрузить стратегии');
+      setError(e.message || tr('Could not load strategies', 'Не удалось загрузить стратегии'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tr]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -252,13 +254,13 @@ export default function StrategiesPage() {
   const save = async () => {
     if (!form) return;
     if (!form.name.trim()) {
-      setError('Название стратегии обязательно');
+      setError(tr('Strategy name is required', 'Название стратегии обязательно'));
       return;
     }
 
     const publicWinrate = form.public_winrate === '' ? null : Number(form.public_winrate);
     if (publicWinrate !== null && (!Number.isFinite(publicWinrate) || publicWinrate < 0 || publicWinrate > 100)) {
-      setError('Отображаемый winrate должен быть числом от 0 до 100');
+      setError(tr('Displayed winrate must be a number from 0 to 100', 'Отображаемый winrate должен быть числом от 0 до 100'));
       return;
     }
 
@@ -277,16 +279,16 @@ export default function StrategiesPage() {
           indicators: form.indicators,
         }),
       });
-      setStatus(`Стратегия ${form.id} сохранена`);
+      setStatus(tr(`Strategy ${form.id} has been saved`, `Стратегия ${form.id} сохранена`));
       await load();
     } catch (e) {
-      setError(e.message || 'Не удалось сохранить стратегию');
+      setError(e.message || tr('Could not save the strategy', 'Не удалось сохранить стратегию'));
     }
   };
 
   const validateGptKey = async () => {
     if (!analysisForm.gpt_api_key.trim()) {
-      setError('Введите новый GPT ключ для проверки');
+      setError(tr('Enter a new GPT key to validate it', 'Введите новый GPT ключ для проверки'));
       return;
     }
     setError('');
@@ -299,19 +301,21 @@ export default function StrategiesPage() {
           model: analysisForm.gpt_model || 'gpt-4o-mini',
         }),
       });
-      setStatus(res.warning ? `Ключ рабочий. ${res.warning}` : 'Ключ GPT проверен и готов к сохранению');
+      setStatus(res.warning
+        ? tr(`The key works. ${res.warning}`, `Ключ рабочий. ${res.warning}`)
+        : tr('GPT key is valid and ready to save', 'Ключ GPT проверен и готов к сохранению'));
     } catch (e) {
-      setError(e.message || 'Ключ GPT не прошел проверку');
+      setError(e.message || tr('GPT key validation failed', 'Ключ GPT не прошел проверку'));
     }
   };
 
   const saveAnalysisSettings = async () => {
     if (analysisForm.engine === 'gpt' && !analysisForm.gpt_key_configured && !analysisForm.gpt_api_key.trim()) {
-      setError('Для GPT-анализа нужно сначала указать и проверить ключ');
+      setError(tr('Enter and validate a key before enabling GPT analysis', 'Для GPT-анализа нужно сначала указать и проверить ключ'));
       return;
     }
     if (analysisForm.engine === 'gpt' && !analysisForm.gpt_prompt.trim()) {
-      setError('Промпт для GPT-анализа обязателен');
+      setError(tr('The GPT analysis prompt is required', 'Промпт для GPT-анализа обязателен'));
       return;
     }
     setError('');
@@ -326,10 +330,10 @@ export default function StrategiesPage() {
           gpt_api_key: analysisForm.gpt_api_key,
         }),
       });
-      setStatus('Общие настройки движка анализа сохранены');
+      setStatus(tr('Global analysis engine settings have been saved', 'Общие настройки движка анализа сохранены'));
       await load();
     } catch (e) {
-      setError(e.message || 'Не удалось сохранить настройки анализа');
+      setError(e.message || tr('Could not save analysis settings', 'Не удалось сохранить настройки анализа'));
     }
   };
 
@@ -342,11 +346,11 @@ export default function StrategiesPage() {
         method: 'POST',
         body: JSON.stringify({ id: form.id }),
       });
-      setStatus(`Стратегия ${form.id} удалена`);
+      setStatus(tr(`Strategy ${form.id} has been deleted`, `Стратегия ${form.id} удалена`));
       await load();
       closeCard();
     } catch (e) {
-      setError(e.message || 'Не удалось удалить стратегию');
+      setError(e.message || tr('Could not delete the strategy', 'Не удалось удалить стратегию'));
     }
   };
 
@@ -375,7 +379,7 @@ export default function StrategiesPage() {
                 <div className="admin-entity-head">
                   <div className="admin-entity-title">
                     <span className="admin-state-icon">{item.icon || '📊'}</span>
-                    <span>{item.name || `Стратегия ${item.id}`}</span>
+                    <span>{item.name || `${tr('Strategy', 'Стратегия')} ${item.id}`}</span>
                   </div>
                   <span className="admin-entity-gear">⚙️</span>
                 </div>
@@ -383,16 +387,16 @@ export default function StrategiesPage() {
                 <div className="admin-entity-meta">ID: {item.id}</div>
 
                 <div className="admin-strategy-meta-line">
-                  <span>👥 Пользователи: {usersCount}</span>
-                  <span>📶 Сигналы: {signalsCount}</span>
-                  <span>🎯 Отображаемый Winrate: {formatPercent(shownWinrate)}</span>
+                  <span>👥 {tr('Users', 'Пользователи')}: {usersCount}</span>
+                  <span>📶 {tr('Signals', 'Сигналы')}: {signalsCount}</span>
+                  <span>🎯 {tr('Displayed winrate', 'Отображаемый Winrate')}: {formatPercent(shownWinrate)}</span>
                 </div>
 
                 <div className="admin-chip-list">
                   {isSystemStrategy(item) ? (
-                    <span className="admin-chip admin-chip-state">Системная</span>
+                    <span className="admin-chip admin-chip-state">{tr('System', 'Системная')}</span>
                   ) : (
-                    <span className="admin-chip admin-chip-state user">Пользовательская</span>
+                    <span className="admin-chip admin-chip-state user">{tr('Custom', 'Пользовательская')}</span>
                   )}
                   {timeframes.map((timeframe) => (
                     <span key={`${item.id}-tf-${timeframe}`} className="admin-chip admin-chip-timeframe">
@@ -424,25 +428,26 @@ export default function StrategiesPage() {
         <StrategyToast
           message={error || status}
           type={error ? 'error' : 'success'}
+          tr={tr}
           onClose={() => {
             setError('');
             setStatus('');
           }}
         />
         <div className="admin-row-between admin-strategy-editor-head">
-          <h3 className="admin-section-title">Карточка стратегии</h3>
+          <h3 className="admin-section-title">{tr('Strategy details', 'Карточка стратегии')}</h3>
           <button className="admin-btn-outline" onClick={closeCard}>
-            ← К списку
+            {tr('← Back to list', '← К списку')}
           </button>
         </div>
 
         <div className="admin-strategy-metrics-grid">
           <div className="admin-strategy-mini-card">
-            <div className="admin-metric-label">Пользователи</div>
+            <div className="admin-metric-label">{tr('Users', 'Пользователи')}</div>
             <div className="admin-metric-value small">{form.users_count}</div>
           </div>
           <div className="admin-strategy-mini-card">
-            <div className="admin-metric-label">Сигналы</div>
+            <div className="admin-metric-label">{tr('Signals', 'Сигналы')}</div>
             <div className="admin-metric-value small">{form.signals_count}</div>
           </div>
           <div className="admin-strategy-mini-card">
@@ -452,7 +457,7 @@ export default function StrategiesPage() {
         </div>
 
         <div className="admin-field">
-          <label className="admin-label">Название</label>
+          <label className="admin-label">{tr('Name', 'Название')}</label>
           <input
             className="admin-input"
             value={form.name}
@@ -461,7 +466,7 @@ export default function StrategiesPage() {
         </div>
 
         <div className="admin-field">
-          <label className="admin-label">Иконка</label>
+          <label className="admin-label">{tr('Icon', 'Иконка')}</label>
           <input
             className="admin-input"
             value={form.icon}
@@ -470,7 +475,7 @@ export default function StrategiesPage() {
         </div>
 
         <div className="admin-field">
-          <label className="admin-label">Таймфреймы</label>
+          <label className="admin-label">{tr('Timeframes', 'Таймфреймы')}</label>
           <div className="admin-indicator-grid">
             {TIMEFRAME_OPTIONS.map((timeframe) => {
               const isSelected = form.timeframes.includes(timeframe);
@@ -488,13 +493,13 @@ export default function StrategiesPage() {
           </div>
           <div className="admin-note admin-timeframe-hint">
             {form.timeframes.length
-              ? `Выбрано: ${form.timeframes.join(', ')}`
-              : 'Ничего не выбрано — стратегия доступна для всех таймфреймов.'}
+              ? `${tr('Selected', 'Выбрано')}: ${form.timeframes.join(', ')}`
+              : tr('Nothing selected — the strategy is available for all timeframes.', 'Ничего не выбрано — стратегия доступна для всех таймфреймов.')}
           </div>
         </div>
 
         <div className="admin-field">
-          <label className="admin-label">Отображаемый Winrate (%)</label>
+          <label className="admin-label">{tr('Displayed winrate (%)', 'Отображаемый Winrate (%)')}</label>
           <input
             className="admin-input"
             type="number"
@@ -503,10 +508,10 @@ export default function StrategiesPage() {
             step="0.1"
             value={form.public_winrate}
             onChange={(e) => setForm((prev) => ({ ...prev, public_winrate: e.target.value }))}
-            placeholder="Например: 62.5"
+            placeholder={tr('For example: 62.5', 'Например: 62.5')}
           />
-          <div className="admin-note">Это публичное значение winrate, которое показывается пользователям во фронте.</div>
-          <div className="admin-note">Текущий расчетный winrate по истории: {formatPercent(form.winrate)}.</div>
+          <div className="admin-note">{tr('This public winrate is shown to users in the frontend.', 'Это публичное значение winrate, которое показывается пользователям во фронте.')}</div>
+          <div className="admin-note">{tr('Current calculated winrate from history', 'Текущий расчетный winrate по истории')}: {formatPercent(form.winrate)}.</div>
         </div>
 
         <div className="admin-strategy-system-row">
@@ -517,26 +522,26 @@ export default function StrategiesPage() {
                 type="checkbox"
                 checked={form.is_system}
                 onChange={(e) => setForm((prev) => ({ ...prev, is_system: e.target.checked }))}
-                aria-label="Сделать стратегию системной"
+                aria-label={tr('Make this a system strategy', 'Сделать стратегию системной')}
               />
               <span className="admin-system-switch-track" aria-hidden="true">
                 <span className="admin-system-switch-thumb" />
               </span>
               <span className="admin-system-toggle-copy">
-                <strong>{form.is_system ? 'Системная стратегия' : 'Сделать системной'}</strong>
+                <strong>{form.is_system ? tr('System strategy', 'Системная стратегия') : tr('Make system-wide', 'Сделать системной')}</strong>
                 <small>
                   {form.is_system
-                    ? 'Сейчас доступна всем пользователям'
-                    : 'Включите, чтобы добавить её в общий список'}
+                    ? tr('Currently available to all users', 'Сейчас доступна всем пользователям')
+                    : tr('Enable to add it to the shared list', 'Включите, чтобы добавить её в общий список')}
                 </small>
               </span>
-              <span className="admin-system-toggle-status">{form.is_system ? 'ВКЛ' : 'ВЫКЛ'}</span>
+              <span className="admin-system-toggle-status">{form.is_system ? tr('ON', 'ВКЛ') : tr('OFF', 'ВЫКЛ')}</span>
             </label>
           ) : (
             <div className="admin-system-toggle-card is-locked">
               <span className="admin-system-toggle-copy">
-                <strong>Встроенная системная стратегия</strong>
-                <small>Её нельзя перевести в пользовательские</small>
+                <strong>{tr('Built-in system strategy', 'Встроенная системная стратегия')}</strong>
+                <small>{tr('It cannot be converted to a custom strategy', 'Её нельзя перевести в пользовательские')}</small>
               </span>
             </div>
           )}
@@ -544,13 +549,15 @@ export default function StrategiesPage() {
         </div>
         {form.can_toggle_system ? (
           <div className="admin-note">
-            Владелец сохраняется. После отключения стратегия исчезнет у остальных пользователей и вернётся
-            владельцу{form.owner_user_id ? ` (Telegram ID ${form.owner_user_id})` : ''}.
+            {tr(
+              'The owner is preserved. When disabled, the strategy disappears for other users and returns to its owner',
+              'Владелец сохраняется. После отключения стратегия исчезнет у остальных пользователей и вернётся владельцу'
+            )}{form.owner_user_id ? ` (Telegram ID ${form.owner_user_id})` : ''}.
           </div>
         ) : null}
 
         <div className="admin-field">
-          <label className="admin-label">Подключенные индикаторы ({form.indicators.length})</label>
+          <label className="admin-label">{tr('Connected indicators', 'Подключенные индикаторы')} ({form.indicators.length})</label>
           <div className="admin-chip-list">
             {selectedIndicatorNames.length ? (
               selectedIndicatorNames.map((indicator) => (
@@ -559,13 +566,13 @@ export default function StrategiesPage() {
                 </span>
               ))
             ) : (
-              <span className="admin-muted">Индикаторы не выбраны</span>
+              <span className="admin-muted">{tr('No indicators selected', 'Индикаторы не выбраны')}</span>
             )}
           </div>
         </div>
 
         <div className="admin-field">
-          <label className="admin-label">Изменить подключенные индикаторы</label>
+          <label className="admin-label">{tr('Edit connected indicators', 'Изменить подключенные индикаторы')}</label>
           <div className="admin-indicator-grid">
             {indicators.map((indicator) => {
               const indicatorId = Number(indicator.id);
@@ -582,16 +589,16 @@ export default function StrategiesPage() {
               );
             })}
           </div>
-          {!indicators.length ? <div className="admin-muted">Список индикаторов пуст</div> : null}
+          {!indicators.length ? <div className="admin-muted">{tr('The indicator list is empty', 'Список индикаторов пуст')}</div> : null}
         </div>
 
         <div className="admin-row-actions">
           <button className="admin-btn" onClick={save}>
-            Сохранить
+            {tr('Save', 'Сохранить')}
           </button>
           {Number(form.id) !== 1 ? (
             <button className="admin-btn-outline danger" onClick={remove}>
-              Удалить
+              {tr('Delete', 'Удалить')}
             </button>
           ) : null}
         </div>
@@ -604,24 +611,25 @@ export default function StrategiesPage() {
       <StrategyToast
         message={error || status}
         type={error ? 'error' : 'success'}
+        tr={tr}
         onClose={() => {
           setError('');
           setStatus('');
         }}
       />
       <div className="admin-card admin-strategy-summary-card">
-        <h3 className="admin-section-title">Стратегии</h3>
+        <h3 className="admin-section-title">{tr('Strategies', 'Стратегии')}</h3>
         <div className="admin-strategy-summary-grid">
           <div className="admin-strategy-summary-item">
-            <div className="admin-metric-label">Всего</div>
+            <div className="admin-metric-label">{tr('Total', 'Всего')}</div>
             <div className="admin-metric-value small">{computedSummary.total}</div>
           </div>
           <div className="admin-strategy-summary-item system">
-            <div className="admin-metric-label">Системные</div>
+            <div className="admin-metric-label">{tr('System', 'Системные')}</div>
             <div className="admin-metric-value small">{computedSummary.system}</div>
           </div>
           <div className="admin-strategy-summary-item user">
-            <div className="admin-metric-label">Пользовательские</div>
+            <div className="admin-metric-label">{tr('Custom', 'Пользовательские')}</div>
             <div className="admin-metric-value small">{computedSummary.user}</div>
           </div>
         </div>
@@ -630,9 +638,9 @@ export default function StrategiesPage() {
       <div className="admin-card admin-engine-panel admin-global-engine-panel">
         <div className="admin-row-between">
           <div>
-            <h3 className="admin-section-title">Движок анализа</h3>
+            <h3 className="admin-section-title">{tr('Analysis engine', 'Движок анализа')}</h3>
             <div className="admin-note">
-              Общая настройка для всех стратегий. Пользователь не видит, какой движок используется.
+              {tr('Global setting for all strategies. Users cannot see which engine is active.', 'Общая настройка для всех стратегий. Пользователь не видит, какой движок используется.')}
             </div>
           </div>
           <span className={`admin-chip admin-chip-engine ${analysisForm.engine === 'gpt' ? 'gpt' : ''}`}>
@@ -640,7 +648,7 @@ export default function StrategiesPage() {
           </span>
         </div>
 
-        <div className="admin-engine-toggle" aria-label="Движок анализа">
+        <div className="admin-engine-toggle" aria-label={tr('Analysis engine', 'Движок анализа')}>
           <button
             type="button"
             className={analysisForm.engine === 'backend' ? 'active' : ''}
@@ -658,13 +666,16 @@ export default function StrategiesPage() {
         </div>
 
         <div className="admin-note">
-          Backend оставляет текущую формулу индикаторов. GPT получает те же сырые рыночные данные, стратегию и индикаторы, после чего возвращает сигнал в нашем стандартном формате.
+          {tr(
+            'Backend keeps the current indicator formula. GPT receives the same raw market data, strategy and indicators, then returns a signal in the standard format.',
+            'Backend оставляет текущую формулу индикаторов. GPT получает те же сырые рыночные данные, стратегию и индикаторы, после чего возвращает сигнал в нашем стандартном формате.'
+          )}
         </div>
 
         {analysisForm.engine === 'gpt' ? (
           <div className="admin-gpt-box">
             <div className="admin-field">
-              <label className="admin-label">Модель</label>
+              <label className="admin-label">{tr('Model', 'Модель')}</label>
               <input
                 className="admin-input"
                 value={analysisForm.gpt_model}
@@ -675,7 +686,7 @@ export default function StrategiesPage() {
 
             <div className="admin-field">
               <label className="admin-label">
-                GPT ключ {analysisForm.gpt_key_configured ? <span className="admin-key-state">ключ уже сохранён</span> : null}
+                GPT {tr('key', 'ключ')} {analysisForm.gpt_key_configured ? <span className="admin-key-state">{tr('key already saved', 'ключ уже сохранён')}</span> : null}
               </label>
               <div className="admin-key-row">
                 <input
@@ -683,16 +694,16 @@ export default function StrategiesPage() {
                   type="password"
                   value={analysisForm.gpt_api_key}
                   onChange={(e) => setAnalysisForm((prev) => ({ ...prev, gpt_api_key: e.target.value }))}
-                  placeholder={analysisForm.gpt_key_configured ? 'Оставьте пустым, если не меняем ключ' : 'sk-...'}
+                  placeholder={analysisForm.gpt_key_configured ? tr('Leave empty to keep the current key', 'Оставьте пустым, если не меняем ключ') : 'sk-...'}
                 />
                 <button className="admin-btn-outline" type="button" onClick={validateGptKey}>
-                  Проверить
+                  {tr('Validate', 'Проверить')}
                 </button>
               </div>
             </div>
 
             <div className="admin-field">
-              <label className="admin-label">Промпт анализа</label>
+              <label className="admin-label">{tr('Analysis prompt', 'Промпт анализа')}</label>
               <textarea
                 className="admin-textarea admin-gpt-prompt"
                 value={analysisForm.gpt_prompt}
@@ -700,7 +711,10 @@ export default function StrategiesPage() {
                 rows={12}
               />
               <div className="admin-note">
-                Здесь описываем, как GPT должен превращать сырые индикаторы, цену, сессию и уровни в BUY / SELL / NEUTRAL, SL и Take Profit.
+                {tr(
+                  'Describe how GPT should turn raw indicators, price, session and levels into BUY / SELL / NEUTRAL, SL and Take Profit.',
+                  'Здесь описываем, как GPT должен превращать сырые индикаторы, цену, сессию и уровни в BUY / SELL / NEUTRAL, SL и Take Profit.'
+                )}
               </div>
             </div>
           </div>
@@ -708,15 +722,15 @@ export default function StrategiesPage() {
 
         <div className="admin-row-actions admin-stream-save-row">
           <button className="admin-btn" type="button" onClick={saveAnalysisSettings}>
-            Сохранить движок
+            {tr('Save engine', 'Сохранить движок')}
           </button>
         </div>
       </div>
 
-      {loading ? <div className="admin-muted">Загрузка...</div> : null}
+      {loading ? <div className="admin-muted">{tr('Loading…', 'Загрузка...')}</div> : null}
 
-      {renderList('Системные стратегии', systemStrategies, 'Системные стратегии не найдены')}
-      {renderList('Пользовательские стратегии', userStrategies, 'Пользовательские стратегии не найдены', true)}
+      {renderList(tr('System strategies', 'Системные стратегии'), systemStrategies, tr('No system strategies found', 'Системные стратегии не найдены'))}
+      {renderList(tr('Custom strategies', 'Пользовательские стратегии'), userStrategies, tr('No custom strategies found', 'Пользовательские стратегии не найдены'), true)}
     </div>
   );
 }
