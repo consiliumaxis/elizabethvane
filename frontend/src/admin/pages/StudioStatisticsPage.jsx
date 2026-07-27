@@ -406,7 +406,6 @@ export default function StudioStatisticsPage({ studioMode, onStudioModeChange })
 
         <footer className="studio-dashboard-footer">
           <span>PRIVATE TRADING ANALYTICS</span>
-          <span>{tr('Updated from Admin Center', 'Обновлено из админ-центра')}</span>
         </footer>
 
         {studioMode ? (

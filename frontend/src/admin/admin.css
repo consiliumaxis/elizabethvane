@@ -3594,7 +3594,7 @@
   position: relative;
   z-index: 1;
   margin-top: 9px;
-  color: #aea28b;
+  color: #c6b99f;
   font-size: 0.8rem;
   font-weight: 650;
 }
@@ -3629,7 +3629,7 @@
 }
 
 .studio-panel-title small {
-  color: #958a76;
+  color: #a99c84;
   font-size: 0.74rem;
 }
 
@@ -3731,7 +3731,7 @@
 
 .studio-dashboard-footer {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   margin-top: 19px;
   color: #6f6554;
   font-size: 0.6rem;
@@ -4244,6 +4244,31 @@
   }
 
   .admin-shell.studio-mode .studio-dashboard {
-    padding: 24px 13px 70px;
+    padding:
+      max(88px, calc(env(safe-area-inset-top, 0px) + 72px))
+      13px
+      56px;
+  }
+
+  .admin-shell.studio-mode .studio-dashboard-header {
+    gap: 18px;
+    margin-bottom: 22px;
+  }
+
+  .admin-shell.studio-mode .studio-metric {
+    min-height: 144px;
+  }
+
+  .admin-shell.studio-mode .studio-winrate-panel {
+    flex: none;
+    min-height: 250px;
+  }
+
+  .admin-shell.studio-mode .studio-empty-state {
+    min-height: 165px;
+  }
+
+  .admin-shell.studio-mode .studio-dashboard-footer {
+    margin-top: 22px;
   }
 }

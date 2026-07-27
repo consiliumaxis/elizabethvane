@@ -101,6 +101,7 @@ class StudioStatisticsTest(unittest.TestCase):
         self.assertIn("StudioStatisticsPage", app)
         self.assertIn("returnToAdminMenu", page)
         self.assertIn("studio-admin-return", page)
+        self.assertNotIn("Updated from Admin Center", page)
 
 
 if __name__ == "__main__":
