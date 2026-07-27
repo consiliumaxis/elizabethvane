@@ -2363,14 +2363,6 @@
   pointer-events: none;
 }
 
-.admin-quiz-video-note {
-  border-left: 3px solid rgba(143, 106, 46, 0.36);
-  color: var(--text-soft);
-  padding-left: 9px;
-  font-size: 0.74rem;
-  line-height: 1.4;
-}
-
 .admin-funnel-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

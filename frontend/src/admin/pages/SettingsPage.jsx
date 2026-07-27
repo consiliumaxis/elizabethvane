@@ -1664,8 +1664,8 @@ export default function SettingsPage() {
 
         <div className="admin-muted">
           {tr(
-            'Settings for the main Elizabeth Bot Telegram funnel. They do not affect AI Chatter or its separate video-note funnel.',
-            'Настройки основной Telegram-воронки Elizabeth Bot. Не относятся к AI Chatter и его отдельной воронке кружков.'
+            'Configure the Elizabeth Bot journey: quiz, channel subscription and final message.',
+            'Настройте путь пользователя в Elizabeth Bot: опросник, подписку на канал и финальное сообщение.'
           )}
         </div>
 
@@ -1783,12 +1783,6 @@ export default function SettingsPage() {
                 </label>
               </div>
 
-              <div className="admin-quiz-video-note">
-                {tr(
-                  'This setting affects only the intro video note in the main bot quiz. AI Chatter and the post-subscription video-note sequence remain unchanged.',
-                  'Настройка относится только к первому кружку опросника в основном боте. AI Chatter и цепочка кружков после подписки не меняются.'
-                )}
-              </div>
             </div>
 
             {localizedQuizSteps.map((step) => {
