@@ -124,6 +124,7 @@ try:
         get_quiz_options,
         get_quiz_question,
         get_quiz_steps_to_complete,
+        is_active_channel_member,
         is_skip_answer,
         is_valid_quiz_step,
         map_quiz_answer_locally,
@@ -144,6 +145,7 @@ except ModuleNotFoundError:
         get_quiz_options,
         get_quiz_question,
         get_quiz_steps_to_complete,
+        is_active_channel_member,
         is_skip_answer,
         is_valid_quiz_step,
         map_quiz_answer_locally,
@@ -6137,17 +6139,59 @@ async def complete_channel_subscription(
             first_confirmation = cur.rowcount > 0
     if not first_confirmation:
         return False
-    await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)
-    await post_to_ai_chatter({
-        "user_id": user_id,
-        "message_id": int(datetime.now().timestamp() * 1_000_000),
-        "first_name": first_name,
-        "username": username,
-        "text": "Hello",
-        "voice_file_id": "",
-        "is_start": True,
-    })
+    asyncio.create_task(
+        deliver_channel_subscription_events(
+            user_id,
+            first_name=first_name,
+            username=username,
+        )
+    )
     return True
+
+
+async def deliver_channel_subscription_events(
+    user_id: int,
+    *,
+    first_name: str = "",
+    username: str = "",
+) -> None:
+    try:
+        await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)
+    except Exception as exc:
+        print(f"[Bot] channel subscription AIO event failed for {user_id}: {exc}")
+    try:
+        await post_to_ai_chatter({
+            "user_id": user_id,
+            "message_id": int(datetime.now().timestamp() * 1_000_000),
+            "first_name": first_name,
+            "username": username,
+            "text": "Hello",
+            "voice_file_id": "",
+            "is_start": True,
+        })
+    except Exception as exc:
+        print(f"[Bot] channel subscription AI start failed for {user_id}: {exc}")
+
+
+async def is_user_channel_member(user_id: int, channel_id: Any) -> bool:
+    try:
+        normalized_channel_id = int(channel_id or 0)
+    except (TypeError, ValueError):
+        normalized_channel_id = 0
+    if not normalized_channel_id:
+        return False
+    try:
+        member = await bot.get_chat_member(
+            chat_id=normalized_channel_id,
+            user_id=int(user_id),
+        )
+    except Exception as exc:
+        print(f"[Bot] channel membership check failed for {user_id}: {exc}")
+        return False
+    return is_active_channel_member(
+        getattr(member, "status", ""),
+        getattr(member, "is_member", None),
+    )
 
 
 @app.get("/api/bot/channel/open")
@@ -6361,6 +6405,14 @@ async def save_quiz_answer(user_id: int, step: str, answer: str, skip_flow: bool
         )
         for item in completed_steps
     ]
+    asyncio.create_task(deliver_quiz_aio_fields(user_id, aio_fields))
+    return next_step, True
+
+
+async def deliver_quiz_aio_fields(
+    user_id: int,
+    aio_fields: List[tuple[str, str]],
+) -> None:
     aio_results = await asyncio.gather(
         *(send_aio_field_value(user_id, field_name, value) for field_name, value in aio_fields),
         return_exceptions=True,
@@ -6374,7 +6426,6 @@ async def save_quiz_answer(user_id: int, step: str, answer: str, skip_flow: bool
                 f"[AIO] Quiz field {field_name} was not delivered for user {user_id}: "
                 f"{result.get('reason') or result.get('error') or result.get('response_body') or result}"
             )
-    return next_step, True
 
 
 async def finish_quiz_and_show_channel(message: types.Message, user_id: int, skipped: bool = False):
@@ -6723,7 +6774,11 @@ async def handle_quiz_answer_callback(callback: types.CallbackQuery):
     if not saved:
         await callback.answer("This question has already changed.", show_alert=True)
         return
-    await callback.answer()
+    await callback.answer("Saved")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception as exc:
+        print(f"[Bot] quiz keyboard cleanup failed: {exc}")
     if next_step:
         await send_quiz_question(callback.message.chat.id, next_step)
         return
@@ -6733,36 +6788,52 @@ async def handle_quiz_answer_callback(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda callback: callback.data == FUNNEL_CONTINUE_CALLBACK)
 async def handle_funnel_continue(callback: types.CallbackQuery):
-    if callback.message and callback.from_user:
-        channel_subscribed = False
-        if db_pool:
-            async with db_pool.acquire() as conn:
-                async with conn.cursor(aiomysql.DictCursor) as cur:
-                    await cur.execute(
-                        "SELECT channel_subscribed_at FROM user_onboarding WHERE user_id = %s LIMIT 1",
-                        (int(callback.from_user.id),),
-                    )
-                    row = await cur.fetchone() or {}
-                    channel_subscribed = bool(row.get("channel_subscribed_at"))
-                    if not channel_subscribed:
-                        await callback.answer(
-                            "Please open the channel first, then return to trading.",
-                            show_alert=True,
-                        )
-                        return
-                    await cur.execute(
-                        """
-                        UPDATE user_onboarding
-                        SET channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())
-                        WHERE user_id = %s
-                        """,
-                        (int(callback.from_user.id),),
-                    )
-        user_name = callback.from_user.first_name or callback.from_user.username or "Trader"
-        await callback.answer()
-        final_message_shown = await show_funnel_final_message(callback)
-        if not final_message_shown:
-            await send_main_menu(callback.message.chat.id, int(callback.from_user.id), user_name)
+    if not callback.message or not callback.from_user:
+        return
+
+    user_id = int(callback.from_user.id)
+    row = await get_onboarding_row(user_id) or {}
+    if not row.get("quiz_completed_at"):
+        await callback.answer(
+            "Please complete the questions first.",
+            show_alert=True,
+        )
+        return
+    channel_subscribed = bool(row.get("channel_subscribed_at"))
+    if not channel_subscribed:
+        settings = await get_support_links_row()
+        channel_subscribed = await is_user_channel_member(user_id, settings.get("channel_id"))
+        if channel_subscribed:
+            await complete_channel_subscription(
+                user_id,
+                first_name=callback.from_user.first_name or "",
+                username=callback.from_user.username or "",
+            )
+        else:
+            await callback.answer(
+                "Please join the channel first, then return to trading.",
+                show_alert=True,
+            )
+            return
+
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE user_onboarding
+                    SET channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())
+                    WHERE user_id = %s
+                      AND quiz_completed_at IS NOT NULL
+                    """,
+                    (user_id,),
+                )
+
+    user_name = callback.from_user.first_name or callback.from_user.username or "Trader"
+    await callback.answer("Subscription confirmed")
+    final_message_shown = await show_funnel_final_message(callback)
+    if not final_message_shown:
+        await send_main_menu(callback.message.chat.id, user_id, user_name)
 
 
 @dp.callback_query(lambda callback: callback.data == FUNNEL_OPEN_MENU_CALLBACK)

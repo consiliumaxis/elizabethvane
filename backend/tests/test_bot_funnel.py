@@ -157,6 +157,8 @@ class BotFunnelTest(unittest.TestCase):
     def test_detects_active_channel_memberships_and_events(self):
         for status in ("member", "administrator", "creator"):
             self.assertTrue(is_active_channel_member(status))
+        self.assertTrue(is_active_channel_member("restricted", is_member=True))
+        self.assertFalse(is_active_channel_member("restricted", is_member=False))
         for status in ("left", "kicked", "", None):
             self.assertFalse(is_active_channel_member(status))
 
@@ -184,7 +186,9 @@ class BotFunnelTest(unittest.TestCase):
         callback_handler = source.split("async def handle_funnel_continue", 1)[1].split(
             "@dp.callback_query", 1
         )[0]
-        self.assertIn("SELECT channel_subscribed_at FROM user_onboarding", callback_handler)
+        self.assertIn("row = await get_onboarding_row(user_id)", callback_handler)
+        self.assertIn("await is_user_channel_member", callback_handler)
+        self.assertIn("await complete_channel_subscription", callback_handler)
         self.assertIn("await show_funnel_final_message(callback)", callback_handler)
         self.assertIn("await send_main_menu", callback_handler)
         self.assertNotIn("await start_ai_chatter_from_callback(callback)", callback_handler)
@@ -195,6 +199,21 @@ class BotFunnelTest(unittest.TestCase):
         self.assertIn("await callback.message.edit_text", source)
         self.assertIn("async def handle_funnel_open_menu", source)
         self.assertIn("await send_main_menu(callback.message.chat.id", source)
+
+    def test_quiz_callback_acknowledges_choice_before_sending_next_step(self):
+        source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        handler = source.split("async def handle_quiz_answer_callback", 1)[1].split(
+            "@dp.callback_query", 1
+        )[0]
+        self.assertIn('await callback.answer("Saved")', handler)
+        self.assertIn("await callback.message.edit_reply_markup(reply_markup=None)", handler)
+
+        saver = source.split("async def save_quiz_answer", 1)[1].split(
+            "async def finish_quiz_and_show_channel", 1
+        )[0]
+        self.assertIn("asyncio.create_task(deliver_quiz_aio_fields", saver)
+        self.assertIn("async def deliver_quiz_aio_fields", saver)
 
     def test_bot_ai_manager_can_be_disabled_per_runtime(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")

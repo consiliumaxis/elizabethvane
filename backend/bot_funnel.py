@@ -437,5 +437,11 @@ def normalize_channel_settings(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def is_active_channel_member(status: Any) -> bool:
-    return str(status or "").strip().lower() in {"member", "administrator", "creator"}
+def is_active_channel_member(status: Any, is_member: Any = None) -> bool:
+    raw_status = getattr(status, "value", status)
+    normalized_status = str(raw_status or "").strip().lower()
+    if normalized_status in {"member", "administrator", "creator"}:
+        return True
+    if normalized_status == "restricted":
+        return bool(is_member)
+    return False
