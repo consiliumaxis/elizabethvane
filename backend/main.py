@@ -6845,23 +6845,23 @@ async def cmd_manager_stats(message: types.Message):
     staff_role = await get_staff_role(requester_id)
     if staff_role not in STAFF_ROLES:
         await write_manager_stats_audit(requester_id, target_query, "denied")
-        await message.answer("Недостаточно прав")
+        await message.answer("Insufficient permissions")
         return
     if str(message.chat.type) not in {"private", "ChatType.PRIVATE"}:
         await write_manager_stats_audit(requester_id, target_query, "private_chat_required")
-        await message.answer("Команда /stats доступна только в личном чате с ботом.")
+        await message.answer("The /stats command is available only in a private chat with the bot.")
         return
 
     target_kind, target_value = parse_stats_target(target_query)
     if not target_kind:
         await write_manager_stats_audit(requester_id, target_query, "invalid_query")
-        await message.answer("Использование: /stats @nickname или /stats 123456789")
+        await message.answer("Usage: /stats @nickname or /stats 123456789")
         return
 
     summary = await get_manager_stats_summary(target_kind, target_value)
     if not summary:
         await write_manager_stats_audit(requester_id, target_query, "not_found")
-        await message.answer("Клиент не найден")
+        await message.answer("Client not found")
         return
 
     await write_manager_stats_audit(

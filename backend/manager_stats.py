@@ -22,52 +22,52 @@ _STATS_COMMAND_RE = re.compile(
 _TELEGRAM_USERNAME_RE = re.compile(r"^@[A-Za-z0-9_]{3,64}$")
 _TELEGRAM_ID_RE = re.compile(r"^[1-9]\d{2,19}$")
 
-_COUNTRY_NAMES_RU = {
-    "AE": "ОАЭ",
-    "AR": "Аргентина",
-    "AZ": "Азербайджан",
-    "BD": "Бангладеш",
-    "BR": "Бразилия",
-    "BY": "Беларусь",
-    "CL": "Чили",
-    "CN": "Китай",
-    "CO": "Колумбия",
-    "DE": "Германия",
-    "DZ": "Алжир",
-    "EG": "Египет",
-    "ES": "Испания",
-    "FR": "Франция",
-    "GB": "Великобритания",
-    "GE": "Грузия",
-    "GH": "Гана",
-    "ID": "Индонезия",
-    "IN": "Индия",
-    "IT": "Италия",
-    "KE": "Кения",
-    "KG": "Кыргызстан",
-    "KZ": "Казахстан",
-    "LK": "Шри-Ланка",
-    "MA": "Марокко",
-    "MX": "Мексика",
-    "MY": "Малайзия",
-    "NG": "Нигерия",
-    "NP": "Непал",
-    "PE": "Перу",
-    "PH": "Филиппины",
-    "PK": "Пакистан",
-    "PL": "Польша",
-    "PT": "Португалия",
-    "RO": "Румыния",
-    "RU": "Россия",
-    "SA": "Саудовская Аравия",
-    "TH": "Таиланд",
-    "TR": "Турция",
-    "UA": "Украина",
-    "US": "США",
-    "UZ": "Узбекистан",
-    "VE": "Венесуэла",
-    "VN": "Вьетнам",
-    "ZA": "ЮАР",
+_COUNTRY_NAMES_EN = {
+    "AE": "United Arab Emirates",
+    "AR": "Argentina",
+    "AZ": "Azerbaijan",
+    "BD": "Bangladesh",
+    "BR": "Brazil",
+    "BY": "Belarus",
+    "CL": "Chile",
+    "CN": "China",
+    "CO": "Colombia",
+    "DE": "Germany",
+    "DZ": "Algeria",
+    "EG": "Egypt",
+    "ES": "Spain",
+    "FR": "France",
+    "GB": "United Kingdom",
+    "GE": "Georgia",
+    "GH": "Ghana",
+    "ID": "Indonesia",
+    "IN": "India",
+    "IT": "Italy",
+    "KE": "Kenya",
+    "KG": "Kyrgyzstan",
+    "KZ": "Kazakhstan",
+    "LK": "Sri Lanka",
+    "MA": "Morocco",
+    "MX": "Mexico",
+    "MY": "Malaysia",
+    "NG": "Nigeria",
+    "NP": "Nepal",
+    "PE": "Peru",
+    "PH": "Philippines",
+    "PK": "Pakistan",
+    "PL": "Poland",
+    "PT": "Portugal",
+    "RO": "Romania",
+    "RU": "Russia",
+    "SA": "Saudi Arabia",
+    "TH": "Thailand",
+    "TR": "Turkey",
+    "UA": "Ukraine",
+    "US": "United States",
+    "UZ": "Uzbekistan",
+    "VE": "Venezuela",
+    "VN": "Vietnam",
+    "ZA": "South Africa",
 }
 
 
@@ -103,8 +103,8 @@ def calculate_winrate(wins: Any, losses: Any) -> Optional[float]:
 def display_country(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
-        return "не определена"
-    return _COUNTRY_NAMES_RU.get(raw.upper(), raw)
+        return "Not specified"
+    return _COUNTRY_NAMES_EN.get(raw.upper(), raw)
 
 
 def _money(value: Any) -> Decimal:
@@ -130,21 +130,14 @@ def _date_text(value: Any) -> str:
 
 
 def _trade_word(count: int) -> str:
-    value = abs(int(count))
-    if value % 100 in range(11, 15):
-        return "сделок"
-    if value % 10 == 1:
-        return "сделка"
-    if value % 10 in range(2, 5):
-        return "сделки"
-    return "сделок"
+    return "trade" if abs(int(count)) == 1 else "trades"
 
 
 def format_manager_stats(summary: Dict[str, Any]) -> str:
     user_id = int(summary.get("user_id") or 0)
     username = str(summary.get("username") or "").strip().lstrip("@")
     first_name = str(summary.get("first_name") or "").strip()
-    client_name = f"@{username}" if username else (first_name or "без username")
+    client_name = f"@{username}" if username else (first_name or "no username")
 
     deposit_amount = _money(summary.get("deposit_amount"))
     deposit_date = _date_text(summary.get("first_deposit_at"))
@@ -153,7 +146,7 @@ def format_manager_stats(summary: Dict[str, Any]) -> str:
         if deposit_date:
             deposit_line += f" ({deposit_date})"
     else:
-        deposit_line = "не зафиксирован"
+        deposit_line = "Not recorded"
 
     wins_total = int(summary.get("wins_total") or 0)
     losses_total = int(summary.get("losses_total") or 0)
@@ -166,14 +159,14 @@ def format_manager_stats(summary: Dict[str, Any]) -> str:
 
     return "\n".join(
         [
-            f"Клиент: {client_name} (ID {user_id})",
-            f"Страна: {display_country(summary.get('country'))}",
-            f"Депозит: {deposit_line}",
-            f"Сделок всего: {closed_total}",
-            f"Винрейт: {f'{winrate_total:.1f}%' if winrate_total is not None else '—'}",
+            f"Client: {client_name} (ID {user_id})",
+            f"Country: {display_country(summary.get('country'))}",
+            f"Deposit: {deposit_line}",
+            f"Total trades: {closed_total}",
+            f"Winrate: {f'{winrate_total:.1f}%' if winrate_total is not None else '—'}",
             (
-                f"За 7 дней: {closed_7d} {_trade_word(closed_7d)}, "
-                f"винрейт {f'{winrate_7d:.1f}%' if winrate_7d is not None else '—'}"
+                f"Last 7 days: {closed_7d} {_trade_word(closed_7d)}, "
+                f"winrate {f'{winrate_7d:.1f}%' if winrate_7d is not None else '—'}"
             ),
         ]
     )

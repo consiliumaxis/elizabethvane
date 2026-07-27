@@ -49,12 +49,12 @@ class ManagerStatsTest(unittest.TestCase):
             }
         )
 
-        self.assertIn("Клиент: @nick (ID 123456789)", text)
-        self.assertIn("Страна: Индия", text)
-        self.assertIn("Депозит: 15.00 USD (10.05.2026)", text)
-        self.assertIn("Сделок всего: 174", text)
-        self.assertIn("Винрейт: 71.8%", text)
-        self.assertIn("За 7 дней: 42 сделки, винрейт 73.8%", text)
+        self.assertIn("Client: @nick (ID 123456789)", text)
+        self.assertIn("Country: India", text)
+        self.assertIn("Deposit: 15.00 USD (10.05.2026)", text)
+        self.assertIn("Total trades: 174", text)
+        self.assertIn("Winrate: 71.8%", text)
+        self.assertIn("Last 7 days: 42 trades, winrate 73.8%", text)
 
     def test_formats_missing_values_without_fake_zero_winrate(self):
         text = format_manager_stats(
@@ -66,10 +66,10 @@ class ManagerStatsTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(display_country("UA"), "Украина")
-        self.assertIn("Страна: не определена", text)
-        self.assertIn("Депозит: не зафиксирован", text)
-        self.assertIn("Винрейт: —", text)
+        self.assertEqual(display_country("UA"), "Ukraine")
+        self.assertIn("Country: Not specified", text)
+        self.assertIn("Deposit: Not recorded", text)
+        self.assertIn("Winrate: —", text)
 
     def test_schema_and_command_have_role_and_audit_guards(self):
         schema = (PROJECT_ROOT / "backend/db_bootstrap.py").read_text(encoding="utf-8")
@@ -79,7 +79,7 @@ class ManagerStatsTest(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS manager_stats_audit", schema)
         self.assertIn("country VARCHAR(32)", schema)
         self.assertIn('@dp.message(Command("stats"))', backend)
-        self.assertIn('await message.answer("Недостаточно прав")', backend)
+        self.assertIn('await message.answer("Insufficient permissions")', backend)
         self.assertIn("async def get_manager_stats_summary", backend)
         self.assertIn('@app.get("/api/admin/staff/audit")', backend)
         self.assertIn("ORDER BY audit.created_at DESC, audit.id DESC", backend)
