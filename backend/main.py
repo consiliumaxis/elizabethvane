@@ -299,11 +299,46 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 db_pool = None
 bot = Bot(token=os.getenv("BOT_TOKEN"))
 dp = Dispatcher()
-START_VIDEO_NOTE_PATH = (
+START_VIDEO_NOTE_FALLBACK_PATH = (
     os.getenv("START_VIDEO_NOTE_PATH")
     or os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "elizabeth_start_video_note.mp4")
 )
+START_VIDEO_NOTE_MANAGED_PATH = (
+    os.getenv("QUIZ_INTRO_VIDEO_PATH")
+    or os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "quiz_intro_video.mp4")
+)
 START_VIDEO_NOTE_LENGTH = get_env_int("START_VIDEO_NOTE_LENGTH", 240)
+MAX_QUIZ_INTRO_VIDEO_SIZE = 50 * 1024 * 1024
+
+
+def resolve_start_video_note_path():
+    if START_VIDEO_NOTE_MANAGED_PATH and os.path.isfile(START_VIDEO_NOTE_MANAGED_PATH):
+        return START_VIDEO_NOTE_MANAGED_PATH, "uploaded"
+    if START_VIDEO_NOTE_FALLBACK_PATH and os.path.isfile(START_VIDEO_NOTE_FALLBACK_PATH):
+        return START_VIDEO_NOTE_FALLBACK_PATH, "default"
+    return "", "missing"
+
+
+def get_quiz_intro_video_status(enabled: Any = True) -> Dict[str, Any]:
+    path, source = resolve_start_video_note_path()
+    try:
+        file_size = os.path.getsize(path) if path else 0
+    except OSError:
+        file_size = 0
+    return {
+        "enabled": bool(int(enabled or 0)),
+        "file_exists": bool(path),
+        "file_name": os.path.basename(path) if path else "",
+        "file_size": file_size,
+        "source": source,
+        "max_size": MAX_QUIZ_INTRO_VIDEO_SIZE,
+    }
+
+
+def is_valid_mp4_payload(payload: bytes) -> bool:
+    return bool(payload) and b"ftyp" in payload[:64]
+
+
 menu_photo_file_id = (os.getenv("MENU_PHOTO_FILE_ID") or "").strip()
 menu_file_id_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "menu.file_id")
 if not menu_photo_file_id and os.path.exists(menu_file_id_path):
@@ -1262,21 +1297,26 @@ async def get_support_links_row():
         "support_url": (os.getenv("SUPPORT_URL") or "").strip(),
         "channel_id": (os.getenv("CHANNEL_ID") or "").strip(),
         "check_subscription_enabled": (os.getenv("CHECK_SUBSCRIPTION_ENABLED") or "").strip(),
+        "quiz_intro_video_enabled": 1,
         "quiz_config": {},
         "final_message_config": {},
     }
     if not db_pool:
         settings = normalize_channel_settings(fallback)
+        settings["quiz_intro_video_enabled"] = 1
         settings["quiz_config"] = normalize_quiz_config()
         settings["final_message_config"] = normalize_final_message_config()
+        settings["quiz_intro_video"] = get_quiz_intro_video_status(
+            settings.get("quiz_intro_video_enabled")
+        )
         return settings
     try:
         async with db_pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
                     """
-                    SELECT channel_id, channel_url, support_url, check_subscription_enabled, quiz_config,
-                           final_message_config
+                    SELECT channel_id, channel_url, support_url, check_subscription_enabled,
+                           quiz_intro_video_enabled, quiz_config, final_message_config
                     FROM admin_support_links
                     WHERE id = 1
                     LIMIT 1
@@ -1286,13 +1326,21 @@ async def get_support_links_row():
     except Exception as e:
         print(f"Support links fallback: {e}")
         settings = normalize_channel_settings(fallback)
+        settings["quiz_intro_video_enabled"] = 1
         settings["quiz_config"] = normalize_quiz_config()
         settings["final_message_config"] = normalize_final_message_config()
+        settings["quiz_intro_video"] = get_quiz_intro_video_status(
+            settings.get("quiz_intro_video_enabled")
+        )
         return settings
     if not row:
         settings = normalize_channel_settings(fallback)
+        settings["quiz_intro_video_enabled"] = 1
         settings["quiz_config"] = normalize_quiz_config()
         settings["final_message_config"] = normalize_final_message_config()
+        settings["quiz_intro_video"] = get_quiz_intro_video_status(
+            settings.get("quiz_intro_video_enabled")
+        )
         return settings
     merged = {
         "channel_id": row.get("channel_id") or fallback["channel_id"],
@@ -1301,12 +1349,21 @@ async def get_support_links_row():
         "check_subscription_enabled": row.get("check_subscription_enabled")
         if row.get("check_subscription_enabled") is not None
         else fallback["check_subscription_enabled"],
+        "quiz_intro_video_enabled": row.get("quiz_intro_video_enabled")
+        if row.get("quiz_intro_video_enabled") is not None
+        else fallback["quiz_intro_video_enabled"],
         "quiz_config": row.get("quiz_config") or fallback["quiz_config"],
         "final_message_config": row.get("final_message_config") or fallback["final_message_config"],
     }
     settings = normalize_channel_settings(merged)
     settings["quiz_config"] = normalize_quiz_config(merged.get("quiz_config"))
     settings["final_message_config"] = normalize_final_message_config(merged.get("final_message_config"))
+    settings["quiz_intro_video_enabled"] = 1 if bool(
+        int(merged.get("quiz_intro_video_enabled") or 0)
+    ) else 0
+    settings["quiz_intro_video"] = get_quiz_intro_video_status(
+        settings["quiz_intro_video_enabled"]
+    )
     return settings
 
 
@@ -3556,6 +3613,58 @@ async def admin_settings(admin=Depends(get_admin_user)):
     }
 
 
+@app.put("/api/admin/settings/quiz-intro-video")
+async def admin_quiz_intro_video_upload(
+    request: Request,
+    admin=Depends(get_admin_user),
+):
+    raw_content_length = (request.headers.get("content-length") or "").strip()
+    if raw_content_length:
+        try:
+            if int(raw_content_length) > MAX_QUIZ_INTRO_VIDEO_SIZE:
+                raise HTTPException(status_code=413, detail="MP4 file is larger than 50 MB")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
+
+    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"video/mp4", "application/mp4", "application/octet-stream"}:
+        raise HTTPException(status_code=415, detail="Only MP4 video files are supported")
+
+    payload = await request.body()
+    if not payload:
+        raise HTTPException(status_code=400, detail="MP4 file is empty")
+    if len(payload) > MAX_QUIZ_INTRO_VIDEO_SIZE:
+        raise HTTPException(status_code=413, detail="MP4 file is larger than 50 MB")
+    if not is_valid_mp4_payload(payload):
+        raise HTTPException(status_code=400, detail="The uploaded file is not a valid MP4 container")
+
+    target_path = START_VIDEO_NOTE_MANAGED_PATH
+    target_dir = os.path.dirname(target_path) or "."
+    temp_path = f"{target_path}.upload-{secrets.token_hex(6)}"
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        with open(temp_path, "wb") as uploaded_file:
+            uploaded_file.write(payload)
+            uploaded_file.flush()
+            os.fsync(uploaded_file.fileno())
+        os.replace(temp_path, target_path)
+    except OSError as exc:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"Could not save MP4 file: {exc}")
+
+    support_settings = await get_support_links_row()
+    return {
+        "status": "success",
+        "quiz_intro_video": get_quiz_intro_video_status(
+            support_settings.get("quiz_intro_video_enabled", 1)
+        ),
+    }
+
+
 @app.post("/api/admin/settings")
 async def admin_settings_update(request: Request, admin=Depends(get_admin_user)):
     data = await request.json()
@@ -3757,6 +3866,10 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                 channel_url = str(support_data.get("channel_url") or "").strip()[:1000]
                 support_url = str(support_data.get("support_url") or "").strip()[:1000]
                 check_subscription_enabled = 1 if bool(support_data.get("check_subscription_enabled")) else 0
+                raw_quiz_intro_video_enabled = support_data.get("quiz_intro_video_enabled", True)
+                quiz_intro_video_enabled = 0 if str(raw_quiz_intro_video_enabled).strip().lower() in {
+                    "", "0", "false", "no", "off", "none"
+                } else 1
                 quiz_config = normalize_quiz_config(support_data.get("quiz_config"))
                 quiz_config_json = json.dumps(quiz_config, ensure_ascii=False)
                 try:
@@ -3769,15 +3882,17 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                 await cur.execute(
                     """
                     INSERT INTO admin_support_links (
-                        id, channel_id, channel_url, support_url, check_subscription_enabled, quiz_config,
+                        id, channel_id, channel_url, support_url, check_subscription_enabled,
+                        quiz_intro_video_enabled, quiz_config,
                         final_message_config, updated_by
                     )
-                    VALUES (1, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         channel_id = VALUES(channel_id),
                         channel_url = VALUES(channel_url),
                         support_url = VALUES(support_url),
                         check_subscription_enabled = VALUES(check_subscription_enabled),
+                        quiz_intro_video_enabled = VALUES(quiz_intro_video_enabled),
                         quiz_config = VALUES(quiz_config),
                         final_message_config = VALUES(final_message_config),
                         updated_by = VALUES(updated_by)
@@ -3787,6 +3902,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
                         channel_url,
                         support_url,
                         check_subscription_enabled,
+                        quiz_intro_video_enabled,
                         quiz_config_json,
                         final_message_config_json,
                         int(admin["user_id"]),
@@ -6233,16 +6349,21 @@ async def send_quiz_question(chat_id: int, step: str):
 
 async def send_start_video_note(chat_id: int):
     try:
-        if not START_VIDEO_NOTE_PATH or not os.path.exists(START_VIDEO_NOTE_PATH):
-            print(f"[Bot] start video note is missing: {START_VIDEO_NOTE_PATH}")
+        settings = await get_support_links_row()
+        if not bool(int(settings.get("quiz_intro_video_enabled") or 0)):
+            return
+        video_path, video_source = resolve_start_video_note_path()
+        if not video_path:
+            print("[Bot] quiz intro video note is enabled, but no MP4 file is available")
             return
         await bot.send_video_note(
             chat_id=chat_id,
-            video_note=FSInputFile(START_VIDEO_NOTE_PATH),
+            video_note=FSInputFile(video_path),
             length=START_VIDEO_NOTE_LENGTH,
         )
+        print(f"[Bot] quiz intro video note sent from {video_source} source")
     except Exception as e:
-        print(f"[Bot] start video note send failed: {e}")
+        print(f"[Bot] quiz intro video note send failed: {e}")
 
 
 async def send_quiz_welcome(chat_id: int):

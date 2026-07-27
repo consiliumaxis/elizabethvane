@@ -169,7 +169,10 @@ class BotFunnelTest(unittest.TestCase):
     def test_start_flow_sends_video_note_before_first_quiz_question(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 
-        self.assertIn("START_VIDEO_NOTE_PATH", source)
+        self.assertIn("START_VIDEO_NOTE_FALLBACK_PATH", source)
+        self.assertIn("START_VIDEO_NOTE_MANAGED_PATH", source)
+        self.assertIn("resolve_start_video_note_path", source)
+        self.assertIn('settings.get("quiz_intro_video_enabled")', source)
         self.assertIn("send_start_video_note", source)
         self.assertIn("send_video_note", source)
         self.assertIn("FSInputFile", source)

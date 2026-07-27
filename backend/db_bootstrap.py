@@ -332,6 +332,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     channel_url TEXT NULL,
                     support_url TEXT NULL,
                     check_subscription_enabled TINYINT(1) NOT NULL DEFAULT 1,
+                    quiz_intro_video_enabled TINYINT(1) NOT NULL DEFAULT 1,
                     quiz_config LONGTEXT NULL,
                     final_message_config LONGTEXT NULL,
                     updated_by BIGINT NULL,
@@ -803,6 +804,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "admin_system_access_settings", "updated_at", "ALTER TABLE admin_system_access_settings ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
         await _ensure_column(conn, db_name, "admin_support_links", "channel_id", "ALTER TABLE admin_support_links ADD COLUMN channel_id BIGINT NULL")
         await _ensure_column(conn, db_name, "admin_support_links", "check_subscription_enabled", "ALTER TABLE admin_support_links ADD COLUMN check_subscription_enabled TINYINT(1) NOT NULL DEFAULT 1")
+        await _ensure_column(conn, db_name, "admin_support_links", "quiz_intro_video_enabled", "ALTER TABLE admin_support_links ADD COLUMN quiz_intro_video_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER check_subscription_enabled")
         await _ensure_column(conn, db_name, "admin_support_links", "quiz_config", "ALTER TABLE admin_support_links ADD COLUMN quiz_config LONGTEXT NULL")
         await _ensure_column(conn, db_name, "admin_support_links", "final_message_config", "ALTER TABLE admin_support_links ADD COLUMN final_message_config LONGTEXT NULL AFTER quiz_config")
         await _ensure_column(conn, db_name, "user_onboarding", "quiz_broker_experience", "ALTER TABLE user_onboarding ADD COLUMN quiz_broker_experience VARCHAR(255) NULL")
@@ -1028,15 +1030,17 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             await cur.execute(
                 """
                 INSERT INTO admin_support_links (
-                    id, channel_id, channel_url, support_url, check_subscription_enabled, quiz_config,
+                    id, channel_id, channel_url, support_url, check_subscription_enabled,
+                    quiz_intro_video_enabled, quiz_config,
                     final_message_config, updated_by
                 )
-                VALUES (1, %s, %s, %s, %s, %s, %s, NULL)
+                VALUES (1, %s, %s, %s, %s, %s, %s, %s, NULL)
                 ON DUPLICATE KEY UPDATE
                     channel_id = COALESCE(channel_id, VALUES(channel_id)),
                     channel_url = COALESCE(NULLIF(channel_url, ''), VALUES(channel_url)),
                     support_url = COALESCE(NULLIF(support_url, ''), VALUES(support_url)),
                     check_subscription_enabled = COALESCE(check_subscription_enabled, VALUES(check_subscription_enabled)),
+                    quiz_intro_video_enabled = COALESCE(quiz_intro_video_enabled, VALUES(quiz_intro_video_enabled)),
                     quiz_config = COALESCE(NULLIF(quiz_config, ''), VALUES(quiz_config)),
                     final_message_config = COALESCE(NULLIF(final_message_config, ''), VALUES(final_message_config))
                 """,
@@ -1045,6 +1049,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     (os.getenv("CHANNEL_URL") or "").strip() or DEFAULT_CHANNEL_URL,
                     (os.getenv("SUPPORT_URL") or "").strip(),
                     _env_int("CHECK_SUBSCRIPTION_ENABLED", DEFAULT_CHECK_SUBSCRIPTION_ENABLED),
+                    1,
                     json.dumps(DEFAULT_QUIZ_CONFIG, ensure_ascii=False),
                     json.dumps(DEFAULT_FINAL_MESSAGE_CONFIG, ensure_ascii=False),
                 ),

@@ -80,6 +80,7 @@ const DEFAULT_QUIZ_CONFIG = {
 };
 const FINAL_MESSAGE_MAX_BUTTONS = 8;
 const FINAL_MESSAGE_BUTTON_TYPES = ['url', 'menu', 'web_app'];
+const QUIZ_INTRO_VIDEO_MAX_SIZE = 50 * 1024 * 1024;
 const DEFAULT_FINAL_MESSAGE_CONFIG = {
   enabled: true,
   trigger_button_text: 'Go to trading',
@@ -211,6 +212,13 @@ const formatLevel = (value) => {
   const numeric = toMaybeNumber(value);
   if (numeric === null) return '---';
   return numeric.toFixed(5);
+};
+
+const formatBytes = (value) => {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 1 : 2)} MB`;
 };
 
 const normalizeQuizConfig = (rawConfig) => {
@@ -417,6 +425,15 @@ export default function SettingsPage() {
   const [checkSubscriptionEnabled, setCheckSubscriptionEnabled] = useState(true);
   const [supportUrl, setSupportUrl] = useState('');
   const [quizConfig, setQuizConfig] = useState(() => normalizeQuizConfig());
+  const [quizIntroVideoEnabled, setQuizIntroVideoEnabled] = useState(true);
+  const [quizIntroVideoMeta, setQuizIntroVideoMeta] = useState({
+    file_exists: false,
+    file_name: '',
+    file_size: 0,
+    source: 'missing',
+    max_size: QUIZ_INTRO_VIDEO_MAX_SIZE,
+  });
+  const [quizIntroVideoUploading, setQuizIntroVideoUploading] = useState(false);
   const [funnelEditorTab, setFunnelEditorTab] = useState('quiz');
   const [finalMessageConfig, setFinalMessageConfig] = useState(() =>
     normalizeFinalMessageConfig(DEFAULT_FINAL_MESSAGE_CONFIG)
@@ -494,6 +511,17 @@ export default function SettingsPage() {
       setCheckSubscriptionEnabled(Boolean(Number(support.check_subscription_enabled ?? 1)));
       setSupportUrl(support.support_url || '');
       setQuizConfig(normalizeQuizConfig(support.quiz_config));
+      const quizIntroVideo = support.quiz_intro_video || {};
+      setQuizIntroVideoEnabled(Boolean(Number(
+        quizIntroVideo.enabled ?? support.quiz_intro_video_enabled ?? 1
+      )));
+      setQuizIntroVideoMeta({
+        file_exists: Boolean(quizIntroVideo.file_exists),
+        file_name: String(quizIntroVideo.file_name || ''),
+        file_size: Number(quizIntroVideo.file_size || 0),
+        source: String(quizIntroVideo.source || 'missing'),
+        max_size: Number(quizIntroVideo.max_size || QUIZ_INTRO_VIDEO_MAX_SIZE),
+      });
       setFinalMessageConfig(normalizeFinalMessageConfig(support.final_message_config));
 
       const pocket = settingsRes?.settings?.pocket_api || {};
@@ -736,6 +764,7 @@ export default function SettingsPage() {
           channel_url: channelUrl.trim(),
           check_subscription_enabled: checkSubscriptionEnabled,
           support_url: supportUrl.trim(),
+          quiz_intro_video_enabled: quizIntroVideoEnabled,
           quiz_config: normalizeQuizConfig(quizConfig),
           final_message_config: preparedFinalMessageConfig,
         };
@@ -768,7 +797,7 @@ export default function SettingsPage() {
       } else if (source === 'streams') {
         setStatus(tr('Stream settings saved', 'Настройки стримов сохранены'));
       } else if (source === 'support') {
-        setStatus(tr('Bot funnel settings saved', 'Ссылки поддержки сохранены'));
+        setStatus(tr('Bot funnel settings saved', 'Настройки воронки бота сохранены'));
       } else if (source === 'pocket') {
         setStatus(tr('Pocket API saved', 'Pocket API сохранен'));
         setPocketApiToken('');
@@ -810,6 +839,50 @@ export default function SettingsPage() {
       }
       return next;
     });
+  };
+
+  const uploadQuizIntroVideo = async (file) => {
+    if (!file) return;
+    const extensionIsMp4 = String(file.name || '').toLowerCase().endsWith('.mp4');
+    if (!extensionIsMp4) {
+      setError(tr('Select an MP4 video file', 'Выберите видеофайл в формате MP4'));
+      return;
+    }
+    const maxSize = Number(quizIntroVideoMeta.max_size || QUIZ_INTRO_VIDEO_MAX_SIZE);
+    if (file.size > maxSize) {
+      setError(tr(
+        `The MP4 file must be no larger than ${formatBytes(maxSize)}`,
+        `Размер MP4 не должен превышать ${formatBytes(maxSize)}`
+      ));
+      return;
+    }
+
+    setQuizIntroVideoUploading(true);
+    setError('');
+    setStatus('');
+    try {
+      const response = await apiAdminFetchJson('/api/admin/settings/quiz-intro-video', {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'video/mp4' },
+        body: file,
+      });
+      const video = response?.quiz_intro_video || {};
+      setQuizIntroVideoMeta({
+        file_exists: Boolean(video.file_exists),
+        file_name: String(video.file_name || file.name || ''),
+        file_size: Number(video.file_size || file.size || 0),
+        source: String(video.source || 'uploaded'),
+        max_size: Number(video.max_size || maxSize),
+      });
+      setStatus(tr(
+        'The quiz intro video note was replaced',
+        'Кружок перед опросником заменён'
+      ));
+    } catch (e) {
+      setError(e.message || tr('Could not upload the MP4 file', 'Не удалось загрузить MP4'));
+    } finally {
+      setQuizIntroVideoUploading(false);
+    }
   };
 
   const updateQuizQuestion = (stepKey, question) => {
@@ -1591,8 +1664,8 @@ export default function SettingsPage() {
 
         <div className="admin-muted">
           {tr(
-            'Settings for the main Elizabeth Bot Telegram funnel. They do not affect AI Chatter or the video-note funnel.',
-            'Настройки основной Telegram-воронки Elizabeth Bot. Не относятся к AI Chatter и воронке кружков.'
+            'Settings for the main Elizabeth Bot Telegram funnel. They do not affect AI Chatter or its separate video-note funnel.',
+            'Настройки основной Telegram-воронки Elizabeth Bot. Не относятся к AI Chatter и его отдельной воронке кружков.'
           )}
         </div>
 
@@ -1632,6 +1705,90 @@ export default function SettingsPage() {
               >
                 {tr('Reset all', 'Сбросить все')}
               </button>
+            </div>
+
+            <div className="admin-quiz-video-card">
+              <div className="admin-quiz-video-title-row">
+                <div>
+                  <div className="admin-quiz-video-eyebrow">{tr('Before question 1', 'Перед вопросом 1')}</div>
+                  <div className="admin-quiz-video-title">{tr('Quiz intro video note', 'Кружок перед опросником')}</div>
+                  <div className="admin-muted">
+                    {tr(
+                      'The main Elizabeth bot sends this video note once, immediately before the first quiz question.',
+                      'Основной бот Elizabeth отправляет этот кружок один раз — непосредственно перед первым вопросом.'
+                    )}
+                  </div>
+                </div>
+                <span className={`admin-quiz-video-status ${quizIntroVideoMeta.file_exists ? 'ready' : 'missing'}`}>
+                  {quizIntroVideoMeta.file_exists
+                    ? tr('MP4 ready', 'MP4 загружен')
+                    : tr('No MP4', 'Нет MP4')}
+                </span>
+              </div>
+
+              <label className={`admin-final-enabled-card ${quizIntroVideoEnabled ? 'is-on' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={quizIntroVideoEnabled}
+                  onChange={(e) => setQuizIntroVideoEnabled(e.target.checked)}
+                />
+                <span>
+                  <strong>{tr('Send the video note before the quiz', 'Отправлять кружок перед опросником')}</strong>
+                  <small>
+                    {quizIntroVideoEnabled
+                      ? tr('Enabled: the video note is sent before question 1.', 'Включено: кружок уйдёт перед вопросом 1.')
+                      : tr('Disabled: the funnel starts directly with the welcome text and question 1.', 'Выключено: воронка сразу начнётся с приветствия и вопроса 1.')}
+                  </small>
+                </span>
+                <b>{quizIntroVideoEnabled ? tr('ON', 'ВКЛ') : tr('OFF', 'ВЫКЛ')}</b>
+              </label>
+
+              <div className="admin-quiz-video-file">
+                <div className="admin-quiz-video-file-info">
+                  <strong>
+                    {quizIntroVideoMeta.file_exists
+                      ? (quizIntroVideoMeta.source === 'uploaded'
+                        ? tr('Custom video note', 'Свой кружок')
+                        : tr('Default video note', 'Стандартный кружок'))
+                      : tr('Video note is missing', 'Кружок не загружен')}
+                  </strong>
+                  <span>
+                    {quizIntroVideoMeta.file_exists
+                      ? `${quizIntroVideoMeta.file_name} · ${formatBytes(quizIntroVideoMeta.file_size)}`
+                      : tr('Upload an MP4 file to enable sending.', 'Загрузите MP4, чтобы включить отправку.')}
+                  </span>
+                  <small>
+                    {tr(
+                      `MP4 only, up to ${formatBytes(quizIntroVideoMeta.max_size)}. Telegram will send it as a round video note.`,
+                      `Только MP4, до ${formatBytes(quizIntroVideoMeta.max_size)}. Telegram отправит файл как круглый видеокружок.`
+                    )}
+                  </small>
+                </div>
+                <label className={`admin-quiz-video-upload ${quizIntroVideoUploading ? 'is-loading' : ''}`}>
+                  <input
+                    type="file"
+                    accept="video/mp4,.mp4"
+                    disabled={quizIntroVideoUploading}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      uploadQuizIntroVideo(file);
+                    }}
+                  />
+                  {quizIntroVideoUploading
+                    ? tr('Uploading…', 'Загрузка...')
+                    : (quizIntroVideoMeta.file_exists
+                      ? tr('Replace MP4', 'Заменить MP4')
+                      : tr('Upload MP4', 'Загрузить MP4'))}
+                </label>
+              </div>
+
+              <div className="admin-quiz-video-note">
+                {tr(
+                  'This setting affects only the intro video note in the main bot quiz. AI Chatter and the post-subscription video-note sequence remain unchanged.',
+                  'Настройка относится только к первому кружку опросника в основном боте. AI Chatter и цепочка кружков после подписки не меняются.'
+                )}
+              </div>
             </div>
 
             {localizedQuizSteps.map((step) => {
