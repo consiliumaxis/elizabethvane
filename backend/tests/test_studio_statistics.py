@@ -91,6 +91,7 @@ class StudioStatisticsTest(unittest.TestCase):
         backend = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
         app = (PROJECT_ROOT / "frontend/src/admin/AdminApp.jsx").read_text(encoding="utf-8")
         page_path = PROJECT_ROOT / "frontend/src/admin/pages/StudioStatisticsPage.jsx"
+        page = page_path.read_text(encoding="utf-8")
 
         self.assertIn("CREATE TABLE IF NOT EXISTS admin_studio_daily_stats", schema)
         self.assertIn('@app.get("/api/admin/studio-statistics")', backend)
@@ -98,6 +99,8 @@ class StudioStatisticsTest(unittest.TestCase):
         self.assertIn('@app.delete("/api/admin/studio-statistics/day/{stat_date}")', backend)
         self.assertTrue(page_path.exists())
         self.assertIn("StudioStatisticsPage", app)
+        self.assertIn("returnToAdminMenu", page)
+        self.assertIn("studio-admin-return", page)
 
 
 if __name__ == "__main__":

@@ -202,6 +202,13 @@ export default function StudioStatisticsPage({ studioMode, onStudioModeChange })
     }
   };
 
+  const returnToAdminMenu = useCallback(() => {
+    onStudioModeChange(false);
+    window.setTimeout(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 0);
+  }, [onStudioModeChange]);
+
   const periodTitle = useMemo(() => {
     if (dateFrom === dateTo) {
       return new Intl.DateTimeFormat(locale, {
@@ -326,7 +333,16 @@ export default function StudioStatisticsPage({ studioMode, onStudioModeChange })
         <div className="studio-dashboard-glow studio-dashboard-glow-two" />
         <header className="studio-dashboard-header">
           <div>
-            <div className="studio-brand-mark"><span>EV</span></div>
+            <button
+              type="button"
+              className="studio-brand-mark studio-admin-return"
+              onClick={returnToAdminMenu}
+              aria-label={tr('Back to Admin Center', 'Вернуться в админ-центр')}
+              title={tr('Back to Admin Center', 'Вернуться в админ-центр')}
+            >
+              <span className="studio-brand-monogram">EV</span>
+              <span className="studio-brand-return-icon" aria-hidden="true">←</span>
+            </button>
             <div>
               <div className="studio-eyebrow">ELIZABETH VANE</div>
               <h2>{tr('Performance overview', 'Обзор показателей')}</h2>
