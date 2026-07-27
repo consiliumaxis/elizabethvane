@@ -131,7 +131,10 @@ export default function StrategiesPage() {
   }, []);
 
   useEffect(() => {
-    load();
+    const timer = window.setTimeout(() => {
+      load();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [load]);
 
   useEffect(() => {
@@ -154,37 +157,40 @@ export default function StrategiesPage() {
   }, [indicators]);
 
   useEffect(() => {
-    if (!selected) {
-      setForm(null);
-      return;
-    }
-
-    const parsedIds = parseIndicatorIds(selected);
-    const uniqueIndicatorIds = [];
-    const seen = new Set();
-    parsedIds.forEach((id) => {
-      if (!seen.has(id)) {
-        seen.add(id);
-        uniqueIndicatorIds.push(id);
+    const timer = window.setTimeout(() => {
+      if (!selected) {
+        setForm(null);
+        return;
       }
-    });
 
-    setForm({
-      id: selected.id,
-      name: selected.name || '',
-      icon: selected.icon || '⚡',
-      timeframes: parseTimeframes(selected.allowed_timeframes),
-      is_system: isSystemStrategy(selected),
-      initial_is_system: isSystemStrategy(selected),
-      can_toggle_system: Boolean(selected.can_toggle_system),
-      owner_users_count: toInt(selected.owner_users_count),
-      owner_user_id: selected.owner_user_id || null,
-      users_count: toInt(selected.users_count),
-      signals_count: toInt(selected.signals_count),
-      winrate: Number(selected.winrate || 0),
-      public_winrate: selected.public_winrate === null ? '' : String(selected.public_winrate),
-      indicators: uniqueIndicatorIds,
-    });
+      const parsedIds = parseIndicatorIds(selected);
+      const uniqueIndicatorIds = [];
+      const seen = new Set();
+      parsedIds.forEach((id) => {
+        if (!seen.has(id)) {
+          seen.add(id);
+          uniqueIndicatorIds.push(id);
+        }
+      });
+
+      setForm({
+        id: selected.id,
+        name: selected.name || '',
+        icon: selected.icon || '⚡',
+        timeframes: parseTimeframes(selected.allowed_timeframes),
+        is_system: isSystemStrategy(selected),
+        initial_is_system: isSystemStrategy(selected),
+        can_toggle_system: Boolean(selected.can_toggle_system),
+        owner_users_count: toInt(selected.owner_users_count),
+        owner_user_id: selected.owner_user_id || null,
+        users_count: toInt(selected.users_count),
+        signals_count: toInt(selected.signals_count),
+        winrate: Number(selected.winrate || 0),
+        public_winrate: selected.public_winrate === null ? '' : String(selected.public_winrate),
+        indicators: uniqueIndicatorIds,
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [selected]);
 
   const computedSummary = useMemo(() => {
