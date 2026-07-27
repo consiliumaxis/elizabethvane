@@ -341,7 +341,6 @@ export default function StudioStatisticsPage({ studioMode, onStudioModeChange })
               title={tr('Back to Admin Center', 'Вернуться в админ-центр')}
             >
               <span className="studio-brand-monogram">EV</span>
-              <span className="studio-brand-return-icon" aria-hidden="true">←</span>
             </button>
             <div>
               <div className="studio-eyebrow">ELIZABETH VANE</div>
