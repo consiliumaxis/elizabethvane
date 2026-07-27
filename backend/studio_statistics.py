@@ -7,6 +7,42 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 MAX_STUDIO_RANGE_DAYS = 3660
 
 
+def strategy_name_key(value: Any) -> str:
+    return " ".join(str(value or "").strip().split()).casefold()
+
+
+def deduplicate_strategy_options(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    options: List[Dict[str, Any]] = []
+    seen_ids = set()
+    seen_names = set()
+    for item in rows or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            strategy_id = int(item.get("id") or item.get("strategy_id") or 0)
+        except (TypeError, ValueError):
+            strategy_id = 0
+        strategy_name = str(
+            item.get("name") or item.get("strategy_name") or f"Strategy {strategy_id}"
+        ).strip()[:255]
+        name_key = strategy_name_key(strategy_name)
+        if strategy_id <= 0 or not name_key:
+            continue
+        if strategy_id in seen_ids or name_key in seen_names:
+            continue
+        seen_ids.add(strategy_id)
+        seen_names.add(name_key)
+        options.append(
+            {
+                "id": strategy_id,
+                "name": strategy_name,
+                "icon": str(item.get("icon") or ""),
+                "is_system": int(item.get("is_system") or 0),
+            }
+        )
+    return options
+
+
 def parse_iso_date(value: Any, field_name: str = "date") -> date:
     raw = str(value or "").strip()
     try:
@@ -54,7 +90,8 @@ def normalize_nonnegative_decimal(value: Any, field_name: str = "volume") -> Dec
 def normalize_strategy_winrates(value: Any) -> List[Dict[str, Any]]:
     rows = value if isinstance(value, list) else []
     normalized: List[Dict[str, Any]] = []
-    seen = set()
+    seen_ids = set()
+    seen_names = set()
     for item in rows[:200]:
         if not isinstance(item, dict):
             continue
@@ -63,11 +100,16 @@ def normalize_strategy_winrates(value: Any) -> List[Dict[str, Any]]:
         except (TypeError, ValueError):
             strategy_id = 0
         strategy_name = str(item.get("strategy_name") or "").strip()[:255]
-        key = str(strategy_id) if strategy_id > 0 else strategy_name.lower()
-        if not key or key in seen:
+        name_key = strategy_name_key(strategy_name)
+        if strategy_id <= 0 and not name_key:
             continue
         raw_winrate = item.get("winrate")
         if raw_winrate in (None, ""):
+            continue
+        if (
+            (strategy_id > 0 and strategy_id in seen_ids)
+            or (name_key and name_key in seen_names)
+        ):
             continue
         try:
             winrate = round(float(str(raw_winrate).replace(",", ".")), 2)
@@ -75,7 +117,10 @@ def normalize_strategy_winrates(value: Any) -> List[Dict[str, Any]]:
             raise ValueError("Strategy winrate must be a number") from exc
         if winrate < 0 or winrate > 100:
             raise ValueError("Strategy winrate must be between 0 and 100")
-        seen.add(key)
+        if strategy_id > 0:
+            seen_ids.add(strategy_id)
+        if name_key:
+            seen_names.add(name_key)
         normalized.append(
             {
                 "strategy_id": strategy_id or None,
@@ -140,10 +185,11 @@ def aggregate_studio_statistics(
                 latest_total_users = parsed_total
 
         for item in decode_strategy_winrates(row.get("strategy_winrates")):
+            name_key = strategy_name_key(item.get("strategy_name"))
             key = (
-                f"id:{item['strategy_id']}"
-                if item.get("strategy_id")
-                else f"name:{item['strategy_name'].lower()}"
+                f"name:{name_key}"
+                if name_key
+                else f"id:{item.get('strategy_id') or 0}"
             )
             bucket = strategy_values.setdefault(
                 key,

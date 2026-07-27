@@ -25,23 +25,44 @@ const emptyEditor = (date = isoDate()) => ({
   strategy_winrates: [],
 });
 
+const strategyNameKey = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+
 const normalizeEditor = (day, strategies, date) => {
-  const saved = new Map(
-    (day?.strategy_winrates || []).map((item) => [
-      String(item.strategy_id || item.strategy_name || ''),
-      String(item.winrate ?? ''),
-    ])
-  );
+  const savedById = new Map();
+  const savedByName = new Map();
+  (day?.strategy_winrates || []).forEach((item) => {
+    const value = String(item.winrate ?? '');
+    const idKey = String(item.strategy_id || '');
+    const nameKey = strategyNameKey(item.strategy_name);
+    if (idKey && !savedById.has(idKey)) savedById.set(idKey, value);
+    if (nameKey && !savedByName.has(nameKey)) savedByName.set(nameKey, value);
+  });
+
+  const seenIds = new Set();
+  const seenNames = new Set();
+  const uniqueStrategies = (strategies || []).filter((strategy) => {
+    const idKey = String(strategy.id || '');
+    const nameKey = strategyNameKey(strategy.name);
+    if (!idKey || !nameKey || seenIds.has(idKey) || seenNames.has(nameKey)) return false;
+    seenIds.add(idKey);
+    seenNames.add(nameKey);
+    return true;
+  });
+
   return {
     date: day?.date || date || isoDate(),
     new_users: String(day?.new_users ?? ''),
     total_users: String(day?.total_users ?? ''),
     deals: String(day?.deals ?? ''),
     volume: String(day?.volume ?? ''),
-    strategy_winrates: (strategies || []).map((strategy) => ({
+    strategy_winrates: uniqueStrategies.map((strategy) => ({
       strategy_id: strategy.id,
       strategy_name: strategy.name,
-      winrate: saved.get(String(strategy.id)) ?? saved.get(String(strategy.name)) ?? '',
+      winrate: (
+        savedById.get(String(strategy.id))
+        ?? savedByName.get(strategyNameKey(strategy.name))
+        ?? ''
+      ),
     })),
   };
 };

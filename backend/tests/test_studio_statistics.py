@@ -6,6 +6,7 @@ from pathlib import Path
 try:
     from backend.studio_statistics import (
         aggregate_studio_statistics,
+        deduplicate_strategy_options,
         normalize_daily_stat,
         normalize_date_range,
         normalize_strategy_winrates,
@@ -13,6 +14,7 @@ try:
 except ModuleNotFoundError:
     from studio_statistics import (
         aggregate_studio_statistics,
+        deduplicate_strategy_options,
         normalize_daily_stat,
         normalize_date_range,
         normalize_strategy_winrates,
@@ -50,6 +52,45 @@ class StudioStatisticsTest(unittest.TestCase):
             normalize_strategy_winrates(
                 [{"strategy_id": 1, "strategy_name": "Prime", "winrate": 101}]
             )
+
+    def test_deduplicates_strategy_names_across_old_and_current_ids(self):
+        options = deduplicate_strategy_options(
+            [
+                {"id": 7, "name": "THE TOWER", "is_system": 1},
+                {"id": 31, "name": "  the   tower ", "is_system": 0},
+                {"id": 8, "name": "THE CROWN", "is_system": 1},
+            ]
+        )
+        self.assertEqual([item["id"] for item in options], [7, 8])
+
+        winrates = normalize_strategy_winrates(
+            [
+                {"strategy_id": 7, "strategy_name": "THE TOWER", "winrate": 74.3},
+                {"strategy_id": 31, "strategy_name": "the tower", "winrate": 0},
+            ]
+        )
+        self.assertEqual(len(winrates), 1)
+        self.assertEqual(winrates[0]["winrate"], 74.3)
+
+    def test_aggregates_same_strategy_name_after_id_change(self):
+        summary = aggregate_studio_statistics(
+            [
+                {
+                    "stat_date": "2026-07-01",
+                    "strategy_winrates": [
+                        {"strategy_id": 7, "strategy_name": "THE TOWER", "winrate": 70},
+                    ],
+                },
+                {
+                    "stat_date": "2026-07-02",
+                    "strategy_winrates": [
+                        {"strategy_id": 31, "strategy_name": "the tower", "winrate": 80},
+                    ],
+                },
+            ]
+        )
+        self.assertEqual(len(summary["strategy_winrates"]), 1)
+        self.assertEqual(summary["strategy_winrates"][0]["winrate"], 75.0)
 
     def test_aggregates_additive_metrics_and_average_winrates(self):
         summary = aggregate_studio_statistics(

@@ -35,6 +35,7 @@ try:
     from backend.studio_statistics import (
         aggregate_studio_statistics,
         decode_strategy_winrates,
+        deduplicate_strategy_options,
         normalize_daily_stat,
         normalize_date_range,
         parse_iso_date,
@@ -43,6 +44,7 @@ except ModuleNotFoundError:
     from studio_statistics import (
         aggregate_studio_statistics,
         decode_strategy_winrates,
+        deduplicate_strategy_options,
         normalize_daily_stat,
         normalize_date_range,
         parse_iso_date,
@@ -2713,15 +2715,7 @@ async def get_studio_strategy_options(cur) -> List[Dict[str, Any]]:
         ORDER BY is_system DESC, id ASC
         """
     )
-    return [
-        {
-            "id": int(row["id"]),
-            "name": str(row.get("name") or f"Strategy {row['id']}"),
-            "icon": str(row.get("icon") or ""),
-            "is_system": int(row.get("is_system") or 0),
-        }
-        for row in (await cur.fetchall() or [])
-    ]
+    return deduplicate_strategy_options(await cur.fetchall() or [])
 
 
 @app.get("/api/admin/studio-statistics")
