@@ -96,6 +96,10 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     avatar_url TEXT NULL,
                     aio_visit_uuid VARCHAR(64) NULL,
                     trader_id VARCHAR(64) NULL,
+                    profile_edit_allowed TINYINT(1) NOT NULL DEFAULT 0,
+                    profile_name VARCHAR(80) NULL,
+                    profile_trader_id VARCHAR(64) NULL,
+                    profile_updated_at TIMESTAMP NULL DEFAULT NULL,
                     pocket_click_id VARCHAR(64) NULL,
                     pocket_site_id VARCHAR(128) NULL,
                     pocket_cid VARCHAR(128) NULL,
@@ -474,6 +478,10 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             )
 
         await _ensure_column(conn, db_name, "users", "trader_id", "ALTER TABLE users ADD COLUMN trader_id VARCHAR(64) NULL")
+        await _ensure_column(conn, db_name, "users", "profile_edit_allowed", "ALTER TABLE users ADD COLUMN profile_edit_allowed TINYINT(1) NOT NULL DEFAULT 0 AFTER trader_id")
+        await _ensure_column(conn, db_name, "users", "profile_name", "ALTER TABLE users ADD COLUMN profile_name VARCHAR(80) NULL AFTER profile_edit_allowed")
+        await _ensure_column(conn, db_name, "users", "profile_trader_id", "ALTER TABLE users ADD COLUMN profile_trader_id VARCHAR(64) NULL AFTER profile_name")
+        await _ensure_column(conn, db_name, "users", "profile_updated_at", "ALTER TABLE users ADD COLUMN profile_updated_at TIMESTAMP NULL DEFAULT NULL AFTER profile_trader_id")
         await _ensure_column(conn, db_name, "users", "aio_visit_uuid", "ALTER TABLE users ADD COLUMN aio_visit_uuid VARCHAR(64) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_click_id", "ALTER TABLE users ADD COLUMN pocket_click_id VARCHAR(64) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_site_id", "ALTER TABLE users ADD COLUMN pocket_site_id VARCHAR(128) NULL")

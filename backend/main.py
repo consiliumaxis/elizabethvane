@@ -194,6 +194,16 @@ except ModuleNotFoundError:
         system_policy_grants_signal_access,
     )
 try:
+    from backend.profile_editing import (
+        normalize_profile_name,
+        normalize_profile_trader_id,
+    )
+except ModuleNotFoundError:
+    from profile_editing import (
+        normalize_profile_name,
+        normalize_profile_trader_id,
+    )
+try:
     from backend.aichatter_admin import (
         create_aichatter_admin_router,
         sync_aichatter_pocket_event,
@@ -1717,9 +1727,10 @@ async def fetch_pocket_user_info(trader_id: str, partner_id: str, api_token: str
 async def sync_pocket_balance_for_user(user_row: Dict[str, Any], pocket_settings: Dict[str, Any]) -> bool:
     user_id = int(user_row.get("user_id") or 0)
     trader_id = str(user_row.get("trader_id") or "").strip()
+    manual_trader_id = str(user_row.get("profile_trader_id") or "").strip()
     partner_id = str(pocket_settings.get("partner_id") or "").strip()
     api_token = str(pocket_settings.get("api_token") or "").strip()
-    if not user_id or not trader_id or not partner_id or not api_token:
+    if manual_trader_id or not user_id or not trader_id or not partner_id or not api_token:
         return False
     try:
         payload = await fetch_pocket_user_info(trader_id, partner_id, api_token)
@@ -1782,11 +1793,12 @@ async def pocket_balance_sync_worker():
                 async with conn.cursor(aiomysql.DictCursor) as cur:
                     await cur.execute(
                         """
-                        SELECT user_id, trader_id
+                        SELECT user_id, trader_id, profile_trader_id
                         FROM users
                         WHERE balance_sync_enabled = 1
                           AND trader_id IS NOT NULL
                           AND TRIM(trader_id) != ''
+                          AND (profile_trader_id IS NULL OR TRIM(profile_trader_id) = '')
                         ORDER BY COALESCE(balance_synced_at, '1970-01-01') ASC, user_id ASC
                         """
                     )
@@ -2549,8 +2561,17 @@ def normalize_access_payload(value) -> int:
 async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
     await cur.execute(
         """
-        SELECT u.user_id, u.username, u.first_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
-               u.trader_id, COALESCE(u.balance, 0) AS balance,
+        SELECT u.user_id, u.username,
+               u.first_name AS telegram_first_name,
+               COALESCE(NULLIF(TRIM(u.profile_name), ''), u.first_name) AS first_name,
+               u.profile_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
+               u.trader_id AS pocket_trader_id,
+               COALESCE(NULLIF(TRIM(u.profile_trader_id), ''), u.trader_id) AS trader_id,
+               u.profile_trader_id,
+               CASE WHEN NULLIF(TRIM(u.profile_trader_id), '') IS NULL THEN 0 ELSE 1 END AS trader_id_is_manual,
+               COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
+               u.profile_updated_at,
+               COALESCE(u.balance, 0) AS balance,
                COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                u.balance_synced_at, u.balance_sync_error,
                COALESCE(fx.is_enabled, 0) AS forex_access,
@@ -2960,8 +2981,17 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
             try:
                 await cur.execute(
                     """
-                    SELECT u.user_id, u.username, u.first_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
-                           u.trader_id, COALESCE(u.balance, 0) AS balance,
+                    SELECT u.user_id, u.username,
+                           u.first_name AS telegram_first_name,
+                           COALESCE(NULLIF(TRIM(u.profile_name), ''), u.first_name) AS first_name,
+                           u.profile_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
+                           u.trader_id AS pocket_trader_id,
+                           COALESCE(NULLIF(TRIM(u.profile_trader_id), ''), u.trader_id) AS trader_id,
+                           u.profile_trader_id,
+                           CASE WHEN NULLIF(TRIM(u.profile_trader_id), '') IS NULL THEN 0 ELSE 1 END AS trader_id_is_manual,
+                           COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
+                           u.profile_updated_at,
+                           COALESCE(u.balance, 0) AS balance,
                            COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                            u.balance_synced_at, u.balance_sync_error,
                            COALESCE(fx.is_enabled, 0) AS forex_access,
@@ -2975,18 +3005,29 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
                     LEFT JOIN admin_users a ON a.user_id = u.user_id AND a.role = 'admin'
                     LEFT JOIN user_mode_access fx ON fx.user_id = u.user_id AND fx.mode = 'forex'
                     LEFT JOIN user_mode_access bin ON bin.user_id = u.user_id AND bin.mode = 'binary'
-                    WHERE (%s = '' OR CAST(u.user_id AS CHAR) LIKE %s OR COALESCE(u.username, '') LIKE %s OR COALESCE(u.first_name, '') LIKE %s)
+                    WHERE (
+                        %s = ''
+                        OR CAST(u.user_id AS CHAR) LIKE %s
+                        OR COALESCE(u.username, '') LIKE %s
+                        OR COALESCE(u.first_name, '') LIKE %s
+                        OR COALESCE(u.profile_name, '') LIKE %s
+                        OR COALESCE(u.trader_id, '') LIKE %s
+                        OR COALESCE(u.profile_trader_id, '') LIKE %s
+                    )
                     ORDER BY u.created_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (search, like, like, like, limit, offset),
+                    (search, like, like, like, like, like, like, limit, offset),
                 )
                 users_rows = await cur.fetchall()
             except Exception:
                 await cur.execute(
                     """
-                    SELECT u.user_id, u.username, u.first_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
-                           NULL AS trader_id, 0 AS balance,
+                    SELECT u.user_id, u.username, u.first_name AS telegram_first_name,
+                           u.first_name, NULL AS profile_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
+                           NULL AS pocket_trader_id, NULL AS trader_id, NULL AS profile_trader_id,
+                           0 AS trader_id_is_manual, 0 AS profile_edit_allowed, NULL AS profile_updated_at,
+                           0 AS balance,
                            0 AS balance_sync_enabled, NULL AS balance_synced_at, NULL AS balance_sync_error,
                            0 AS forex_access, 0 AS binary_access,
                            0 AS is_blocked, NULL AS blocked_at, NULL AS blocked_by, NULL AS created_at,
@@ -3008,9 +3049,17 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
                 """
                 SELECT COUNT(*) AS cnt
                 FROM users u
-                WHERE (%s = '' OR CAST(u.user_id AS CHAR) LIKE %s OR COALESCE(u.username, '') LIKE %s OR COALESCE(u.first_name, '') LIKE %s)
+                WHERE (
+                    %s = ''
+                    OR CAST(u.user_id AS CHAR) LIKE %s
+                    OR COALESCE(u.username, '') LIKE %s
+                    OR COALESCE(u.first_name, '') LIKE %s
+                    OR COALESCE(u.profile_name, '') LIKE %s
+                    OR COALESCE(u.trader_id, '') LIKE %s
+                    OR COALESCE(u.profile_trader_id, '') LIKE %s
+                )
                 """,
-                (search, like, like, like),
+                (search, like, like, like, like, like, like),
             )
             total = int((await cur.fetchone() or {}).get("cnt") or 0)
 
@@ -3095,6 +3144,41 @@ async def admin_update_user_access(request: Request, admin=Depends(get_admin_use
     return {"status": "success", "user": row}
 
 
+@app.post("/api/admin/users/profile-edit")
+async def admin_update_user_profile_edit_permission(
+    request: Request,
+    admin=Depends(get_admin_user),
+):
+    data = await request.json()
+    try:
+        target_user_id = int(data.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target_user_id = 0
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="User id is required")
+
+    profile_edit_allowed = 1 if bool(data.get("profile_edit_allowed")) else 0
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                UPDATE users
+                SET profile_edit_allowed = %s
+                WHERE user_id = %s
+                """,
+                (profile_edit_allowed, target_user_id),
+            )
+            if cur.rowcount == 0:
+                await cur.execute(
+                    "SELECT user_id FROM users WHERE user_id = %s LIMIT 1",
+                    (target_user_id,),
+                )
+                if not await cur.fetchone():
+                    raise HTTPException(status_code=404, detail="User not found")
+            row = await fetch_admin_user_row(cur, target_user_id)
+    return {"status": "success", "user": row}
+
+
 @app.post("/api/admin/users/balance")
 async def admin_update_user_balance(request: Request, admin=Depends(get_admin_user)):
     data = await request.json()
@@ -3114,10 +3198,23 @@ async def admin_update_user_balance(request: Request, admin=Depends(get_admin_us
     sync_enabled = 1 if bool(data.get("balance_sync_enabled")) else 0
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT user_id, trader_id FROM users WHERE user_id = %s LIMIT 1", (target_user_id,))
+            await cur.execute(
+                """
+                SELECT user_id, trader_id, profile_trader_id
+                FROM users
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (target_user_id,),
+            )
             user_row = await cur.fetchone()
             if not user_row:
                 raise HTTPException(status_code=404, detail="User not found")
+            if sync_enabled == 1 and str(user_row.get("profile_trader_id") or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Manual Trader ID is not eligible for Pocket balance sync",
+                )
             if sync_enabled == 1 and not str(user_row.get("trader_id") or "").strip():
                 raise HTTPException(status_code=400, detail="Trader ID is required for balance sync")
             await cur.execute(
@@ -5095,8 +5192,17 @@ async def get_profile(user=Depends(get_telegram_user)):
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("""
-                SELECT u.user_id, u.lang, u.mode, u.username, u.first_name, u.avatar_url,
-                       u.strategy_id, u.trader_id, COALESCE(u.balance, 0) AS balance,
+                SELECT u.user_id, u.lang, u.mode, u.username,
+                       u.first_name AS telegram_first_name,
+                       COALESCE(NULLIF(TRIM(u.profile_name), ''), u.first_name) AS first_name,
+                       u.profile_name, u.avatar_url, u.strategy_id,
+                       u.trader_id AS pocket_trader_id,
+                       COALESCE(NULLIF(TRIM(u.profile_trader_id), ''), u.trader_id) AS trader_id,
+                       u.profile_trader_id,
+                       CASE WHEN NULLIF(TRIM(u.profile_trader_id), '') IS NULL THEN 0 ELSE 1 END AS trader_id_is_manual,
+                       COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
+                       u.profile_updated_at,
+                       COALESCE(u.balance, 0) AS balance,
                        COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                        u.balance_synced_at,
                        COALESCE(fx.is_enabled, 0) AS forex_access,
@@ -5120,6 +5226,91 @@ async def get_profile(user=Depends(get_telegram_user)):
         user["access_policy"] = forex_status.get("policy")
         user["admin_url"] = build_admin_webapp_url() if int(user.get("is_admin") or 0) == 1 else ""
     return user or {"error": "Not found"}
+
+
+@app.patch("/api/user/profile")
+async def update_user_profile(request: Request, user=Depends(get_telegram_user)):
+    data = await request.json()
+    has_name = "name" in data
+    has_trader_id = "trader_id" in data
+    if not has_name and not has_trader_id:
+        raise HTTPException(status_code=400, detail="Name or Trader ID is required")
+
+    normalized_name = None
+    normalized_trader_id = None
+    try:
+        if has_name:
+            normalized_name = normalize_profile_name(data.get("name"))
+        if has_trader_id:
+            normalized_trader_id = normalize_profile_trader_id(data.get("trader_id"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    user_id = int(user["user_id"])
+    update_parts = ["profile_updated_at = NOW()"]
+    params: List[Any] = []
+    if has_name:
+        update_parts.append("profile_name = %s")
+        params.append(normalized_name)
+    if has_trader_id:
+        update_parts.extend(
+            [
+                "profile_trader_id = %s",
+                "balance_sync_enabled = 0",
+                "balance_sync_error = NULL",
+                "balance_synced_at = NULL",
+            ]
+        )
+        params.append(normalized_trader_id)
+    params.append(user_id)
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                UPDATE users
+                SET {", ".join(update_parts)}
+                WHERE user_id = %s
+                  AND profile_edit_allowed = 1
+                """,
+                tuple(params),
+            )
+            if cur.rowcount == 0:
+                await cur.execute(
+                    "SELECT profile_edit_allowed FROM users WHERE user_id = %s LIMIT 1",
+                    (user_id,),
+                )
+                permission_row = await cur.fetchone()
+                if not permission_row:
+                    raise HTTPException(status_code=404, detail="User not found")
+                if int(permission_row.get("profile_edit_allowed") or 0) != 1:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Profile editing is not enabled for this account",
+                    )
+
+            await cur.execute(
+                """
+                SELECT u.user_id, u.username,
+                       u.first_name AS telegram_first_name,
+                       COALESCE(NULLIF(TRIM(u.profile_name), ''), u.first_name) AS first_name,
+                       u.profile_name,
+                       u.trader_id AS pocket_trader_id,
+                       COALESCE(NULLIF(TRIM(u.profile_trader_id), ''), u.trader_id) AS trader_id,
+                       u.profile_trader_id,
+                       CASE WHEN NULLIF(TRIM(u.profile_trader_id), '') IS NULL THEN 0 ELSE 1 END AS trader_id_is_manual,
+                       COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
+                       COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
+                       u.profile_updated_at
+                FROM users u
+                WHERE u.user_id = %s
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            updated_user = await cur.fetchone()
+    return {"status": "success", "user": updated_user}
+
 
 @app.get("/api/indicators")
 async def get_indicators(user=Depends(get_telegram_user)):

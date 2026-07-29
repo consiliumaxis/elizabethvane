@@ -13,6 +13,7 @@ const formatBalance = (value) => {
   return Number.isFinite(parsed) ? `$${parsed.toFixed(2)}` : '$0.00';
 };
 const hasAccess = (value) => Number(value) === 1;
+const isManualTraderId = (user) => Number(user?.trader_id_is_manual || 0) === 1;
 
 export default function UsersPage() {
   const { tr } = useAdminLocale();
@@ -21,6 +22,7 @@ export default function UsersPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [status, setStatus] = useState('');
   const [selectedUserId, setSelectedUserId] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [accessModalOpen, setAccessModalOpen] = useState(false);
@@ -67,12 +69,14 @@ export default function UsersPage() {
 
   const openUserCard = (userId) => {
     setSelectedUserId(userId);
+    setStatus('');
   };
 
   const closeUserCard = () => {
     setSelectedUserId(null);
     setAccessModalOpen(false);
     setBalanceModalOpen(false);
+    setStatus('');
   };
 
   const replaceUser = (updatedUser) => {
@@ -96,7 +100,9 @@ export default function UsersPage() {
     const parsed = Number(selectedUser.balance);
     setBalanceForm({
       balance: Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00',
-      sync: Boolean(selectedUser.trader_id) && Number(selectedUser.balance_sync_enabled) === 1,
+      sync: !isManualTraderId(selectedUser)
+        && Boolean(selectedUser.pocket_trader_id)
+        && Number(selectedUser.balance_sync_enabled) === 1,
     });
     setBalanceModalOpen(true);
   };
@@ -166,6 +172,31 @@ export default function UsersPage() {
     }
   };
 
+  const toggleProfileEditing = async (user) => {
+    if (!user || actionLoading) return;
+    const nextAllowed = Number(user.profile_edit_allowed || 0) !== 1;
+    setActionLoading(true);
+    setError('');
+    setStatus('');
+    try {
+      const res = await apiAdminFetchJson('/api/admin/users/profile-edit', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: user.user_id,
+          profile_edit_allowed: nextAllowed,
+        }),
+      });
+      replaceUser(res.user);
+      setStatus(nextAllowed
+        ? tr('Profile editing enabled for this user', 'Редактирование профиля разрешено')
+        : tr('Profile editing disabled for this user', 'Редактирование профиля запрещено'));
+    } catch (e) {
+      setError(e.message || tr('Could not update profile permission', 'Не удалось изменить разрешение профиля'));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const deleteUser = async () => {
     if (!selectedUser || actionLoading) return;
     const userName = getDisplayName(selectedUser);
@@ -191,6 +222,9 @@ export default function UsersPage() {
 
   if (selectedUser) {
     const selectedAvatarUrl = getAvatarUrl(selectedUser);
+    const profileEditingAllowed = Number(selectedUser.profile_edit_allowed || 0) === 1;
+    const manualTraderId = isManualTraderId(selectedUser);
+    const canSyncPocket = Boolean(selectedUser.pocket_trader_id) && !manualTraderId;
     return (
       <div className="admin-card">
         <div className="admin-row-between">
@@ -220,19 +254,63 @@ export default function UsersPage() {
 
           <div className="admin-user-grid">
             <div><span>ID:</span> {selectedUser.user_id}</div>
-            <div><span>Trader ID:</span> {selectedUser.trader_id || tr('Not set', 'Не указан')}</div>
+            <div>
+              <span>Trader ID:</span>
+              {selectedUser.trader_id || tr('Not set', 'Не указан')}
+              {manualTraderId ? <b className="admin-user-manual-badge">{tr('Manual', 'Ручной')}</b> : null}
+            </div>
             <div><span>{tr('Balance', 'Баланс')}:</span> {formatBalance(selectedUser.balance)}</div>
             <div><span>{tr('Forex access', 'Доступ Forex')}:</span> {hasAccess(selectedUser.forex_access) ? tr('Enabled', 'Есть') : tr('Disabled', 'Нету')}</div>
             <div><span>{tr('Binary access', 'Доступ Binary')}:</span> {hasAccess(selectedUser.binary_access) ? tr('Enabled', 'Есть') : tr('Disabled', 'Нету')}</div>
             <div><span>Username:</span> {selectedUser.username || '-'}</div>
-            <div><span>{tr('Name', 'Имя')}:</span> {selectedUser.first_name || '-'}</div>
+            <div><span>{tr('Displayed name', 'Отображаемое имя')}:</span> {selectedUser.first_name || '-'}</div>
+            <div><span>{tr('Telegram name', 'Имя в Telegram')}:</span> {selectedUser.telegram_first_name || '-'}</div>
             <div><span>{tr('Mode', 'Режим')}:</span> {selectedUser.mode || '-'}</div>
             <div><span>{tr('Strategy', 'Стратегия')}:</span> {selectedUser.strategy_name || selectedUser.strategy_id || '-'}</div>
             <div><span>{tr('Language', 'Язык')}:</span> {selectedUser.lang || '-'}</div>
             <div><span>{tr('Admin', 'Админ')}:</span> {Number(selectedUser.is_admin) === 1 ? tr('Yes', 'Да') : tr('No', 'Нет')}</div>
-            <div><span>{tr('Balance sync', 'Синхронизация баланса')}:</span> {Number(selectedUser.balance_sync_enabled) === 1 ? tr('Enabled', 'Включена') : tr('Disabled', 'Выключена')}</div>
+            <div>
+              <span>{tr('Balance sync', 'Синхронизация баланса')}:</span>
+              {manualTraderId
+                ? tr('Unavailable for manual Trader ID', 'Недоступна для ручного Trader ID')
+                : (Number(selectedUser.balance_sync_enabled) === 1 ? tr('Enabled', 'Включена') : tr('Disabled', 'Выключена'))}
+            </div>
             <div><span>{tr('Blocked', 'Блокировка')}:</span> {isBlocked ? `${tr('Yes', 'Да')}${selectedUser.blocked_at ? `, ${selectedUser.blocked_at}` : ''}` : tr('No', 'Нет')}</div>
             <div><span>{tr('Created', 'Создан')}:</span> {selectedUser.created_at || '-'}</div>
+          </div>
+
+          <div className={`admin-user-profile-permission ${profileEditingAllowed ? 'is-enabled' : ''}`}>
+            <div className="admin-user-profile-permission-copy">
+              <span className="admin-user-profile-permission-kicker">{tr('Personal permission', 'Персональное разрешение')}</span>
+              <strong>{tr('Name and Trader ID editing', 'Редактирование имени и Trader ID')}</strong>
+              <p>
+                {profileEditingAllowed
+                  ? tr(
+                    'The user sees edit buttons in their profile and can change both values.',
+                    'В профиле пользователя видны карандаши — он может менять оба значения.'
+                  )
+                  : tr(
+                    'The values are read-only. Edit buttons are hidden from the user.',
+                    'Значения доступны только для просмотра. Карандаши у пользователя скрыты.'
+                  )}
+              </p>
+            </div>
+            <button
+              type="button"
+              className={`admin-user-profile-switch ${profileEditingAllowed ? 'on' : 'off'}`}
+              onClick={() => toggleProfileEditing(selectedUser)}
+              disabled={actionLoading}
+              aria-pressed={profileEditingAllowed}
+            >
+              <span aria-hidden="true" />
+              <b>{profileEditingAllowed ? tr('Allowed', 'Разрешено') : tr('Forbidden', 'Запрещено')}</b>
+            </button>
+            <div className="admin-user-profile-permission-note">
+              {tr(
+                'A Trader ID entered by the user is stored separately, marked as manual and never sent to Pocket API. Pocket balance synchronization is disabled for it.',
+                'Trader ID, введённый пользователем, хранится отдельно, помечается как ручной и не отправляется в Pocket API. Синхронизация баланса для него отключается.'
+              )}
+            </div>
           </div>
 
           <div className="admin-user-actions">
@@ -262,6 +340,9 @@ export default function UsersPage() {
             </div>
           </div>
         </div>
+
+        {status ? <div className="admin-success">{status}</div> : null}
+        {error ? <div className="admin-error">{error}</div> : null}
 
         {accessModalOpen ? (
           <div className="admin-modal-backdrop" onClick={() => setAccessModalOpen(false)}>
@@ -326,9 +407,9 @@ export default function UsersPage() {
                 <button
                   type="button"
                   className={`admin-toggle-btn ${balanceForm.sync ? 'on' : 'off'}`}
-                  disabled={!selectedUser.trader_id}
+                  disabled={!canSyncPocket}
                   onClick={() => {
-                    if (!selectedUser.trader_id) return;
+                    if (!canSyncPocket) return;
                     setBalanceForm((prev) => ({ ...prev, sync: !prev.sync }));
                   }}
                 >
@@ -336,7 +417,12 @@ export default function UsersPage() {
                 </button>
               </label>
               <div className="admin-muted">
-                {selectedUser.trader_id
+                {manualTraderId
+                  ? tr(
+                    'A manual Trader ID is not checked through Pocket API. Balance can only be set manually.',
+                    'Ручной Trader ID не проверяется через Pocket API. Баланс можно задавать только вручную.'
+                  )
+                  : selectedUser.pocket_trader_id
                   ? tr('When synchronization is active, the balance is loaded from Pocket.', 'При активной синхронизации баланс будет подтягиваться с Pocket.')
                   : tr('The balance can be set manually. Synchronization becomes available after a Trader ID is assigned.', 'Баланс можно задать вручную. Синхронизация доступна только после указания Trader ID.')}
               </div>
@@ -405,7 +491,7 @@ export default function UsersPage() {
                 </span>
               </div>
               <div className="admin-entity-meta">
-                ID: {user.user_id} | Trader: {user.trader_id || '-'} | {formatBalance(user.balance)} | Forex {hasAccess(user.forex_access) ? tr('enabled', 'есть') : tr('disabled', 'нет')} | Binary {hasAccess(user.binary_access) ? tr('enabled', 'есть') : tr('disabled', 'нет')} | {blocked ? 'blocked' : (user.mode || '-')}
+                ID: {user.user_id} | Trader: {user.trader_id || '-'}{isManualTraderId(user) ? ` (${tr('manual', 'ручной')})` : ''} | {formatBalance(user.balance)} | Forex {hasAccess(user.forex_access) ? tr('enabled', 'есть') : tr('disabled', 'нет')} | Binary {hasAccess(user.binary_access) ? tr('enabled', 'есть') : tr('disabled', 'нет')} | {blocked ? 'blocked' : (user.mode || '-')}
               </div>
             </button>
           );

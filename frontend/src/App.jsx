@@ -424,6 +424,9 @@ function App() {
             onRefreshStrategies={refreshStrategies}
             setToastMessage={setToastMessage}
             allIndicators={allIndicators}
+            onProfileUpdated={(updatedProfile) => {
+              setUser((previousUser) => ({ ...previousUser, ...(updatedProfile || {}) }));
+            }}
             onStartAnalysis={() => {
               if (user.mode === 'demo') setCurrentPage('demoSettings');
               else setCurrentPage(user.mode === 'binary' ? 'binarySettings' : 'forexSettings');

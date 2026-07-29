@@ -31,7 +31,7 @@ class ProfileAdminAvatarTest(unittest.TestCase):
         source = (PROJECT_ROOT / "frontend/src/components/pages/Profile.jsx").read_text(encoding="utf-8")
 
         self.assertIn("user.avatar_url", source)
-        self.assertIn("avatarBroken", source)
+        self.assertIn("brokenAvatarUrl", source)
         self.assertNotIn("eric-avatar.jpg", source)
         self.assertNotIn("elizabeth-avatar.jpg", source)
 
@@ -48,6 +48,37 @@ class ProfileAdminAvatarTest(unittest.TestCase):
 
         self.assertIn("getAvatarUrl", source)
         self.assertIn("admin-user-avatar", source)
+
+    def test_profile_edit_permission_is_managed_per_user(self):
+        backend = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+        admin = (PROJECT_ROOT / "frontend/src/admin/pages/UsersPage.jsx").read_text(encoding="utf-8")
+        schema = (PROJECT_ROOT / "backend/db_bootstrap.py").read_text(encoding="utf-8")
+
+        self.assertIn("/api/admin/users/profile-edit", backend)
+        self.assertIn("profile_edit_allowed", backend)
+        self.assertIn("profile_edit_allowed TINYINT(1)", schema)
+        self.assertIn("profile_name VARCHAR(80)", schema)
+        self.assertIn("profile_trader_id VARCHAR(64)", schema)
+        self.assertIn("toggleProfileEditing", admin)
+        self.assertIn("Редактирование имени и Trader ID", admin)
+
+    def test_manual_trader_id_is_not_sent_to_pocket(self):
+        backend = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+
+        self.assertIn("manual_trader_id", backend)
+        self.assertIn("if manual_trader_id or not user_id", backend)
+        self.assertIn("AND (profile_trader_id IS NULL OR TRIM(profile_trader_id) = '')", backend)
+        self.assertIn("Manual Trader ID is not eligible for Pocket balance sync", backend)
+        self.assertIn("balance_sync_enabled = 0", backend)
+
+    def test_user_profile_shows_edit_buttons_only_with_permission(self):
+        source = (PROJECT_ROOT / "frontend/src/components/pages/Profile.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("profileEditingAllowed", source)
+        self.assertIn("openProfileEditor('name')", source)
+        self.assertIn("openProfileEditor('trader_id')", source)
+        self.assertIn("method: 'PATCH'", source)
+        self.assertIn("manualTraderIdHint", source)
 
 
 if __name__ == "__main__":

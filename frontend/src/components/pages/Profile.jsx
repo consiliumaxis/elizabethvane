@@ -14,7 +14,8 @@ const ICON_CHOICES = [
 ];
 
 export default function Profile({
-  user, onToggleMode, t, strategies, onUpdateStrategy, scrollTarget, onRefreshStrategies, setToastMessage, allIndicators, onStartAnalysis
+  user, onToggleMode, t, strategies, onUpdateStrategy, scrollTarget, onRefreshStrategies,
+  setToastMessage, allIndicators, onStartAnalysis, onProfileUpdated
 }) {
   const strategyRef = useRef(null);
   const clickTimeout = useRef(null);
@@ -24,7 +25,11 @@ export default function Profile({
   const [editPresetId, setEditPresetId] = useState(null);
   const [formData, setFormData] = useState({ name: '', indicators: [], icon: '\u26A1' });
   const [clickCount, setClickCount] = useState(0);
-  const [avatarBroken, setAvatarBroken] = useState(false);
+  const [brokenAvatarUrl, setBrokenAvatarUrl] = useState('');
+  const [profileEditor, setProfileEditor] = useState(null);
+  const [profileEditValue, setProfileEditValue] = useState('');
+  const [profileEditError, setProfileEditError] = useState('');
+  const [profileEditSaving, setProfileEditSaving] = useState(false);
 
   useEffect(() => {
     if (scrollTarget === 'strategies' && strategyRef.current) {
@@ -33,10 +38,6 @@ export default function Profile({
       }, 100);
     }
   }, [scrollTarget]);
-
-  useEffect(() => {
-    setAvatarBroken(false);
-  }, [user?.avatar_url]);
 
   if (!user) return null;
 
@@ -53,6 +54,8 @@ export default function Profile({
   const forexAvailable = Number(user.forex_access ?? 1) === 1;
   const binaryAvailable = Number(user.binary_access ?? 1) === 1;
   const isAdmin = Number(user.is_admin || 0) === 1 && Boolean(user.admin_url);
+  const profileEditingAllowed = Number(user.profile_edit_allowed || 0) === 1;
+  const traderIdIsManual = Number(user.trader_id_is_manual || 0) === 1;
   const selectedStrategy = strategies.find(s => s.id === user.strategy_id) || {};
 
   const systemStrategies = strategies.filter(s => s.is_system === 1);
@@ -74,6 +77,52 @@ export default function Profile({
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return '$0.00';
     return `$${parsed.toFixed(2)}`;
+  };
+
+  const openProfileEditor = (field) => {
+    if (!profileEditingAllowed) return;
+    setProfileEditor(field);
+    setProfileEditValue(field === 'name' ? profileDisplayName : String(user.trader_id || ''));
+    setProfileEditError('');
+  };
+
+  const closeProfileEditor = () => {
+    if (profileEditSaving) return;
+    setProfileEditor(null);
+    setProfileEditValue('');
+    setProfileEditError('');
+  };
+
+  const saveProfileField = async () => {
+    if (!profileEditor || profileEditSaving) return;
+    const normalizedValue = profileEditValue.trim();
+    if (!normalizedValue) {
+      setProfileEditError(
+        profileEditor === 'name'
+          ? t.profile.emptyNameWarning
+          : `${t.profile.traderIdFieldLabel} cannot be empty`
+      );
+      return;
+    }
+
+    setProfileEditSaving(true);
+    setProfileEditError('');
+    try {
+      const result = await apiFetchJson('/api/user/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          [profileEditor === 'name' ? 'name' : 'trader_id']: normalizedValue,
+        }),
+      });
+      onProfileUpdated?.(result.user || {});
+      setToastMessage(t.profile.profileUpdated);
+      setProfileEditor(null);
+      setProfileEditValue('');
+    } catch (error) {
+      setProfileEditError(error.message || t.profile.profileEditFailed);
+    } finally {
+      setProfileEditSaving(false);
+    }
   };
 
   const openCreateModal = () => {
@@ -179,18 +228,34 @@ export default function Profile({
         <div className="profile-header-container">
           <div className="profile-user-section">
             <div className="profile-avatar-container" onClick={handleAvatarClick} style={{ cursor: 'pointer' }}>
-              {avatarUrl && !avatarBroken ? (
+              {avatarUrl && avatarUrl !== brokenAvatarUrl ? (
                 <img
                   src={avatarUrl}
                   alt="Avatar"
                   className="profile-avatar"
-                  onError={() => setAvatarBroken(true)}
+                  onError={() => setBrokenAvatarUrl(avatarUrl)}
                 />
               ) : (
                 <div className="profile-avatar-placeholder">{profileInitials}</div>
               )}
             </div>
-            <h2 className="profile-name">{profileDisplayName}</h2>
+            <div className="profile-name-row">
+              <h2 className="profile-name">{profileDisplayName}</h2>
+              {profileEditingAllowed ? (
+                <button
+                  type="button"
+                  className="profile-inline-edit"
+                  onClick={() => openProfileEditor('name')}
+                  aria-label={t.profile.editName}
+                  title={t.profile.editName}
+                >
+                  <span
+                    className="edit-icon-mask"
+                    style={{ maskImage: `url("${iconEdit}")`, WebkitMaskImage: `url("${iconEdit}")` }}
+                  />
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <div className="profile-stats-card">
@@ -198,7 +263,24 @@ export default function Profile({
               <>
                 <div className="stats-row">
                   <div className="stat-box">
-                    <span className="stat-label">{t.profile.idLabel}</span>
+                    <span className="profile-stat-label-row">
+                      <span className="stat-label">{t.profile.idLabel}</span>
+                      {traderIdIsManual ? <b>{t.profile.manualValue}</b> : null}
+                      {profileEditingAllowed ? (
+                        <button
+                          type="button"
+                          className="profile-inline-edit compact"
+                          onClick={() => openProfileEditor('trader_id')}
+                          aria-label={t.profile.editTraderId}
+                          title={t.profile.editTraderId}
+                        >
+                          <span
+                            className="edit-icon-mask"
+                            style={{ maskImage: `url("${iconEdit}")`, WebkitMaskImage: `url("${iconEdit}")` }}
+                          />
+                        </button>
+                      ) : null}
+                    </span>
                     <span className="stat-value">{user.trader_id || t.profile.notSpecified || 'Not specified'}</span>
                   </div>
                   <div className="stat-box right">
@@ -321,6 +403,52 @@ export default function Profile({
 
         </div>
       </div>
+
+      {profileEditor ? (
+        <div className="profile-edit-modal-overlay" onClick={closeProfileEditor}>
+          <div className="profile-edit-modal fade-in" onClick={(event) => event.stopPropagation()}>
+            <div className="profile-edit-modal-head">
+              <div>
+                <span>{profileEditor === 'name' ? t.profile.nameFieldLabel : t.profile.traderIdFieldLabel}</span>
+                <h3>{profileEditor === 'name' ? t.profile.editName : t.profile.editTraderId}</h3>
+              </div>
+              <button type="button" onClick={closeProfileEditor} disabled={profileEditSaving} aria-label="Close">
+                ×
+              </button>
+            </div>
+
+            <label className="profile-edit-field">
+              <span>{profileEditor === 'name' ? t.profile.nameFieldLabel : t.profile.traderIdFieldLabel}</span>
+              <input
+                autoFocus
+                value={profileEditValue}
+                maxLength={profileEditor === 'name' ? 80 : 64}
+                onChange={(event) => setProfileEditValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') saveProfileField();
+                }}
+              />
+            </label>
+
+            <div className={`profile-edit-hint ${profileEditor === 'trader_id' ? 'warning' : ''}`}>
+              {profileEditor === 'trader_id'
+                ? t.profile.manualTraderIdHint
+                : t.profile.profileEditHint}
+            </div>
+
+            {profileEditError ? <div className="profile-edit-error">{profileEditError}</div> : null}
+
+            <div className="profile-edit-actions">
+              <button type="button" className="profile-edit-cancel" onClick={closeProfileEditor} disabled={profileEditSaving}>
+                {t.profile.cancelBtn}
+              </button>
+              <button type="button" className="profile-edit-save" onClick={saveProfileField} disabled={profileEditSaving}>
+                {profileEditSaving ? `${t.profile.saveBtn}…` : t.profile.saveBtn}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {isModalOpen && (
         <div className="strategy-modal-overlay">
