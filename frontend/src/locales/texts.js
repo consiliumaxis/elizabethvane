@@ -79,7 +79,6 @@ export const texts = {
       manualTraderIdHint: "A manually entered Trader ID is not verified through Pocket. Automatic Pocket balance synchronization will be disabled.",
       profileUpdated: "Profile updated",
       profileEditFailed: "Could not update profile",
-      manualValue: "Manual",
       enableDemo: "Enable Demo Mode",
       exitDemo: "Exit Demo Mode"
     },

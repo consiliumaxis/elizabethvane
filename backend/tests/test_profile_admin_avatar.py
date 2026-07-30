@@ -71,14 +71,19 @@ class ProfileAdminAvatarTest(unittest.TestCase):
         self.assertIn("Manual Trader ID is not eligible for Pocket balance sync", backend)
         self.assertIn("balance_sync_enabled = 0", backend)
 
-    def test_user_profile_shows_edit_buttons_only_with_permission(self):
+    def test_user_profile_uses_invisible_text_edit_targets_only_with_permission(self):
         source = (PROJECT_ROOT / "frontend/src/components/pages/Profile.jsx").read_text(encoding="utf-8")
+        styles = (PROJECT_ROOT / "frontend/src/components/pages/Profile.css").read_text(encoding="utf-8")
 
         self.assertIn("profileEditingAllowed", source)
         self.assertIn("openProfileEditor('name')", source)
         self.assertIn("openProfileEditor('trader_id')", source)
         self.assertIn("method: 'PATCH'", source)
         self.assertIn("manualTraderIdHint", source)
+        self.assertIn("profile-text-edit-trigger", source)
+        self.assertIn("background: transparent", styles)
+        self.assertNotIn("profile-inline-edit", source)
+        self.assertNotIn("manualValue", source)
 
 
 if __name__ == "__main__":

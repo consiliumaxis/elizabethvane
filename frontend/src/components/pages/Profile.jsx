@@ -55,7 +55,6 @@ export default function Profile({
   const binaryAvailable = Number(user.binary_access ?? 1) === 1;
   const isAdmin = Number(user.is_admin || 0) === 1 && Boolean(user.admin_url);
   const profileEditingAllowed = Number(user.profile_edit_allowed || 0) === 1;
-  const traderIdIsManual = Number(user.trader_id_is_manual || 0) === 1;
   const selectedStrategy = strategies.find(s => s.id === user.strategy_id) || {};
 
   const systemStrategies = strategies.filter(s => s.is_system === 1);
@@ -239,50 +238,40 @@ export default function Profile({
                 <div className="profile-avatar-placeholder">{profileInitials}</div>
               )}
             </div>
-            <div className="profile-name-row">
+            {profileEditingAllowed ? (
+              <button
+                type="button"
+                className="profile-name profile-text-edit-trigger"
+                onClick={() => openProfileEditor('name')}
+                aria-label={t.profile.editName}
+              >
+                {profileDisplayName}
+              </button>
+            ) : (
               <h2 className="profile-name">{profileDisplayName}</h2>
-              {profileEditingAllowed ? (
-                <button
-                  type="button"
-                  className="profile-inline-edit"
-                  onClick={() => openProfileEditor('name')}
-                  aria-label={t.profile.editName}
-                  title={t.profile.editName}
-                >
-                  <span
-                    className="edit-icon-mask"
-                    style={{ maskImage: `url("${iconEdit}")`, WebkitMaskImage: `url("${iconEdit}")` }}
-                  />
-                </button>
-              ) : null}
-            </div>
+            )}
           </div>
 
           <div className="profile-stats-card">
             {!isDemo ? (
               <>
                 <div className="stats-row">
-                  <div className="stat-box">
-                    <span className="profile-stat-label-row">
+                  {profileEditingAllowed ? (
+                    <button
+                      type="button"
+                      className="stat-box profile-text-edit-trigger profile-id-edit-trigger"
+                      onClick={() => openProfileEditor('trader_id')}
+                      aria-label={t.profile.editTraderId}
+                    >
                       <span className="stat-label">{t.profile.idLabel}</span>
-                      {traderIdIsManual ? <b>{t.profile.manualValue}</b> : null}
-                      {profileEditingAllowed ? (
-                        <button
-                          type="button"
-                          className="profile-inline-edit compact"
-                          onClick={() => openProfileEditor('trader_id')}
-                          aria-label={t.profile.editTraderId}
-                          title={t.profile.editTraderId}
-                        >
-                          <span
-                            className="edit-icon-mask"
-                            style={{ maskImage: `url("${iconEdit}")`, WebkitMaskImage: `url("${iconEdit}")` }}
-                          />
-                        </button>
-                      ) : null}
-                    </span>
-                    <span className="stat-value">{user.trader_id || t.profile.notSpecified || 'Not specified'}</span>
-                  </div>
+                      <span className="stat-value">{user.trader_id || t.profile.notSpecified || 'Not specified'}</span>
+                    </button>
+                  ) : (
+                    <div className="stat-box">
+                      <span className="stat-label">{t.profile.idLabel}</span>
+                      <span className="stat-value">{user.trader_id || t.profile.notSpecified || 'Not specified'}</span>
+                    </div>
+                  )}
                   <div className="stat-box right">
                     <span className="stat-label">{t.profile.balanceLabel}</span>
                     <span className="stat-value gold">{formatBalance(user.balance)}</span>
