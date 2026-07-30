@@ -874,6 +874,15 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "admin_system_access_settings", "updated_by", "ALTER TABLE admin_system_access_settings ADD COLUMN updated_by BIGINT NULL")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "updated_at", "ALTER TABLE admin_system_access_settings ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
         await _ensure_column(conn, db_name, "admin_support_links", "channel_id", "ALTER TABLE admin_support_links ADD COLUMN channel_id BIGINT NULL")
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE admin_support_links
+                SET channel_id = -channel_id
+                WHERE channel_id > 0
+                  AND CAST(channel_id AS CHAR) LIKE '100%'
+                """
+            )
         await _ensure_column(conn, db_name, "admin_support_links", "check_subscription_enabled", "ALTER TABLE admin_support_links ADD COLUMN check_subscription_enabled TINYINT(1) NOT NULL DEFAULT 1")
         await _ensure_column(conn, db_name, "admin_support_links", "quiz_intro_video_enabled", "ALTER TABLE admin_support_links ADD COLUMN quiz_intro_video_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER check_subscription_enabled")
         await _ensure_column(conn, db_name, "admin_support_links", "quiz_config", "ALTER TABLE admin_support_links ADD COLUMN quiz_config LONGTEXT NULL")

@@ -80,6 +80,9 @@ class BotFunnelTest(unittest.TestCase):
         self.assertEqual(custom["check_subscription_enabled"], 0)
         self.assertEqual(custom["support_url"], "https://t.me/support")
 
+        missing_minus = normalize_channel_settings({"channel_id": "1003584421739"})
+        self.assertEqual(missing_minus["channel_id"], -1003584421739)
+
     def test_final_message_config_preserves_button_order_and_types(self):
         config = validate_final_message_config(
             {

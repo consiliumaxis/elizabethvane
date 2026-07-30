@@ -7934,10 +7934,9 @@ async def deliver_channel_subscription_events(
 
 
 async def is_user_channel_member(user_id: int, channel_id: Any) -> bool:
-    try:
-        normalized_channel_id = int(channel_id or 0)
-    except (TypeError, ValueError):
-        normalized_channel_id = 0
+    normalized_channel_id = normalize_channel_settings(
+        {"channel_id": channel_id}
+    )["channel_id"]
     if not normalized_channel_id:
         return False
     try:

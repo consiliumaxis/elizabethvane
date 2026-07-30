@@ -396,6 +396,12 @@ def normalize_channel_id(value: Any) -> int:
         channel_id = int(str(value or "").strip())
     except (TypeError, ValueError):
         return DEFAULT_CHANNEL_ID
+    # Telegram supergroups/channels use the signed ``-100...`` Bot API form.
+    # Admins sometimes paste the same identifier without its leading minus;
+    # accepting that form here prevents every membership check from targeting
+    # a non-existent positive chat.
+    if channel_id > 0 and str(channel_id).startswith("100"):
+        channel_id = -channel_id
     return channel_id or DEFAULT_CHANNEL_ID
 
 
