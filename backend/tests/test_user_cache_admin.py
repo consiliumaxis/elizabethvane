@@ -56,6 +56,10 @@ class UserCacheAdminTest(unittest.TestCase):
         self.assertIn("confirmationMatches", source)
         self.assertIn("Создать архив и очистить", source)
         self.assertIn("Скачать JSON", source)
+        self.assertIn("Данные на момент очистки", source)
+        self.assertIn("Имя пользователя", source)
+        self.assertIn("Баланс", source)
+        self.assertIn("ARCHIVE_FIELD_LABELS", source)
 
 
 if __name__ == "__main__":

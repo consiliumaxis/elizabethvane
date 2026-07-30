@@ -858,6 +858,86 @@
   overflow-wrap: anywhere;
 }
 
+.admin-archive-profile-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(143, 106, 46, 0.3);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(255, 250, 242, 0.98), rgba(239, 226, 200, 0.62));
+  box-shadow: 0 8px 22px rgba(80, 55, 24, 0.07);
+  padding: 13px;
+}
+
+.admin-archive-profile-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-archive-profile-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.admin-archive-profile-head span {
+  color: var(--text-soft);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.admin-archive-profile-head h4 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-archive-profile-head > b {
+  border: 1px solid rgba(143, 106, 46, 0.22);
+  border-radius: 999px;
+  background: rgba(143, 106, 46, 0.08);
+  color: var(--accent-strong);
+  padding: 5px 8px;
+  font-size: 0.68rem;
+}
+
+.admin-archive-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.admin-archive-profile-grid > div {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-height: 54px;
+  border: 1px solid rgba(143, 106, 46, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 253, 248, 0.78);
+  padding: 8px 9px;
+}
+
+.admin-archive-profile-grid > div.is-accent {
+  border-color: rgba(143, 106, 46, 0.32);
+  background: rgba(143, 106, 46, 0.1);
+}
+
+.admin-archive-profile-grid span {
+  color: var(--text-soft);
+  font-size: 0.64rem;
+}
+
+.admin-archive-profile-grid strong {
+  color: var(--text-main);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
 .admin-archive-section {
   display: grid;
   gap: 8px;
@@ -896,6 +976,17 @@
   color: var(--text-main);
   font-size: 0.75rem;
   cursor: pointer;
+}
+
+.admin-archive-table-list summary > span {
+  display: grid;
+  gap: 2px;
+}
+
+.admin-archive-table-list summary small {
+  color: var(--text-soft);
+  font-size: 0.58rem;
+  font-weight: 500;
 }
 
 .admin-archive-table-list summary b {
@@ -3704,6 +3795,10 @@
 
   .admin-archive-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-archive-profile-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .admin-settings-menu-grid {

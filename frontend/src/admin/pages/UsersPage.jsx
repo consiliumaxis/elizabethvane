@@ -28,6 +28,259 @@ const formatArchiveDate = (value) => {
   }).format(parsed);
 };
 
+const ARCHIVE_TABLE_LABELS = {
+  users: ['User profile', 'Профиль пользователя'],
+  user_onboarding: ['Questionnaire and funnel', 'Опросник и воронка'],
+  user_mode_access: ['Trading mode access', 'Доступ к торговым режимам'],
+  user_analyses: ['Trading analyses', 'Торговые анализы'],
+  user_presets: ['User strategies', 'Стратегии пользователя'],
+  ai_chats: ['AI chats', 'Диалоги с AI'],
+  ai_messages: ['AI chat messages', 'Сообщения в диалогах AI'],
+  aio_postback_events: ['AIO events', 'События AIO'],
+  pocket_postback_events: ['Pocket events', 'События Pocket'],
+  preserved_staff_access: ['Staff access (preserved)', 'Доступ сотрудника (сохранён)'],
+  preserved_manager_audit: ['Manager action log (preserved)', 'Журнал действий менеджеров (сохранён)'],
+  custom_presets: ['Custom strategies', 'Пользовательские стратегии'],
+  custom_preset_indicators: ['Custom strategy indicators', 'Индикаторы пользовательских стратегий'],
+  messages: ['Correspondence', 'Переписка'],
+  conversation_memory: ['AI conversation memory', 'Память диалога AI'],
+  user_state: ['AI Chatter state', 'Состояние AI Chatter'],
+  funnel_media_sent: ['Sent funnel media', 'Отправленные материалы воронки'],
+  bot_block_log: ['Bot blocking log', 'История блокировок бота'],
+  postback_events: ['Postback events', 'События постбэков'],
+  postback_state: ['Postback state', 'Состояние постбэков'],
+};
+
+const ARCHIVE_FIELD_LABELS = {
+  id: ['Record ID', 'ID записи'],
+  user_id: ['Telegram user ID', 'Telegram ID пользователя'],
+  tg_user_id: ['Telegram user ID', 'Telegram ID пользователя'],
+  chat_id: ['Chat ID', 'ID диалога'],
+  preset_id: ['Strategy ID', 'ID стратегии'],
+  indicator_id: ['Indicator ID', 'ID индикатора'],
+  strategy_id: ['Strategy ID', 'ID стратегии'],
+  target_user_id: ['Target user ID', 'Telegram ID клиента'],
+  requested_by: ['Requested by', 'Telegram ID менеджера'],
+  archived_by: ['Archived by', 'Telegram ID администратора'],
+  username: ['Username', 'Имя пользователя'],
+  first_name: ['Telegram name', 'Имя в Telegram'],
+  profile_name: ['Displayed name', 'Отображаемое имя'],
+  title: ['Title', 'Название'],
+  name: ['Name', 'Название'],
+  avatar_url: ['Avatar URL', 'Ссылка на аватар'],
+  trader_id: ['Trader ID', 'Trader ID'],
+  profile_trader_id: ['Manual Trader ID', 'Trader ID, указанный вручную'],
+  profile_edit_allowed: ['Profile editing allowed', 'Разрешено редактирование профиля'],
+  profile_updated_at: ['Profile updated', 'Профиль изменён'],
+  pocket_click_id: ['Pocket Click ID', 'Pocket Click ID'],
+  pocket_site_id: ['Pocket Site ID', 'Pocket Site ID'],
+  pocket_cid: ['Pocket CID', 'Pocket CID'],
+  pocket_sub_id1: ['Pocket Sub ID 1', 'Pocket Sub ID 1'],
+  pocket_sub_id2: ['Pocket Sub ID 2', 'Pocket Sub ID 2'],
+  pocket_registered: ['Pocket registration', 'Регистрация в Pocket'],
+  pocket_deposited: ['Pocket deposit', 'Депозит в Pocket'],
+  pocket_registered_at: ['Pocket registration date', 'Дата регистрации в Pocket'],
+  pocket_deposit_amount: ['Pocket deposit amount', 'Сумма депозита Pocket'],
+  pocket_checked_at: ['Pocket check date', 'Дата проверки Pocket'],
+  pocket_trader_id: ['Pocket Trader ID', 'Trader ID от Pocket'],
+  aio_visit_uuid: ['AIO visit ID', 'ID визита AIO'],
+  event_slug: ['Event type', 'Тип события'],
+  event_code: ['Event code', 'Код события'],
+  unique_key: ['Unique event key', 'Уникальный ключ события'],
+  source_unique_key: ['Source event key', 'Ключ события источника'],
+  provider_event_id: ['Provider event ID', 'ID события провайдера'],
+  payload_fingerprint: ['Payload fingerprint', 'Отпечаток данных'],
+  request_url: ['Request URL', 'Адрес запроса'],
+  chatterfy_request_url: ['Chatterfy request URL', 'Адрес запроса Chatterfy'],
+  status: ['Status', 'Статус'],
+  reason: ['Reason', 'Причина'],
+  response_status: ['Response status', 'Код ответа'],
+  response_body: ['Response body', 'Ответ сервиса'],
+  error: ['Error', 'Ошибка'],
+  chatterfy_status: ['Chatterfy status', 'Статус Chatterfy'],
+  chatterfy_response_status: ['Chatterfy response code', 'Код ответа Chatterfy'],
+  chatterfy_response_body: ['Chatterfy response', 'Ответ Chatterfy'],
+  chatterfy_error: ['Chatterfy error', 'Ошибка Chatterfy'],
+  chatterfy_sent_at: ['Sent to Chatterfy', 'Отправлено в Chatterfy'],
+  aichatter_status: ['AI Chatter status', 'Статус AI Chatter'],
+  aichatter_error: ['AI Chatter error', 'Ошибка AI Chatter'],
+  aichatter_synced_at: ['AI Chatter sync date', 'Дата синхронизации AI Chatter'],
+  raw_payload: ['Original data', 'Исходные данные'],
+  access: ['System access', 'Доступ к системе'],
+  deposit: ['Deposit', 'Депозит'],
+  balance: ['Balance', 'Баланс'],
+  balance_sync_enabled: ['Balance sync', 'Синхронизация баланса'],
+  balance_synced_at: ['Balance sync date', 'Дата синхронизации баланса'],
+  balance_sync_error: ['Balance sync error', 'Ошибка синхронизации баланса'],
+  country: ['Country', 'Страна'],
+  currency: ['Currency', 'Валюта'],
+  revenue: ['Revenue', 'Доход'],
+  deposit_amount: ['Deposit amount', 'Сумма депозита'],
+  sumdep: ['Deposit amount', 'Сумма депозита'],
+  wdr_sum: ['Withdrawal amount', 'Сумма вывода'],
+  commission: ['Commission', 'Комиссия'],
+  mode: ['Trading mode', 'Торговый режим'],
+  is_enabled: ['Enabled', 'Включено'],
+  override_mode: ['Access override', 'Персональная настройка доступа'],
+  is_blocked: ['User blocked', 'Пользователь заблокирован'],
+  blocked_by: ['Blocked by', 'Кем заблокирован'],
+  blocked_at: ['Blocking date', 'Дата блокировки'],
+  lang: ['Language', 'Язык'],
+  pair: ['Asset', 'Актив'],
+  timeframe: ['Timeframe', 'Таймфрейм'],
+  analysis_type: ['Analysis type', 'Тип анализа'],
+  market_kind: ['Market type', 'Тип рынка'],
+  raw_data: ['Analysis data', 'Данные анализа'],
+  news_data: ['News data', 'Новостные данные'],
+  entry_price: ['Entry price', 'Цена входа'],
+  exit_price: ['Exit price', 'Цена выхода'],
+  closed_at: ['Trade closed', 'Сделка закрыта'],
+  role: ['Role', 'Роль'],
+  content: ['Message', 'Сообщение'],
+  direction: ['Message direction', 'Направление сообщения'],
+  is_business: ['Business message', 'Сообщение бизнес-аккаунта'],
+  text: ['Message text', 'Текст сообщения'],
+  message_count: ['Message count', 'Количество сообщений'],
+  context_summary: ['Context summary', 'Краткое содержание контекста'],
+  memory: ['AI memory', 'Память AI'],
+  stage: ['Funnel stage', 'Этап воронки'],
+  notes: ['Notes', 'Заметки'],
+  current_step: ['Current questionnaire step', 'Текущий этап опросника'],
+  quiz_name: ['Questionnaire: name', 'Опросник: имя'],
+  quiz_age: ['Questionnaire: age', 'Опросник: возраст'],
+  quiz_experience: ['Questionnaire: experience', 'Опросник: опыт'],
+  quiz_broker_experience: ['Questionnaire: broker', 'Опросник: опыт с брокером'],
+  quiz_capital: ['Questionnaire: capital', 'Опросник: капитал'],
+  quiz_completed_at: ['Questionnaire completed', 'Опросник завершён'],
+  channel_subscribed_at: ['Channel subscription', 'Подписка на канал'],
+  channel_gate_completed_at: ['Channel gate completed', 'Проверка канала пройдена'],
+  media_key: ['Media key', 'Ключ материала'],
+  delivery_scope: ['Delivery profile', 'Профиль отправки'],
+  sent_at: ['Sent date', 'Дата отправки'],
+  registration_status: ['Registration status', 'Статус регистрации'],
+  deposit_status: ['Deposit status', 'Статус депозита'],
+  registered_at: ['Registration date', 'Дата регистрации'],
+  bot_active: ['AI Chatter active', 'AI Chatter включён'],
+  elizabeth_bot_active: ['Elizabeth Bot active', 'Elizabeth Bot включён'],
+  bot_blocked_at: ['Bot blocking date', 'Дата блокировки бота'],
+  bot_block_reason: ['Bot blocking reason', 'Причина блокировки бота'],
+  first_deposit_sum: ['First deposit', 'Первый депозит'],
+  first_deposit_at: ['First deposit date', 'Дата первого депозита'],
+  repeat_deposit_last_sum: ['Last repeat deposit', 'Последний повторный депозит'],
+  repeat_deposit_total: ['Repeat deposits total', 'Сумма повторных депозитов'],
+  repeat_deposit_count: ['Repeat deposit count', 'Количество повторных депозитов'],
+  repeat_deposit_at: ['Repeat deposit date', 'Дата повторного депозита'],
+  deposit_total: ['Total deposits', 'Общая сумма депозитов'],
+  withdrawal_last_sum: ['Last withdrawal', 'Последний вывод'],
+  withdrawal_total: ['Total withdrawals', 'Общая сумма выводов'],
+  withdrawal_count: ['Withdrawal count', 'Количество выводов'],
+  withdrawal_status: ['Withdrawal status', 'Статус вывода'],
+  withdrawal_at: ['Withdrawal date', 'Дата вывода'],
+  commission_last_amount: ['Last commission', 'Последняя комиссия'],
+  commission_total: ['Total commission', 'Общая комиссия'],
+  commission_count: ['Commission count', 'Количество комиссий'],
+  commission_at: ['Commission date', 'Дата комиссии'],
+  registration_received_at: ['Registration postback date', 'Дата постбэка регистрации'],
+  last_event_code: ['Last event', 'Последнее событие'],
+  last_event_at: ['Last event date', 'Дата последнего события'],
+  site_id: ['Site ID', 'Site ID'],
+  cid: ['Campaign ID', 'ID кампании'],
+  click_id: ['Click ID', 'Click ID'],
+  ac: ['Affiliate code', 'Код партнёра'],
+  promo: ['Promo code', 'Промокод'],
+  device_type: ['Device type', 'Тип устройства'],
+  source_ip: ['Source IP', 'IP источника'],
+  created_at: ['Created', 'Дата создания'],
+  updated_at: ['Updated', 'Дата изменения'],
+};
+
+const getArchiveTableLabel = (tableName, tr) => {
+  const labels = ARCHIVE_TABLE_LABELS[tableName];
+  return labels ? tr(labels[0], labels[1]) : tr(`Technical section: ${tableName}`, `Технический раздел: ${tableName}`);
+};
+
+const getArchiveFieldLabel = (fieldName, tr) => {
+  const labels = ARCHIVE_FIELD_LABELS[fieldName];
+  return labels ? tr(labels[0], labels[1]) : tr(`Field “${fieldName}”`, `Поле «${fieldName}»`);
+};
+
+const formatArchiveValue = (fieldName, value, tr) => {
+  if (value === null || value === undefined || value === '') return tr('Not specified', 'Не указано');
+  if (typeof value === 'boolean') return value ? tr('Yes', 'Да') : tr('No', 'Нет');
+  if (
+    [
+      'access', 'is_enabled', 'is_blocked', 'is_business', 'profile_edit_allowed',
+      'balance_sync_enabled', 'pocket_registered', 'pocket_deposited', 'bot_active',
+      'elizabeth_bot_active',
+    ].includes(fieldName)
+    && (Number(value) === 0 || Number(value) === 1)
+  ) {
+    return Number(value) === 1 ? tr('Yes', 'Да') : tr('No', 'Нет');
+  }
+  if (typeof value === 'object') return JSON.stringify(value, null, 2);
+  return String(value);
+};
+
+const formatArchiveRows = (rows, tr) => rows.map((row, index) => {
+  const fields = Object.entries(row || {}).map(([fieldName, value]) => (
+    `${getArchiveFieldLabel(fieldName, tr)}: ${formatArchiveValue(fieldName, value, tr)}`
+  ));
+  return `${tr('Record', 'Запись')} ${index + 1}\n${fields.join('\n')}`;
+}).join('\n\n────────────────────\n\n');
+
+const getArchiveProfile = (snapshot = {}) => {
+  const identity = snapshot.identity || {};
+  const mainUser = snapshot.main_app?.users?.[0] || {};
+  const chatterUser = snapshot.ai_chatter?.users?.[0] || {};
+  const profileTraderId = mainUser.profile_trader_id || '';
+  const pocketTraderId = mainUser.trader_id || chatterUser.trader_id || '';
+  return {
+    name: mainUser.profile_name
+      || identity.display_name
+      || mainUser.first_name
+      || chatterUser.first_name
+      || '',
+    username: identity.username || mainUser.username || chatterUser.username || '',
+    userId: identity.user_id || mainUser.user_id || chatterUser.tg_user_id || '',
+    traderId: identity.trader_id || profileTraderId || pocketTraderId || '',
+    pocketTraderId: profileTraderId && pocketTraderId && profileTraderId !== pocketTraderId
+      ? pocketTraderId
+      : '',
+    balance: mainUser.balance,
+    deposit: mainUser.pocket_deposit_amount ?? mainUser.deposit,
+    country: mainUser.country || chatterUser.country || '',
+    registrationStatus: chatterUser.registration_status
+      || (Number(mainUser.pocket_registered) === 1 ? 'registered' : ''),
+    depositStatus: chatterUser.deposit_status
+      || (Number(mainUser.pocket_deposited) === 1 ? 'deposited' : ''),
+  };
+};
+
+const getArchiveStatusLabel = (status, tr) => {
+  const normalized = String(status || '').trim().toLowerCase();
+  const labels = {
+    complete: ['Complete', 'Завершён'],
+    partial: ['Partially complete', 'Завершён частично'],
+    pending: ['Creating', 'Создаётся'],
+    registered: ['Registered', 'Зарегистрирован'],
+    not_registered: ['Not registered', 'Не зарегистрирован'],
+    deposited: ['Deposit received', 'Депозит получен'],
+    not_deposited: ['No deposit', 'Депозита нет'],
+    processed: ['Processed', 'Обработано'],
+    sent: ['Sent', 'Отправлено'],
+    active: ['Active', 'Активен'],
+    archived: ['Archived', 'В архиве'],
+  };
+  return labels[normalized]
+    ? tr(labels[normalized][0], labels[normalized][1])
+    : (status || tr('Not specified', 'Не указано'));
+};
+
+const formatArchiveMoney = (value) => {
+  if (value === null || value === undefined || value === '') return '—';
+  return formatBalance(value);
+};
+
 export default function UsersPage() {
   const { tr } = useAdminLocale();
   const [search, setSearch] = useState('');
@@ -357,6 +610,7 @@ export default function UsersPage() {
     const requiredConfirmation = confirmationPhrase || `CLEAR ${selectedUser.user_id}`;
     const confirmationMatches = confirmationValue.trim() === requiredConfirmation;
     const archiveSnapshot = archiveDetail?.snapshot || {};
+    const archiveProfile = getArchiveProfile(archiveSnapshot);
     return (
       <div className="admin-card">
         <div className="admin-row-between">
@@ -740,14 +994,72 @@ export default function UsersPage() {
                     </div>
                     <div>
                       <span>{tr('Status', 'Статус')}</span>
-                      <strong>{archiveDetail.archive_status}</strong>
+                      <strong>{getArchiveStatusLabel(archiveDetail.archive_status, tr)}</strong>
                     </div>
                   </div>
+
+                  <section className="admin-archive-profile-card">
+                    <div className="admin-archive-profile-head">
+                      <div>
+                        <span>{tr('Snapshot at the time of clearing', 'Данные на момент очистки')}</span>
+                        <h4>{archiveProfile.name || tr('Name not specified', 'Имя не указано')}</h4>
+                      </div>
+                      <b>#{archiveDetail.id}</b>
+                    </div>
+                    <div className="admin-archive-profile-grid">
+                      <div>
+                        <span>{tr('Username', 'Имя пользователя')}</span>
+                        <strong>
+                          {archiveProfile.username
+                            ? `@${String(archiveProfile.username).replace(/^@/, '')}`
+                            : '—'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Telegram ID</span>
+                        <strong>{archiveProfile.userId || archiveDetail.user_id || '—'}</strong>
+                      </div>
+                      <div>
+                        <span>Trader ID</span>
+                        <strong>{archiveProfile.traderId || '—'}</strong>
+                      </div>
+                      {archiveProfile.pocketTraderId ? (
+                        <div>
+                          <span>{tr('Pocket Trader ID', 'Trader ID от Pocket')}</span>
+                          <strong>{archiveProfile.pocketTraderId}</strong>
+                        </div>
+                      ) : null}
+                      <div className="is-accent">
+                        <span>{tr('Balance', 'Баланс')}</span>
+                        <strong>{formatArchiveMoney(archiveProfile.balance)}</strong>
+                      </div>
+                      <div>
+                        <span>{tr('Deposit amount', 'Сумма депозита')}</span>
+                        <strong>{formatArchiveMoney(archiveProfile.deposit)}</strong>
+                      </div>
+                      <div>
+                        <span>{tr('Country', 'Страна')}</span>
+                        <strong>{archiveProfile.country || '—'}</strong>
+                      </div>
+                      <div>
+                        <span>{tr('Registration', 'Регистрация')}</span>
+                        <strong>{getArchiveStatusLabel(archiveProfile.registrationStatus, tr)}</strong>
+                      </div>
+                      <div>
+                        <span>{tr('Deposit status', 'Статус депозита')}</span>
+                        <strong>{getArchiveStatusLabel(archiveProfile.depositStatus, tr)}</strong>
+                      </div>
+                    </div>
+                  </section>
 
                   {['main_app', 'ai_chatter'].map((sectionName) => (
                     <section className="admin-archive-section" key={sectionName}>
                       <div className="admin-row-between">
-                        <h4>{sectionName === 'main_app' ? 'Elizabeth App' : 'AI Chatter'}</h4>
+                        <h4>
+                          {sectionName === 'main_app'
+                            ? tr('Elizabeth application', 'Приложение Elizabeth')
+                            : tr('AI Chatter', 'AI Chatter')}
+                        </h4>
                         <span>
                           {archiveDetail.summary?.sections?.[sectionName]?.records || 0}
                           {' '}
@@ -760,11 +1072,14 @@ export default function UsersPage() {
                           return (
                             <details key={tableName}>
                               <summary>
-                                <span>{tableName}</span>
+                                <span>
+                                  {getArchiveTableLabel(tableName, tr)}
+                                  <small>{tableName}</small>
+                                </span>
                                 <b>{normalizedRows.length}</b>
                               </summary>
                               <pre>
-                                {JSON.stringify(normalizedRows.slice(0, 25), null, 2)}
+                                {formatArchiveRows(normalizedRows.slice(0, 25), tr)}
                               </pre>
                               {normalizedRows.length > 25 ? (
                                 <p>
@@ -810,13 +1125,22 @@ export default function UsersPage() {
                         <small>
                           {tr('Administrator', 'Администратор')}: {archive.archived_by_name || archive.archived_by}
                         </small>
+                        <small>
+                          {archive.summary?.display_name || tr('Name not specified', 'Имя не указано')}
+                          {archive.summary?.username
+                            ? ` · @${String(archive.summary.username).replace(/^@/, '')}`
+                            : ''}
+                        </small>
+                        {archive.summary?.trader_id ? (
+                          <small>Trader ID: {archive.summary.trader_id}</small>
+                        ) : null}
                       </span>
                       <span className="admin-archive-row-meta">
                         <b>{archive.summary?.total_records || 0}</b>
                         <small>{tr('records', 'записей')}</small>
                       </span>
                       <span className={`admin-archive-status is-${archive.archive_status}`}>
-                        {archive.archive_status}
+                        {getArchiveStatusLabel(archive.archive_status, tr)}
                       </span>
                     </button>
                   ))}

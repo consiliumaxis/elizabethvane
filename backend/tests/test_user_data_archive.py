@@ -31,9 +31,13 @@ class UserDataArchiveTest(unittest.TestCase):
     def test_summary_counts_records_by_system_and_table(self):
         snapshot = {
             "identity": {
+                "user_id": 1,
                 "display_name": "Elizabeth",
                 "username": "elizabeth",
                 "trader_id": "T-10",
+                "balance": Decimal("125.50"),
+                "deposit_amount": Decimal("50.00"),
+                "country": "GB",
             },
             "main_app": {
                 "users": [{"user_id": 1}],
@@ -49,6 +53,10 @@ class UserDataArchiveTest(unittest.TestCase):
         self.assertEqual(summary["sections"]["main_app"]["records"], 3)
         self.assertEqual(summary["sections"]["ai_chatter"]["tables"]["messages"], 1)
         self.assertEqual(summary["trader_id"], "T-10")
+        self.assertEqual(summary["user_id"], 1)
+        self.assertEqual(summary["balance"], Decimal("125.50"))
+        self.assertEqual(summary["deposit_amount"], Decimal("50.00"))
+        self.assertEqual(summary["country"], "GB")
 
 
 if __name__ == "__main__":

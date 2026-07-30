@@ -65,9 +65,13 @@ def build_archive_summary(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     identity = snapshot.get("identity") or {}
     return {
         "version": ARCHIVE_VERSION,
+        "user_id": identity.get("user_id"),
         "display_name": str(identity.get("display_name") or ""),
         "username": str(identity.get("username") or ""),
         "trader_id": str(identity.get("trader_id") or ""),
+        "balance": identity.get("balance"),
+        "deposit_amount": identity.get("deposit_amount"),
+        "country": str(identity.get("country") or ""),
         "total_records": total_records,
         "sections": sections,
     }
