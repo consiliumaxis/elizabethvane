@@ -60,6 +60,10 @@ try:
 except ModuleNotFoundError:
     from stream_matching import stream_requested_asset_matches
 try:
+    from backend.video_note import prepare_square_video_note
+except ModuleNotFoundError:
+    from video_note import prepare_square_video_note
+try:
     from backend.binary_signal import enforce_binary_signal as normalize_binary_signal
 except ModuleNotFoundError:
     from binary_signal import enforce_binary_signal as normalize_binary_signal
@@ -424,7 +428,6 @@ START_VIDEO_NOTE_MANAGED_PATH = (
     os.getenv("QUIZ_INTRO_VIDEO_PATH")
     or os.path.join(QUIZ_INTRO_VIDEO_LIBRARY_DIR, "active.mp4")
 )
-START_VIDEO_NOTE_LENGTH = get_env_int("START_VIDEO_NOTE_LENGTH", 240)
 MAX_QUIZ_INTRO_VIDEO_SIZE = 50 * 1024 * 1024
 
 
@@ -484,7 +487,10 @@ def save_quiz_intro_video_file(payload: bytes, target_path: str) -> None:
             pass
 
 
-def activate_quiz_intro_video_file(source_path: str) -> None:
+async def activate_quiz_intro_video_file(source_path: str) -> None:
+    prepared_path = await prepare_square_video_note(source_path)
+    if not prepared_path:
+        raise ValueError("MP4 could not be converted to a Telegram video note")
     target_dir = os.path.dirname(START_VIDEO_NOTE_MANAGED_PATH) or "."
     os.makedirs(target_dir, exist_ok=True)
     temp_path = os.path.join(
@@ -492,7 +498,7 @@ def activate_quiz_intro_video_file(source_path: str) -> None:
         f".active.mp4.select-{secrets.token_hex(6)}",
     )
     try:
-        shutil.copy2(source_path, temp_path)
+        shutil.copy2(prepared_path, temp_path)
         with open(temp_path, "rb") as active_file:
             os.fsync(active_file.fileno())
         os.replace(temp_path, START_VIDEO_NOTE_MANAGED_PATH)
@@ -1645,7 +1651,7 @@ async def activate_quiz_intro_video(video_id: int, admin_user_id: int) -> Dict[s
         raise HTTPException(status_code=404, detail="Saved MP4 file is missing on disk")
 
     try:
-        activate_quiz_intro_video_file(source_path)
+        await activate_quiz_intro_video_file(source_path)
         async with db_pool.acquire() as conn:
             await conn.begin()
             try:
@@ -1679,7 +1685,7 @@ async def activate_quiz_intro_video(video_id: int, admin_user_id: int) -> Dict[s
                     previous_row.get("storage_name") or ""
                 )
                 if os.path.isfile(previous_path):
-                    activate_quiz_intro_video_file(previous_path)
+                    await activate_quiz_intro_video_file(previous_path)
             elif not previous_row and os.path.isfile(START_VIDEO_NOTE_MANAGED_PATH):
                 os.remove(START_VIDEO_NOTE_MANAGED_PATH)
         except Exception:
@@ -1725,7 +1731,7 @@ async def reset_quiz_intro_video_to_default() -> None:
                     previous_row.get("storage_name") or ""
                 )
                 if os.path.isfile(previous_path):
-                    activate_quiz_intro_video_file(previous_path)
+                    await activate_quiz_intro_video_file(previous_path)
         except Exception:
             pass
         raise HTTPException(
@@ -7758,11 +7764,17 @@ async def send_start_video_note(chat_id: int):
         if not video_path:
             print("[Bot] quiz intro video note is enabled, but no MP4 file is available")
             return
-        await bot.send_video_note(
+        video_note_path = await prepare_square_video_note(video_path)
+        if not video_note_path:
+            print(f"[Bot] quiz intro video note conversion failed for {video_source} source")
+            return
+        sent = await bot.send_video_note(
             chat_id=chat_id,
-            video_note=FSInputFile(video_path),
-            length=START_VIDEO_NOTE_LENGTH,
+            video_note=FSInputFile(video_note_path),
+            length=512,
         )
+        if not sent.video_note:
+            raise RuntimeError("Telegram returned a message without video_note")
         print(f"[Bot] quiz intro video note sent from {video_source} source")
     except Exception as e:
         print(f"[Bot] quiz intro video note send failed: {e}")
