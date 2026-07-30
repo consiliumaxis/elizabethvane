@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
 import { useAdminLocale } from '../useAdminLocale';
+import { PERMISSIONS, hasPermission } from '../permissions';
 
 const STREAM_SIGNALS = ['BUY', 'SELL'];
 const INDICATOR_SIGNAL_OPTIONS = ['AUTO', 'BUY', 'SELL', 'NEUTRAL'];
@@ -372,8 +373,16 @@ const buildPreviewSignals = ({
   };
 };
 
-export default function SettingsPage() {
+export default function SettingsPage({ adminUser }) {
   const { language, setLanguage, tr } = useAdminLocale();
+  const sectionPermission = useMemo(() => ({
+    streams: PERMISSIONS.settingsStreams,
+    ai: PERMISSIONS.settingsAi,
+    access: PERMISSIONS.settingsSystemAccess,
+    support: PERMISSIONS.settingsFunnel,
+    pocket: PERMISSIONS.settingsApi,
+    interface: PERMISSIONS.settingsInterface,
+  }), []);
   const accessPolicies = useMemo(() => [
     {
       key: 'registration',
@@ -652,6 +661,7 @@ export default function SettingsPage() {
   }, [previewIndicatorsBase, streamScope, streamSignal, streamStrategyId, streamIndicatorMode, streamIndicatorOverrides]);
 
   const saveSettings = async (source = 'all') => {
+    const shouldSaveAi = source === 'ai' || source === 'all';
     const shouldSaveStreams = source === 'streams' || source === 'all';
     const shouldSaveSupport = source === 'support' || source === 'all';
     const shouldSavePocket = source === 'pocket' || source === 'all';
@@ -752,13 +762,14 @@ export default function SettingsPage() {
     setStatus('');
 
     try {
-      const payload = {
-        ai: {
+      const payload = {};
+      if (shouldSaveAi) {
+        payload.ai = {
           model: model.trim(),
           system_prompt: systemPrompt,
           openai_api_key: openAiApiKey.trim(),
-        },
-      };
+        };
+      }
 
       if (shouldSaveStreams) {
         payload.streams = {
@@ -1189,8 +1200,8 @@ export default function SettingsPage() {
         title: tr('Interface language', 'Язык интерфейса'),
         subtitle: language === 'ru' ? 'Русский' : 'English',
       },
-    ],
-    [accessPolicies, language, model, pocketApiTokenConfigured, pocketApiTokenMasked, pocketPartnerId, streamEnabled, systemAccessPolicy, tr]
+    ].filter((card) => hasPermission(adminUser, sectionPermission[card.key])),
+    [accessPolicies, adminUser, language, model, pocketApiTokenConfigured, pocketApiTokenMasked, pocketPartnerId, sectionPermission, streamEnabled, systemAccessPolicy, tr]
   );
 
   const goMenu = () => {

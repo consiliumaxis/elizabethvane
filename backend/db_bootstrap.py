@@ -237,6 +237,9 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     user_id BIGINT NOT NULL PRIMARY KEY,
                     role VARCHAR(16) NOT NULL DEFAULT 'admin',
                     is_active TINYINT(1) NOT NULL DEFAULT 1,
+                    display_name VARCHAR(255) NULL,
+                    permissions_json LONGTEXT NULL,
+                    is_protected TINYINT(1) NOT NULL DEFAULT 0,
                     granted_by BIGINT NULL,
                     granted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -663,6 +666,27 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
             "admin_users",
             "is_active",
             "ALTER TABLE admin_users ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_users",
+            "display_name",
+            "ALTER TABLE admin_users ADD COLUMN display_name VARCHAR(255) NULL AFTER is_active",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_users",
+            "permissions_json",
+            "ALTER TABLE admin_users ADD COLUMN permissions_json LONGTEXT NULL AFTER display_name",
+        )
+        await _ensure_column(
+            conn,
+            db_name,
+            "admin_users",
+            "is_protected",
+            "ALTER TABLE admin_users ADD COLUMN is_protected TINYINT(1) NOT NULL DEFAULT 0 AFTER permissions_json",
         )
         await _ensure_column(conn, db_name, "admin_users", "granted_by", "ALTER TABLE admin_users ADD COLUMN granted_by BIGINT NULL")
         await _ensure_column(
@@ -1153,9 +1177,9 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 default_admin_user_id = 7097261848
             await cur.execute(
                 """
-                INSERT INTO admin_users (user_id, role, is_active, granted_by)
-                VALUES (%s, 'admin', 1, %s)
-                ON DUPLICATE KEY UPDATE role = 'admin', is_active = 1
+                INSERT INTO admin_users (user_id, role, is_active, is_protected, granted_by)
+                VALUES (%s, 'admin', 1, 1, %s)
+                ON DUPLICATE KEY UPDATE role = 'admin', is_active = 1, is_protected = 1
                 """,
                 (default_admin_user_id, default_admin_user_id),
             )

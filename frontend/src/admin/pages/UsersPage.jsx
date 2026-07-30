@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
 import { useAdminLocale } from '../useAdminLocale';
+import { PERMISSIONS, hasPermission } from '../permissions';
 
 const getDisplayName = (user) => user?.first_name || user?.username || `User ${user?.user_id || ''}`;
 const getAvatarUrl = (user) => String(user?.avatar_url || '').trim();
@@ -281,8 +282,14 @@ const formatArchiveMoney = (value) => {
   return formatBalance(value);
 };
 
-export default function UsersPage() {
+export default function UsersPage({ adminUser }) {
   const { tr } = useAdminLocale();
+  const canProfileEdit = hasPermission(adminUser, PERMISSIONS.usersProfileEdit);
+  const canArchiveClear = hasPermission(adminUser, PERMISSIONS.usersArchiveClear);
+  const canEditAccess = hasPermission(adminUser, PERMISSIONS.usersAccess);
+  const canEditBalance = hasPermission(adminUser, PERMISSIONS.usersBalance);
+  const canBlock = hasPermission(adminUser, PERMISSIONS.usersBlock);
+  const canDelete = hasPermission(adminUser, PERMISSIONS.usersDelete);
   const [search, setSearch] = useState('');
   const [users, setUsers] = useState([]);
   const [total, setTotal] = useState(0);
@@ -346,10 +353,10 @@ export default function UsersPage() {
   }, [loadUsers]);
 
   useEffect(() => {
-    if (!selectedUserId) return undefined;
+    if (!selectedUserId || !canArchiveClear) return undefined;
     const timer = window.setTimeout(() => loadArchives(selectedUserId), 0);
     return () => window.clearTimeout(timer);
-  }, [loadArchives, selectedUserId]);
+  }, [canArchiveClear, loadArchives, selectedUserId]);
 
   const selectedUser = useMemo(
     () => users.find((user) => String(user.user_id) === String(selectedUserId)) || null,
@@ -665,6 +672,7 @@ export default function UsersPage() {
             <div><span>{tr('Created', 'Создан')}:</span> {selectedUser.created_at || '-'}</div>
           </div>
 
+          {canProfileEdit ? (
           <div className={`admin-user-profile-permission ${profileEditingAllowed ? 'is-enabled' : ''}`}>
             <div className="admin-user-profile-permission-copy">
               <span className="admin-user-profile-permission-kicker">{tr('Personal permission', 'Персональное разрешение')}</span>
@@ -698,7 +706,9 @@ export default function UsersPage() {
               )}
             </div>
           </div>
+          ) : null}
 
+          {canArchiveClear ? (
           <div className="admin-user-cache-panel">
             <div className="admin-user-cache-copy">
               <span className="admin-user-profile-permission-kicker">
@@ -737,16 +747,19 @@ export default function UsersPage() {
               )}
             </div>
           </div>
+          ) : null}
 
+          {(canEditAccess || canEditBalance || canBlock || canDelete) ? (
           <div className="admin-user-actions">
             <div className="admin-row-actions">
-              <button className="admin-btn-outline" onClick={openAccessModal} disabled={actionLoading}>
+              {canEditAccess ? <button className="admin-btn-outline" onClick={openAccessModal} disabled={actionLoading}>
                 {tr('Edit access', 'Редактировать доступ')}
-              </button>
-              <button className="admin-btn-outline" onClick={openBalanceModal} disabled={actionLoading}>
+              </button> : null}
+              {canEditBalance ? <button className="admin-btn-outline" onClick={openBalanceModal} disabled={actionLoading}>
                 {tr('Edit balance', 'Изменить баланс')}
-              </button>
+              </button> : null}
             </div>
+            {canBlock ? (
             <button
               className={isBlocked ? 'admin-btn' : 'admin-btn-outline danger'}
               onClick={() => toggleBlocked(selectedUser)}
@@ -754,22 +767,24 @@ export default function UsersPage() {
             >
               {isBlocked ? tr('Unblock', 'Разблокировать') : tr('Block', 'Заблокировать')}
             </button>
-            <button className="admin-btn-outline danger" onClick={deleteUser} disabled={actionLoading}>
+            ) : null}
+            {canDelete ? <button className="admin-btn-outline danger" onClick={deleteUser} disabled={actionLoading}>
               {tr('Delete user', 'Удалить пользователя')}
-            </button>
-            <div className="admin-muted">
+            </button> : null}
+            {canBlock ? <div className="admin-muted">
               {tr(
                 'A blocked user will see a restriction screen when opening the application.',
                 'Заблокированный пользователь увидит экран ограничения при входе в приложение.'
               )}
-            </div>
+            </div> : null}
           </div>
+          ) : null}
         </div>
 
         {status ? <div className="admin-success">{status}</div> : null}
         {error ? <div className="admin-error">{error}</div> : null}
 
-        {accessModalOpen ? (
+        {accessModalOpen && canEditAccess ? (
           <div className="admin-modal-backdrop" onClick={() => setAccessModalOpen(false)}>
             <div className="admin-modal" onClick={(e) => e.stopPropagation()}>
               <div className="admin-row-between">
@@ -807,7 +822,7 @@ export default function UsersPage() {
           </div>
         ) : null}
 
-        {balanceModalOpen ? (
+        {balanceModalOpen && canEditBalance ? (
           <div className="admin-modal-backdrop" onClick={() => setBalanceModalOpen(false)}>
             <div className="admin-modal" onClick={(e) => e.stopPropagation()}>
               <div className="admin-row-between">
@@ -860,7 +875,7 @@ export default function UsersPage() {
           </div>
         ) : null}
 
-        {clearCacheModalOpen ? (
+        {clearCacheModalOpen && canArchiveClear ? (
           <div
             className="admin-modal-backdrop"
             onClick={() => {
@@ -942,7 +957,7 @@ export default function UsersPage() {
           </div>
         ) : null}
 
-        {archiveModalOpen ? (
+        {archiveModalOpen && canArchiveClear ? (
           <div className="admin-modal-backdrop" onClick={() => setArchiveModalOpen(false)}>
             <div className="admin-modal admin-archive-modal" onClick={(e) => e.stopPropagation()}>
               <div className="admin-row-between">

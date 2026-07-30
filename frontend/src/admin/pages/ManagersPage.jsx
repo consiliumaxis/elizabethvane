@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
 import { useAdminLocale } from '../useAdminLocale';
+import { PERMISSIONS, hasPermission } from '../permissions';
 
 
 const AUDIT_PAGE_SIZE = 15;
@@ -19,9 +20,108 @@ const formatAuditDate = (value, locale, emptyLabel) => {
 };
 
 const initials = (item) => {
-  const source = String(item.first_name || item.username || item.user_id || '?').trim();
+  const source = String(item.display_name || item.first_name || item.username || item.user_id || '?').trim();
   return source.slice(0, 2).toUpperCase();
 };
+
+const emptyPermissions = () => Object.fromEntries(
+  Object.values(PERMISSIONS).map((permission) => [permission, false])
+);
+
+const PERMISSION_PARENTS = {
+  [PERMISSIONS.statisticsManage]: PERMISSIONS.statisticsView,
+  [PERMISSIONS.usersProfileEdit]: PERMISSIONS.usersView,
+  [PERMISSIONS.usersArchiveClear]: PERMISSIONS.usersView,
+  [PERMISSIONS.usersAccess]: PERMISSIONS.usersView,
+  [PERMISSIONS.usersBalance]: PERMISSIONS.usersView,
+  [PERMISSIONS.usersBlock]: PERMISSIONS.usersView,
+  [PERMISSIONS.usersDelete]: PERMISSIONS.usersView,
+  [PERMISSIONS.staffAdd]: PERMISSIONS.staffView,
+  [PERMISSIONS.staffManage]: PERMISSIONS.staffView,
+};
+
+const setPermissionValue = (permissions, permission, enabled) => {
+  const next = { ...emptyPermissions(), ...(permissions || {}), [permission]: enabled };
+  if (enabled && PERMISSION_PARENTS[permission]) {
+    next[PERMISSION_PARENTS[permission]] = true;
+  }
+  if (!enabled) {
+    Object.entries(PERMISSION_PARENTS).forEach(([child, parent]) => {
+      if (parent === permission) next[child] = false;
+    });
+  }
+  return next;
+};
+
+const permissionGroups = (tr) => [
+  {
+    id: 'statistics',
+    title: tr('Statistics', 'Статистика'),
+    description: tr('Studio viewing and daily presentation data.', 'Режим студии и данные для презентационной статистики.'),
+    items: [
+      [PERMISSIONS.statisticsView, tr('Open Statistics and Studio mode', 'Открывать статистику и режим студии')],
+      [PERMISSIONS.statisticsManage, tr('Add, edit and delete days', 'Добавлять, изменять и удалять дни')],
+      [PERMISSIONS.statisticsCommand, tr('Use /stats in the bot', 'Использовать /stats в боте')],
+    ],
+  },
+  {
+    id: 'dashboard',
+    title: tr('Dashboard', 'Дашборд'),
+    items: [[PERMISSIONS.dashboardView, tr('Open the live dashboard', 'Открывать рабочий дашборд')]],
+  },
+  {
+    id: 'users',
+    title: tr('Users', 'Пользователи'),
+    description: tr('Viewing is the parent permission for all user actions.', 'Просмотр — базовое право для всех действий с пользователями.'),
+    items: [
+      [PERMISSIONS.usersView, tr('Open users and view cards', 'Открывать пользователей и карточки')],
+      [PERMISSIONS.usersProfileEdit, tr('Allow name and Trader ID editing', 'Разрешать изменение имени и Trader ID')],
+      [PERMISSIONS.usersArchiveClear, tr('Open archives and clear cache', 'Открывать архивы и очищать кэш')],
+      [PERMISSIONS.usersAccess, tr('Edit trading access', 'Редактировать доступ к торговле')],
+      [PERMISSIONS.usersBalance, tr('Edit balance', 'Изменять баланс')],
+      [PERMISSIONS.usersBlock, tr('Block and unblock users', 'Блокировать и разблокировать')],
+      [PERMISSIONS.usersDelete, tr('Delete users', 'Удалять пользователей')],
+    ],
+  },
+  {
+    id: 'staff',
+    title: tr('Managers', 'Менеджеры'),
+    description: tr('Protected administrators remain immutable.', 'Защищённые администраторы всегда остаются недоступны для изменений.'),
+    items: [
+      [PERMISSIONS.staffView, tr('Open staff and /stats history', 'Открывать сотрудников и историю /stats')],
+      [PERMISSIONS.staffAdd, tr('Add staff members', 'Добавлять сотрудников')],
+      [PERMISSIONS.staffManage, tr('Manage staff access', 'Управлять доступами сотрудников')],
+    ],
+  },
+  {
+    id: 'broadcast',
+    title: tr('Broadcast', 'Рассылка'),
+    items: [[PERMISSIONS.broadcastManage, tr('Create and send broadcasts', 'Создавать и отправлять рассылки')]],
+  },
+  {
+    id: 'settings',
+    title: tr('Settings', 'Настройки'),
+    description: tr('Each settings card is granted separately.', 'Каждая карточка настроек выдаётся отдельно.'),
+    items: [
+      [PERMISSIONS.settingsStreams, tr('Streams', 'Стримы')],
+      [PERMISSIONS.settingsAi, tr('AI chat', 'AI чат')],
+      [PERMISSIONS.settingsSystemAccess, tr('System access', 'Доступ к системе')],
+      [PERMISSIONS.settingsFunnel, tr('Bot funnel', 'Воронка бота')],
+      [PERMISSIONS.settingsApi, 'API'],
+      [PERMISSIONS.settingsInterface, tr('Interface language', 'Язык интерфейса')],
+    ],
+  },
+  {
+    id: 'strategies',
+    title: tr('Strategies', 'Стратегии'),
+    items: [[PERMISSIONS.strategiesManage, tr('Open and fully manage strategies', 'Открывать и полностью управлять стратегиями')]],
+  },
+  {
+    id: 'aichatter',
+    title: 'AI CHATTER',
+    items: [[PERMISSIONS.aiChatterManage, tr('Open and fully manage AI Chatter', 'Открывать и полностью управлять AI Chatter')]],
+  },
+];
 
 export default function ManagersPage({ adminUser }) {
   const { locale, tr } = useAdminLocale();
@@ -29,12 +129,12 @@ export default function ManagersPage({ adminUser }) {
     {
       value: 'manager',
       label: tr('Manager', 'Менеджер'),
-      hint: tr('Can only use the /stats command.', 'Может использовать только команду /stats.'),
+      hint: tr('Default template: only the /stats command.', 'Шаблон по умолчанию: только команда /stats.'),
     },
     {
       value: 'admin',
       label: tr('Administrator', 'Администратор'),
-      hint: tr('Can open the Admin Center and use /stats.', 'Имеет доступ к админцентру и команде /stats.'),
+      hint: tr('Default template: full access. Available only to the system administrator.', 'Шаблон по умолчанию: полный доступ. Назначает только системный администратор.'),
     },
   ];
   const auditStatusOptions = [
@@ -56,8 +156,18 @@ export default function ManagersPage({ adminUser }) {
     roleOptions.find((item) => item.value === role)?.label || tr('Manager', 'Менеджер')
   );
   const [staff, setStaff] = useState([]);
+  const [permissionTemplates, setPermissionTemplates] = useState({
+    manager: { ...emptyPermissions(), [PERMISSIONS.statisticsCommand]: true },
+    admin: Object.fromEntries(Object.values(PERMISSIONS).map((permission) => [permission, true])),
+  });
+  const [staffName, setStaffName] = useState('');
   const [telegramId, setTelegramId] = useState('');
   const [newRole, setNewRole] = useState('manager');
+  const [newPermissions, setNewPermissions] = useState({
+    ...emptyPermissions(),
+    [PERMISSIONS.statisticsCommand]: true,
+  });
+  const [accessEditor, setAccessEditor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState('');
@@ -70,10 +180,17 @@ export default function ManagersPage({ adminUser }) {
   const [auditLoading, setAuditLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const canAddStaff = hasPermission(adminUser, PERMISSIONS.staffAdd);
+  const canManageStaff = hasPermission(adminUser, PERMISSIONS.staffManage);
+  const isProtectedActor = Boolean(adminUser?.is_protected);
+  const canGrantPermission = (permission) => hasPermission(adminUser, permission);
 
   const loadStaff = useCallback(async () => {
     const result = await apiAdminFetchJson('/api/admin/staff');
     setStaff(result.staff || []);
+    if (result.permission_templates) {
+      setPermissionTemplates(result.permission_templates);
+    }
   }, []);
 
   const loadAudit = useCallback(async () => {
@@ -117,6 +234,11 @@ export default function ManagersPage({ adminUser }) {
   };
 
   const addStaff = async () => {
+    const displayName = staffName.trim();
+    if (!displayName) {
+      setError(tr('Enter the employee name', 'Введите имя сотрудника'));
+      return;
+    }
     const userId = Number(telegramId);
     if (!Number.isSafeInteger(userId) || userId <= 0) {
       setError(tr('Enter a valid staff Telegram ID', 'Введите корректный Telegram ID сотрудника'));
@@ -127,8 +249,14 @@ export default function ManagersPage({ adminUser }) {
     try {
       await apiAdminFetchJson('/api/admin/staff', {
         method: 'POST',
-        body: JSON.stringify({ user_id: userId, role: newRole }),
+        body: JSON.stringify({
+          user_id: userId,
+          display_name: displayName,
+          role: newRole,
+          permissions: newPermissions,
+        }),
       });
+      setStaffName('');
       setTelegramId('');
       flashSuccess(tr(
         `${roleLabel(newRole)} added: ${userId}`,
@@ -142,7 +270,82 @@ export default function ManagersPage({ adminUser }) {
     }
   };
 
-  const updateStaff = async (item, patch) => {
+  const applyTemplate = (role) => {
+    const template = permissionTemplates[role] || emptyPermissions();
+    return Object.fromEntries(
+      Object.values(PERMISSIONS).map((permission) => [
+        permission,
+        Boolean(template[permission]) && canGrantPermission(permission),
+      ])
+    );
+  };
+
+  const changeNewRole = (role) => {
+    setNewRole(role);
+    setNewPermissions(applyTemplate(role));
+  };
+
+  const openNewAccessEditor = () => {
+    setAccessEditor({
+      mode: 'new',
+      user_id: null,
+      display_name: staffName,
+      role: newRole,
+      permissions: { ...newPermissions },
+    });
+  };
+
+  const openStaffAccessEditor = (item) => {
+    setAccessEditor({
+      mode: 'existing',
+      user_id: item.user_id,
+      display_name: item.display_name || item.first_name || '',
+      role: item.role || 'manager',
+      permissions: { ...emptyPermissions(), ...(item.permissions || {}) },
+    });
+  };
+
+  const updateEditorPermission = (permission, enabled) => {
+    if (!canGrantPermission(permission)) return;
+    setAccessEditor((current) => ({
+      ...current,
+      permissions: setPermissionValue(current.permissions, permission, enabled),
+    }));
+  };
+
+  const updateEditorRole = (role) => {
+    setAccessEditor((current) => ({
+      ...current,
+      role,
+      permissions: applyTemplate(role),
+    }));
+  };
+
+  const saveAccessEditor = async () => {
+    if (!accessEditor) return;
+    const displayName = String(accessEditor.display_name || '').trim();
+    if (!displayName) {
+      setError(tr('Enter the employee name', 'Введите имя сотрудника'));
+      return;
+    }
+    if (accessEditor.mode === 'new') {
+      setStaffName(displayName);
+      setNewRole(accessEditor.role);
+      setNewPermissions(accessEditor.permissions);
+      setAccessEditor(null);
+      return;
+    }
+    const item = staff.find((row) => String(row.user_id) === String(accessEditor.user_id));
+    if (!item) return;
+    const saved = await updateStaff(item, {
+      display_name: displayName,
+      role: accessEditor.role,
+      permissions: accessEditor.permissions,
+    });
+    if (saved) setAccessEditor(null);
+  };
+
+  async function updateStaff(item, patch) {
     setSavingId(String(item.user_id));
     setError('');
     setDeleteConfirmId('');
@@ -153,12 +356,14 @@ export default function ManagersPage({ adminUser }) {
       });
       flashSuccess(tr('Staff access has been updated', 'Доступ сотрудника обновлён'));
       await loadStaff();
+      return true;
     } catch (requestError) {
       setError(requestError.message || tr('Could not update access', 'Не удалось обновить доступ'));
+      return false;
     } finally {
       setSavingId('');
     }
-  };
+  }
 
   const deleteStaff = async (item) => {
     setSavingId(String(item.user_id));
@@ -196,8 +401,10 @@ export default function ManagersPage({ adminUser }) {
           <div className="admin-badge">{tr('Staff access', 'Доступ сотрудников')}</div>
           <h3 className="admin-section-title">{tr('Managers and administrators', 'Менеджеры и администраторы')}</h3>
           <p className="admin-muted">
-            {tr('A manager can only use ', 'Менеджер получает только команду ')}<code>/stats</code>.
-            {' '}{tr('An administrator can also open the entire Admin Center.', 'Администратор также может открывать весь админцентр.')}
+            {tr(
+              'The role applies a starting template. Actual access is configured separately for each employee.',
+              'Роль задаёт стартовый шаблон. Фактические права настраиваются отдельно для каждого сотрудника.'
+            )}
           </p>
         </div>
         <div className="admin-managers-command">
@@ -210,19 +417,28 @@ export default function ManagersPage({ adminUser }) {
       {error ? <div className="admin-error admin-floating-notice">{error}</div> : null}
       {success ? <div className="admin-success admin-floating-notice">{success}</div> : null}
 
-      <section className="admin-card admin-managers-add">
+      {canAddStaff ? <section className="admin-card admin-managers-add">
         <div className="admin-section-head">
           <div>
             <h3 className="admin-section-title">{tr('Add staff member', 'Добавить сотрудника')}</h3>
             <p className="admin-muted">
               {tr(
-                'You can add an ID in advance. Name and username appear after the staff member starts the bot.',
-                'Можно добавить ID заранее. Имя и username появятся после первого запуска бота сотрудником.'
+                'Enter an internal employee name, Telegram ID and configure access before adding.',
+                'Укажите внутреннее имя сотрудника, Telegram ID и настройте доступ перед добавлением.'
               )}
             </p>
           </div>
         </div>
         <div className="admin-managers-add-grid">
+          <label>
+            <span>{tr('Employee name', 'Имя сотрудника')}</span>
+            <input
+              className="admin-input"
+              placeholder={tr('For example, Anna', 'Например, Анна')}
+              value={staffName}
+              onChange={(event) => setStaffName(event.target.value.slice(0, 100))}
+            />
+          </label>
           <label>
             <span>Telegram ID</span>
             <input
@@ -238,13 +454,23 @@ export default function ManagersPage({ adminUser }) {
             <select
               className="admin-input"
               value={newRole}
-              onChange={(event) => setNewRole(event.target.value)}
+              onChange={(event) => changeNewRole(event.target.value)}
             >
               {roleOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
+                <option
+                  key={option.value}
+                  value={option.value}
+                  disabled={option.value === 'admin' && !isProtectedActor}
+                >
+                  {option.label}
+                </option>
               ))}
             </select>
           </label>
+          <button className="admin-btn-outline admin-access-configure" type="button" onClick={openNewAccessEditor}>
+            {tr('Configure access', 'Настроить доступ')}
+            <span>{Object.values(newPermissions).filter(Boolean).length}</span>
+          </button>
           <button className="admin-btn" type="button" disabled={savingId === 'new'} onClick={addStaff}>
             {savingId === 'new' ? tr('Adding…', 'Добавление…') : tr('Add', 'Добавить')}
           </button>
@@ -252,7 +478,7 @@ export default function ManagersPage({ adminUser }) {
         <div className="admin-managers-role-hint">
           {roleOptions.find((option) => option.value === newRole)?.hint}
         </div>
-      </section>
+      </section> : null}
 
       <section className="admin-card">
         <div className="admin-row-between admin-managers-list-head">
@@ -275,6 +501,13 @@ export default function ManagersPage({ adminUser }) {
             const isSelf = Number(item.user_id) === Number(adminUser?.user_id);
             const isSaving = savingId === String(item.user_id);
             const active = Boolean(Number(item.is_active));
+            const isProtected = Boolean(item.is_protected);
+            const canEditItem = (
+              canManageStaff
+              && !isSelf
+              && !isProtected
+              && (item.role !== 'admin' || isProtectedActor)
+            );
             return (
               <article
                 className={`admin-manager-card ${active ? '' : 'is-disabled'}`}
@@ -286,8 +519,9 @@ export default function ManagersPage({ adminUser }) {
                   </div>
                   <div>
                     <div className="admin-manager-name">
-                      {item.first_name || (item.username ? `@${item.username}` : tr('Profile not loaded yet', 'Профиль ещё не получен'))}
+                      {item.display_name || item.first_name || (item.username ? `@${item.username}` : tr('Profile not loaded yet', 'Профиль ещё не получен'))}
                       {isSelf ? <span>{tr('You', 'Вы')}</span> : null}
+                      {isProtected ? <span className="admin-protected-badge">{tr('Protected', 'Защищён')}</span> : null}
                     </div>
                     {item.username && item.first_name ? (
                       <div className="admin-muted">@{item.username}</div>
@@ -297,23 +531,21 @@ export default function ManagersPage({ adminUser }) {
                 </div>
 
                 <div className="admin-manager-controls">
-                  <label>
-                    <span>{tr('Role', 'Роль')}</span>
-                    <select
-                      className="admin-input"
-                      value={item.role || 'manager'}
-                      disabled={isSelf || isSaving}
-                      onChange={(event) => updateStaff(item, { role: event.target.value })}
-                    >
-                      {roleOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                  </label>
+                  <button
+                    type="button"
+                    className="admin-btn-outline admin-access-configure"
+                    disabled={!canEditItem || isSaving}
+                    onClick={() => openStaffAccessEditor(item)}
+                  >
+                    {isProtected
+                      ? tr('System access', 'Системный доступ')
+                      : tr('Configure access', 'Настроить доступ')}
+                    <span>{Object.values(item.permissions || {}).filter(Boolean).length}</span>
+                  </button>
                   <button
                     type="button"
                     className={`admin-manager-status ${active ? 'is-active' : ''}`}
-                    disabled={isSelf || isSaving}
+                    disabled={!canEditItem || isSaving}
                     onClick={() => updateStaff(item, { is_active: !active })}
                   >
                     <span />
@@ -335,7 +567,7 @@ export default function ManagersPage({ adminUser }) {
                     <button
                       type="button"
                       className="admin-mini-action danger"
-                      disabled={isSelf || isSaving}
+                      disabled={!canEditItem || isSaving}
                       onClick={() => setDeleteConfirmId(String(item.user_id))}
                     >
                       {tr('Remove', 'Удалить')}
@@ -466,6 +698,126 @@ export default function ManagersPage({ adminUser }) {
           </div>
         ) : null}
       </section>
+
+      {accessEditor ? (
+        <div
+          className="admin-modal-backdrop admin-access-modal-backdrop"
+          role="presentation"
+          onMouseDown={() => !savingId && setAccessEditor(null)}
+        >
+          <div
+            className="admin-modal admin-access-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="staff-access-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="admin-row-between admin-access-modal-head">
+              <div>
+                <div className="admin-badge">{tr('Personal access', 'Персональный доступ')}</div>
+                <h3 id="staff-access-title" className="admin-section-title">
+                  {accessEditor.mode === 'new'
+                    ? tr('New employee permissions', 'Права нового сотрудника')
+                    : `${tr('Employee access', 'Доступ сотрудника')} · ${accessEditor.user_id}`}
+                </h3>
+              </div>
+              <button className="admin-btn-outline" type="button" onClick={() => setAccessEditor(null)}>
+                {tr('Close', 'Закрыть')}
+              </button>
+            </div>
+
+            <div className="admin-access-identity-grid">
+              <label>
+                <span>{tr('Employee name', 'Имя сотрудника')}</span>
+                <input
+                  className="admin-input"
+                  value={accessEditor.display_name}
+                  onChange={(event) => setAccessEditor((current) => ({
+                    ...current,
+                    display_name: event.target.value.slice(0, 100),
+                  }))}
+                />
+              </label>
+              <label>
+                <span>{tr('Role template', 'Шаблон роли')}</span>
+                <select
+                  className="admin-input"
+                  value={accessEditor.role}
+                  onChange={(event) => updateEditorRole(event.target.value)}
+                >
+                  {roleOptions.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={option.value === 'admin' && !isProtectedActor}
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="admin-access-template-note">
+              {tr(
+                'Changing the role reapplies its recommended template. You can then adjust every switch.',
+                'При смене роли применяется рекомендуемый шаблон. После этого каждый переключатель можно настроить.'
+              )}
+            </div>
+
+            <div className="admin-access-groups">
+              {permissionGroups(tr).map((group) => (
+                <section className="admin-access-group" key={group.id}>
+                  <div className="admin-access-group-head">
+                    <strong>{group.title}</strong>
+                    {group.description ? <p>{group.description}</p> : null}
+                  </div>
+                  <div className="admin-access-options">
+                    {group.items.map(([permission, label]) => {
+                      const enabled = Boolean(accessEditor.permissions?.[permission]);
+                      const available = canGrantPermission(permission);
+                      return (
+                        <button
+                          key={permission}
+                          type="button"
+                          className={`admin-access-option ${enabled ? 'is-enabled' : ''}`}
+                          disabled={!available}
+                          onClick={() => updateEditorPermission(permission, !enabled)}
+                          aria-pressed={enabled}
+                        >
+                          <span className="admin-access-option-copy">
+                            <b>{label}</b>
+                            {!available ? (
+                              <small>{tr('Unavailable: you do not have this permission', 'Недоступно: у вас нет этого права')}</small>
+                            ) : null}
+                          </span>
+                          <span className="admin-access-switch" aria-hidden="true"><i /></span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+
+            <div className="admin-access-modal-footer">
+              <div>
+                <strong>{Object.values(accessEditor.permissions || {}).filter(Boolean).length}</strong>
+                {' '}{tr('permissions enabled', 'прав включено')}
+              </div>
+              <div className="admin-row-actions">
+                <button className="admin-btn-outline" type="button" onClick={() => setAccessEditor(null)}>
+                  {tr('Cancel', 'Отмена')}
+                </button>
+                <button className="admin-btn" type="button" disabled={Boolean(savingId)} onClick={saveAccessEditor}>
+                  {accessEditor.mode === 'new'
+                    ? tr('Apply', 'Применить')
+                    : tr('Save access', 'Сохранить доступ')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

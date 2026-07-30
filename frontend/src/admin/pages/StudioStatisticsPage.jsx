@@ -67,7 +67,11 @@ const normalizeEditor = (day, strategies, date) => {
   };
 };
 
-export default function StudioStatisticsPage({ studioMode, onStudioModeChange }) {
+export default function StudioStatisticsPage({
+  studioMode,
+  onStudioModeChange,
+  canManageDays = false,
+}) {
   const { locale, tr } = useAdminLocale();
   const [period, setPeriod] = useState('7days');
   const [dateFrom, setDateFrom] = useState(dateDaysAgo(6));
@@ -292,9 +296,15 @@ export default function StudioStatisticsPage({ studioMode, onStudioModeChange })
               <button type="button" className="admin-btn-outline" onClick={() => onStudioModeChange(true)}>
                 <span aria-hidden="true">◫</span> {tr('Studio mode', 'Режим студии')}
               </button>
-              <button type="button" className="admin-btn" onClick={() => openEditor()}>
-                <span aria-hidden="true">＋</span> {tr('Add / edit day', 'Добавить / изменить день')}
-              </button>
+              {canManageDays ? (
+                <button type="button" className="admin-btn" onClick={() => openEditor()}>
+                  <span aria-hidden="true">＋</span> {tr('Add / edit day', 'Добавить / изменить день')}
+                </button>
+              ) : (
+                <span className="admin-muted">
+                  {tr('Studio viewing only', 'Только просмотр и режим студии')}
+                </span>
+              )}
             </div>
           </div>
 
@@ -441,7 +451,7 @@ export default function StudioStatisticsPage({ studioMode, onStudioModeChange })
         ) : null}
       </section>
 
-      {!studioMode && days.length ? (
+      {!studioMode && canManageDays && days.length ? (
         <section className="admin-card studio-days-card">
           <h3 className="admin-section-title">{tr('Days in this period', 'Дни в этом периоде')}</h3>
           <div className="admin-muted">
@@ -467,7 +477,7 @@ export default function StudioStatisticsPage({ studioMode, onStudioModeChange })
         </section>
       ) : null}
 
-      {editorOpen ? (
+      {editorOpen && canManageDays ? (
         <div className="studio-modal-backdrop" role="presentation" onMouseDown={() => !saving && setEditorOpen(false)}>
           <div
             className="studio-editor-modal"

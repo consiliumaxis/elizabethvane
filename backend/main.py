@@ -257,6 +257,74 @@ except ModuleNotFoundError:
         normalize_staff_role,
         parse_stats_target,
     )
+try:
+    from backend.staff_permissions import (
+        ADMIN_CENTER_PERMISSIONS,
+        ALL_PERMISSIONS,
+        PERM_AICHATTER_MANAGE,
+        PERM_BROADCAST_MANAGE,
+        PERM_DASHBOARD_VIEW,
+        PERM_SETTINGS_AI,
+        PERM_SETTINGS_API,
+        PERM_SETTINGS_FUNNEL,
+        PERM_SETTINGS_INTERFACE,
+        PERM_SETTINGS_STREAMS,
+        PERM_SETTINGS_SYSTEM_ACCESS,
+        PERM_STAFF_ADD,
+        PERM_STAFF_MANAGE,
+        PERM_STAFF_VIEW,
+        PERM_STATS_COMMAND,
+        PERM_STATS_MANAGE,
+        PERM_STATS_VIEW,
+        PERM_STRATEGIES_MANAGE,
+        PERM_USERS_ACCESS,
+        PERM_USERS_ARCHIVE_CLEAR,
+        PERM_USERS_BALANCE,
+        PERM_USERS_BLOCK,
+        PERM_USERS_DELETE,
+        PERM_USERS_PROFILE_EDIT,
+        PERM_USERS_VIEW,
+        SETTINGS_PERMISSIONS,
+        has_any_permission,
+        has_permission,
+        normalize_staff_permissions,
+        permissions_are_subset,
+        role_default_permissions,
+    )
+except ModuleNotFoundError:
+    from staff_permissions import (
+        ADMIN_CENTER_PERMISSIONS,
+        ALL_PERMISSIONS,
+        PERM_AICHATTER_MANAGE,
+        PERM_BROADCAST_MANAGE,
+        PERM_DASHBOARD_VIEW,
+        PERM_SETTINGS_AI,
+        PERM_SETTINGS_API,
+        PERM_SETTINGS_FUNNEL,
+        PERM_SETTINGS_INTERFACE,
+        PERM_SETTINGS_STREAMS,
+        PERM_SETTINGS_SYSTEM_ACCESS,
+        PERM_STAFF_ADD,
+        PERM_STAFF_MANAGE,
+        PERM_STAFF_VIEW,
+        PERM_STATS_COMMAND,
+        PERM_STATS_MANAGE,
+        PERM_STATS_VIEW,
+        PERM_STRATEGIES_MANAGE,
+        PERM_USERS_ACCESS,
+        PERM_USERS_ARCHIVE_CLEAR,
+        PERM_USERS_BALANCE,
+        PERM_USERS_BLOCK,
+        PERM_USERS_DELETE,
+        PERM_USERS_PROFILE_EDIT,
+        PERM_USERS_VIEW,
+        SETTINGS_PERMISSIONS,
+        has_any_permission,
+        has_permission,
+        normalize_staff_permissions,
+        permissions_are_subset,
+        role_default_permissions,
+    )
 
 load_dotenv()
 
@@ -512,14 +580,15 @@ def build_admin_webapp_url() -> str:
     return f"{base_url}/admin/{token}"
 
 
-async def get_staff_role(user_id: int) -> Optional[str]:
+async def get_staff_profile(user_id: int) -> Optional[Dict[str, Any]]:
     if not db_pool:
         return None
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
                 """
-                SELECT role
+                SELECT user_id, role, is_active, display_name,
+                       permissions_json, is_protected
                 FROM admin_users
                 WHERE user_id = %s AND is_active = 1
                 LIMIT 1
@@ -530,31 +599,74 @@ async def get_staff_role(user_id: int) -> Optional[str]:
     if not row:
         return None
     role = str(row.get("role") or "").strip().lower()
-    return role if role in STAFF_ROLES else None
+    if role not in STAFF_ROLES:
+        return None
+    is_protected = bool(int(row.get("is_protected") or 0))
+    return {
+        "user_id": int(row.get("user_id") or user_id),
+        "role": role,
+        "is_active": True,
+        "display_name": str(row.get("display_name") or "").strip(),
+        "is_protected": is_protected,
+        "permissions": normalize_staff_permissions(
+            row.get("permissions_json"),
+            role,
+            protected=is_protected,
+        ),
+    }
+
+
+async def get_staff_role(user_id: int) -> Optional[str]:
+    profile = await get_staff_profile(user_id)
+    return profile.get("role") if profile else None
 
 
 async def is_admin_user(user_id: int) -> bool:
     return await get_staff_role(user_id) == STAFF_ROLE_ADMIN
 
 
+async def has_admin_center_access(user_id: int) -> bool:
+    profile = await get_staff_profile(user_id)
+    return bool(profile and has_any_permission(profile, ADMIN_CENTER_PERMISSIONS))
+
+
 async def get_admin_user(
     user=Depends(get_telegram_user),
     x_admin_token: str = Header(default="", alias="X-Admin-Token"),
 ):
-    if not await is_admin_user(int(user["user_id"])):
+    profile = await get_staff_profile(int(user["user_id"]))
+    if not profile or not has_any_permission(profile, ADMIN_CENTER_PERMISSIONS):
         raise HTTPException(status_code=403, detail="Admin access denied")
 
     expected = get_admin_panel_token()
     provided = (x_admin_token or "").strip()
     if provided and secrets.compare_digest(provided, expected):
-        return user
+        return {**user, **profile}
 
     # Telegram WebApp initData already proves the user identity; keep old
     # admin buttons working even if their URL token was rotated by a deploy.
-    return user
+    return {**user, **profile}
 
 
-app.include_router(create_aichatter_admin_router(get_admin_user))
+def require_permission(permission: str):
+    async def dependency(admin=Depends(get_admin_user)):
+        if not has_permission(admin, permission):
+            raise HTTPException(status_code=403, detail="Недостаточно прав для этого действия")
+        return admin
+
+    return dependency
+
+
+def require_any_permission(*permissions: str):
+    async def dependency(admin=Depends(get_admin_user)):
+        if not has_any_permission(admin, permissions):
+            raise HTTPException(status_code=403, detail="Недостаточно прав для этого раздела")
+        return admin
+
+    return dependency
+
+
+app.include_router(create_aichatter_admin_router(require_permission(PERM_AICHATTER_MANAGE)))
 
 
 async def get_stream_settings_row():
@@ -3189,6 +3301,10 @@ async def admin_me(admin=Depends(get_admin_user)):
             "user_id": int(admin["user_id"]),
             "username": admin.get("username") or "",
             "first_name": admin.get("first_name") or "",
+            "display_name": admin.get("display_name") or "",
+            "role": admin.get("role") or "manager",
+            "is_protected": bool(admin.get("is_protected")),
+            "permissions": admin.get("permissions") or {},
         },
     }
 
@@ -3197,7 +3313,7 @@ async def admin_me(admin=Depends(get_admin_user)):
 async def admin_stats(
     date_from: Optional[str] = Query(default=None),
     date_to: Optional[str] = Query(default=None),
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_DASHBOARD_VIEW)),
 ):
     async def safe_count(cur, sql: str) -> int:
         try:
@@ -3364,7 +3480,7 @@ async def get_studio_strategy_options(cur) -> List[Dict[str, Any]]:
 async def admin_studio_statistics(
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_STATS_VIEW)),
 ):
     try:
         range_start, range_end = normalize_date_range(date_from, date_to)
@@ -3430,7 +3546,7 @@ async def admin_studio_statistics(
 @app.get("/api/admin/studio-statistics/day/{stat_date}")
 async def admin_studio_statistics_day(
     stat_date: str,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_STATS_MANAGE)),
 ):
     try:
         normalized_date = parse_iso_date(stat_date, "date")
@@ -3461,7 +3577,7 @@ async def admin_studio_statistics_day(
 @app.post("/api/admin/studio-statistics/day")
 async def admin_studio_statistics_save_day(
     request: Request,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_STATS_MANAGE)),
 ):
     try:
         normalized = normalize_daily_stat(await request.json())
@@ -3512,7 +3628,7 @@ async def admin_studio_statistics_save_day(
 @app.delete("/api/admin/studio-statistics/day/{stat_date}")
 async def admin_studio_statistics_delete_day(
     stat_date: str,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_STATS_MANAGE)),
 ):
     try:
         normalized_date = parse_iso_date(stat_date, "date")
@@ -3536,7 +3652,7 @@ async def admin_studio_statistics_delete_day(
 @app.get("/api/admin/users/{target_user_id}/archives")
 async def admin_user_data_archives(
     target_user_id: int,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_USERS_ARCHIVE_CLEAR)),
 ):
     target_user_id = int(target_user_id or 0)
     if not target_user_id:
@@ -3572,7 +3688,7 @@ async def admin_user_data_archives(
 async def admin_user_data_archive_detail(
     target_user_id: int,
     archive_id: int,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_USERS_ARCHIVE_CLEAR)),
 ):
     target_user_id = int(target_user_id or 0)
     archive_id = int(archive_id or 0)
@@ -3602,7 +3718,7 @@ async def admin_user_data_archive_detail(
 async def admin_clear_user_cache(
     target_user_id: int,
     request: Request,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_USERS_ARCHIVE_CLEAR)),
 ):
     target_user_id = int(target_user_id or 0)
     if not target_user_id:
@@ -3713,7 +3829,12 @@ async def admin_clear_user_cache(
 
 
 @app.get("/api/admin/users")
-async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=Depends(get_admin_user)):
+async def admin_users(
+    limit: int = 50,
+    offset: int = 0,
+    search: str = "",
+    admin=Depends(require_permission(PERM_USERS_VIEW)),
+):
     limit = max(1, min(int(limit), 300))
     offset = max(0, int(offset))
     search = (search or "").strip()
@@ -3810,7 +3931,7 @@ async def admin_users(limit: int = 50, offset: int = 0, search: str = "", admin=
 
 
 @app.post("/api/admin/users/block")
-async def admin_block_user(request: Request, admin=Depends(get_admin_user)):
+async def admin_block_user(request: Request, admin=Depends(require_permission(PERM_USERS_BLOCK))):
     data = await request.json()
     try:
         target_user_id = int(data.get("user_id") or 0)
@@ -3824,6 +3945,15 @@ async def admin_block_user(request: Request, admin=Depends(get_admin_user)):
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT user_id FROM admin_users WHERE user_id = %s LIMIT 1",
+                (target_user_id,),
+            )
+            if await cur.fetchone():
+                raise HTTPException(
+                    status_code=409,
+                    detail="Сначала удалите доступ сотрудника в разделе «Менеджеры»",
+                )
             await cur.execute("SELECT user_id FROM users WHERE user_id = %s LIMIT 1", (target_user_id,))
             if not await cur.fetchone():
                 raise HTTPException(status_code=404, detail="User not found")
@@ -3842,7 +3972,7 @@ async def admin_block_user(request: Request, admin=Depends(get_admin_user)):
 
 
 @app.post("/api/admin/users/access")
-async def admin_update_user_access(request: Request, admin=Depends(get_admin_user)):
+async def admin_update_user_access(request: Request, admin=Depends(require_permission(PERM_USERS_ACCESS))):
     data = await request.json()
     try:
         target_user_id = int(data.get("user_id") or 0)
@@ -3861,6 +3991,13 @@ async def admin_update_user_access(request: Request, admin=Depends(get_admin_use
             user_row = await cur.fetchone()
             if not user_row:
                 raise HTTPException(status_code=404, detail="User not found")
+            await cur.execute(
+                "SELECT is_protected FROM admin_users WHERE user_id = %s LIMIT 1",
+                (target_user_id,),
+            )
+            staff_row = await cur.fetchone()
+            if staff_row and bool(int(staff_row.get("is_protected") or 0)):
+                raise HTTPException(status_code=403, detail="Права системного администратора защищены")
 
             await cur.executemany(
                 """
@@ -3890,7 +4027,7 @@ async def admin_update_user_access(request: Request, admin=Depends(get_admin_use
 @app.post("/api/admin/users/profile-edit")
 async def admin_update_user_profile_edit_permission(
     request: Request,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_USERS_PROFILE_EDIT)),
 ):
     data = await request.json()
     try:
@@ -3923,7 +4060,7 @@ async def admin_update_user_profile_edit_permission(
 
 
 @app.post("/api/admin/users/balance")
-async def admin_update_user_balance(request: Request, admin=Depends(get_admin_user)):
+async def admin_update_user_balance(request: Request, admin=Depends(require_permission(PERM_USERS_BALANCE))):
     data = await request.json()
     try:
         target_user_id = int(data.get("user_id") or 0)
@@ -3975,7 +4112,10 @@ async def admin_update_user_balance(request: Request, admin=Depends(get_admin_us
 
 
 @app.delete("/api/admin/users/{target_user_id}")
-async def admin_delete_user(target_user_id: int, admin=Depends(get_admin_user)):
+async def admin_delete_user(
+    target_user_id: int,
+    admin=Depends(require_permission(PERM_USERS_DELETE)),
+):
     target_user_id = int(target_user_id or 0)
     if not target_user_id:
         raise HTTPException(status_code=400, detail="User id is required")
@@ -3984,6 +4124,15 @@ async def admin_delete_user(target_user_id: int, admin=Depends(get_admin_user)):
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT user_id FROM admin_users WHERE user_id = %s LIMIT 1",
+                (target_user_id,),
+            )
+            if await cur.fetchone():
+                raise HTTPException(
+                    status_code=409,
+                    detail="Сначала удалите доступ сотрудника в разделе «Менеджеры»",
+                )
             await cur.execute("SELECT user_id FROM users WHERE user_id = %s LIMIT 1", (target_user_id,))
             if not await cur.fetchone():
                 raise HTTPException(status_code=404, detail="User not found")
@@ -4034,20 +4183,38 @@ async def get_active_admin_count(cur) -> int:
 
 
 @app.get("/api/admin/staff")
-async def admin_staff(admin=Depends(get_admin_user)):
+async def admin_staff(admin=Depends(require_permission(PERM_STAFF_VIEW))):
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
                 """
-                SELECT a.user_id, a.role, a.is_active, a.granted_at, a.granted_by,
+                SELECT a.user_id, a.role, a.is_active, a.display_name,
+                       a.permissions_json, a.is_protected, a.granted_at, a.granted_by,
                        u.username, u.first_name, u.avatar_url
                 FROM admin_users a
                 LEFT JOIN users u ON u.user_id = a.user_id
                 ORDER BY a.is_active DESC, FIELD(a.role, 'admin', 'manager'), a.granted_at DESC
                 """
             )
-            rows = await cur.fetchall()
-    return {"status": "success", "staff": rows or []}
+            rows = await cur.fetchall() or []
+    staff_rows = []
+    for row in rows:
+        item = dict(row)
+        item["is_protected"] = bool(int(item.get("is_protected") or 0))
+        item["permissions"] = normalize_staff_permissions(
+            item.pop("permissions_json", None),
+            item.get("role"),
+            protected=item["is_protected"],
+        )
+        staff_rows.append(item)
+    return {
+        "status": "success",
+        "staff": staff_rows,
+        "permission_templates": {
+            "manager": role_default_permissions("manager"),
+            "admin": role_default_permissions("admin"),
+        },
+    }
 
 
 @app.get("/api/admin/staff/audit")
@@ -4056,7 +4223,7 @@ async def admin_staff_audit(
     offset: int = Query(default=0, ge=0),
     status: str = Query(default=""),
     search: str = Query(default=""),
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_STAFF_VIEW)),
 ):
     normalized_status = str(status or "").strip().lower()
     if normalized_status and normalized_status not in MANAGER_STATS_AUDIT_STATUSES:
@@ -4135,7 +4302,10 @@ async def admin_staff_audit(
 
 
 @app.post("/api/admin/staff")
-async def admin_staff_add(request: Request, admin=Depends(get_admin_user)):
+async def admin_staff_add(
+    request: Request,
+    admin=Depends(require_permission(PERM_STAFF_ADD)),
+):
     data = await request.json()
     try:
         target_user_id = int(data.get("user_id") or 0)
@@ -4143,32 +4313,74 @@ async def admin_staff_add(request: Request, admin=Depends(get_admin_user)):
         target_user_id = 0
     if target_user_id <= 0:
         raise HTTPException(status_code=400, detail="Укажите корректный Telegram ID")
+    if target_user_id == int(admin.get("user_id") or 0):
+        raise HTTPException(status_code=400, detail="Нельзя изменять собственный доступ")
     role = str(data.get("role") or "").strip().lower()
     if role not in STAFF_ROLES:
         raise HTTPException(status_code=400, detail="Некорректная роль сотрудника")
+    if role == STAFF_ROLE_ADMIN and not bool(admin.get("is_protected")):
+        raise HTTPException(status_code=403, detail="Только системный администратор может назначать администраторов")
+    display_name = re.sub(r"\s+", " ", str(data.get("display_name") or "").strip())[:100]
+    requested_permissions = normalize_staff_permissions(
+        data.get("permissions"),
+        role,
+        use_role_defaults_when_empty="permissions" not in data,
+    )
+    if not permissions_are_subset(requested_permissions, admin):
+        raise HTTPException(status_code=403, detail="Нельзя выдать право, которого нет у вас")
+    permissions_json = json.dumps(requested_permissions, ensure_ascii=False, sort_keys=True)
 
     async with db_pool.acquire() as conn:
-        async with conn.cursor() as cur:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT role, is_protected FROM admin_users WHERE user_id = %s LIMIT 1",
+                (target_user_id,),
+            )
+            existing = await cur.fetchone()
+            if existing and bool(int(existing.get("is_protected") or 0)):
+                raise HTTPException(status_code=403, detail="Права системного администратора защищены")
+            if (
+                existing
+                and str(existing.get("role") or "") == STAFF_ROLE_ADMIN
+                and not bool(admin.get("is_protected"))
+            ):
+                raise HTTPException(status_code=403, detail="Только системный администратор может управлять администраторами")
             await cur.execute(
                 """
-                INSERT INTO admin_users (user_id, role, is_active, granted_by)
-                VALUES (%s, %s, 1, %s)
+                INSERT INTO admin_users
+                    (user_id, role, is_active, display_name, permissions_json, is_protected, granted_by)
+                VALUES (%s, %s, 1, %s, %s, 0, %s)
                 ON DUPLICATE KEY UPDATE
                     role = VALUES(role),
                     is_active = 1,
+                    display_name = VALUES(display_name),
+                    permissions_json = VALUES(permissions_json),
                     granted_by = VALUES(granted_by),
                     granted_at = CURRENT_TIMESTAMP
                 """,
-                (target_user_id, role, int(admin["user_id"])),
+                (
+                    target_user_id,
+                    role,
+                    display_name or None,
+                    permissions_json,
+                    int(admin["user_id"]),
+                ),
             )
-    return {"status": "success", "user_id": target_user_id, "role": role, "is_active": 1}
+    return {
+        "status": "success",
+        "user_id": target_user_id,
+        "role": role,
+        "is_active": 1,
+        "display_name": display_name,
+        "permissions": requested_permissions,
+    }
 
 
 @app.patch("/api/admin/staff/{target_user_id}")
 async def admin_staff_update(
     target_user_id: int,
     request: Request,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_STAFF_MANAGE)),
 ):
     target_user_id = int(target_user_id or 0)
     data = await request.json()
@@ -4179,12 +4391,28 @@ async def admin_staff_update(
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
-                "SELECT user_id, role, is_active FROM admin_users WHERE user_id = %s LIMIT 1",
+                """
+                SELECT user_id, role, is_active, display_name,
+                       permissions_json, is_protected
+                FROM admin_users
+                WHERE user_id = %s
+                LIMIT 1
+                """,
                 (target_user_id,),
             )
             existing = await cur.fetchone()
             if not existing:
                 raise HTTPException(status_code=404, detail="Сотрудник не найден")
+            existing_protected = bool(int(existing.get("is_protected") or 0))
+            if target_user_id == current_admin_id:
+                raise HTTPException(status_code=400, detail="Нельзя изменять права собственной учётной записи")
+            if existing_protected:
+                raise HTTPException(status_code=403, detail="Права системного администратора защищены")
+            if (
+                str(existing.get("role") or "") == STAFF_ROLE_ADMIN
+                and not bool(admin.get("is_protected"))
+            ):
+                raise HTTPException(status_code=403, detail="Только системный администратор может управлять администраторами")
 
             role = (
                 str(data.get("role") or "").strip().lower()
@@ -4193,6 +4421,8 @@ async def admin_staff_update(
             )
             if role not in STAFF_ROLES:
                 raise HTTPException(status_code=400, detail="Некорректная роль сотрудника")
+            if role == STAFF_ROLE_ADMIN and not bool(admin.get("is_protected")):
+                raise HTTPException(status_code=403, detail="Только системный администратор может назначать администраторов")
             if "is_active" in data:
                 raw_active = data.get("is_active")
                 if isinstance(raw_active, str):
@@ -4206,24 +4436,64 @@ async def admin_staff_update(
                 and int(existing.get("is_active") or 0) == 1
                 and (role != STAFF_ROLE_ADMIN or is_active != 1)
             )
-            if target_user_id == current_admin_id and removes_admin_access:
-                raise HTTPException(status_code=400, detail="Нельзя отключить или понизить собственную учётную запись")
             if removes_admin_access and await get_active_admin_count(cur) <= 1:
                 raise HTTPException(status_code=400, detail="Нельзя удалить или понизить последнего администратора")
+
+            if "permissions" in data:
+                requested_permissions = normalize_staff_permissions(
+                    data.get("permissions"),
+                    role,
+                    use_role_defaults_when_empty=False,
+                )
+            elif role != str(existing.get("role") or ""):
+                requested_permissions = role_default_permissions(role)
+            else:
+                requested_permissions = normalize_staff_permissions(
+                    existing.get("permissions_json"),
+                    role,
+                )
+            if not permissions_are_subset(requested_permissions, admin):
+                raise HTTPException(status_code=403, detail="Нельзя выдать право, которого нет у вас")
+            display_name = (
+                re.sub(r"\s+", " ", str(data.get("display_name") or "").strip())[:100]
+                if "display_name" in data
+                else str(existing.get("display_name") or "").strip()
+            )
 
             await cur.execute(
                 """
                 UPDATE admin_users
-                SET role = %s, is_active = %s, granted_by = %s
+                SET role = %s,
+                    is_active = %s,
+                    display_name = %s,
+                    permissions_json = %s,
+                    granted_by = %s
                 WHERE user_id = %s
                 """,
-                (role, is_active, current_admin_id, target_user_id),
+                (
+                    role,
+                    is_active,
+                    display_name or None,
+                    json.dumps(requested_permissions, ensure_ascii=False, sort_keys=True),
+                    current_admin_id,
+                    target_user_id,
+                ),
             )
-    return {"status": "success", "user_id": target_user_id, "role": role, "is_active": is_active}
+    return {
+        "status": "success",
+        "user_id": target_user_id,
+        "role": role,
+        "is_active": is_active,
+        "display_name": display_name,
+        "permissions": requested_permissions,
+    }
 
 
 @app.delete("/api/admin/staff/{target_user_id}")
-async def admin_staff_delete(target_user_id: int, admin=Depends(get_admin_user)):
+async def admin_staff_delete(
+    target_user_id: int,
+    admin=Depends(require_permission(PERM_STAFF_MANAGE)),
+):
     target_user_id = int(target_user_id or 0)
     current_admin_id = int(admin["user_id"])
     if target_user_id == current_admin_id:
@@ -4232,12 +4502,19 @@ async def admin_staff_delete(target_user_id: int, admin=Depends(get_admin_user))
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
-                "SELECT user_id, role, is_active FROM admin_users WHERE user_id = %s LIMIT 1",
+                "SELECT user_id, role, is_active, is_protected FROM admin_users WHERE user_id = %s LIMIT 1",
                 (target_user_id,),
             )
             existing = await cur.fetchone()
             if not existing:
                 raise HTTPException(status_code=404, detail="Сотрудник не найден")
+            if bool(int(existing.get("is_protected") or 0)):
+                raise HTTPException(status_code=403, detail="Системного администратора нельзя удалить")
+            if (
+                str(existing.get("role") or "") == STAFF_ROLE_ADMIN
+                and not bool(admin.get("is_protected"))
+            ):
+                raise HTTPException(status_code=403, detail="Только системный администратор может удалять администраторов")
             if (
                 str(existing.get("role") or "") == STAFF_ROLE_ADMIN
                 and int(existing.get("is_active") or 0) == 1
@@ -4249,7 +4526,7 @@ async def admin_staff_delete(target_user_id: int, admin=Depends(get_admin_user))
 
 
 @app.get("/api/admin/admins")
-async def admin_admins(admin=Depends(get_admin_user)):
+async def admin_admins(admin=Depends(require_permission(PERM_STAFF_VIEW))):
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
@@ -4267,7 +4544,12 @@ async def admin_admins(admin=Depends(get_admin_user)):
 
 
 @app.post("/api/admin/admins/grant")
-async def admin_grant(request: Request, admin=Depends(get_admin_user)):
+async def admin_grant(
+    request: Request,
+    admin=Depends(require_permission(PERM_STAFF_MANAGE)),
+):
+    if not bool(admin.get("is_protected")):
+        raise HTTPException(status_code=403, detail="Только системный администратор может назначать администраторов")
     data = await request.json()
     try:
         target_user_id = int(data.get("user_id") or 0)
@@ -4291,25 +4573,42 @@ async def admin_grant(request: Request, admin=Depends(get_admin_user)):
             user_row = await cur.fetchone()
             if not user_row:
                 raise HTTPException(status_code=404, detail="User not found")
+            await cur.execute(
+                "SELECT is_protected FROM admin_users WHERE user_id = %s LIMIT 1",
+                (target_user_id,),
+            )
+            existing_staff = await cur.fetchone()
+            if existing_staff and bool(int(existing_staff.get("is_protected") or 0)):
+                raise HTTPException(status_code=403, detail="Права системного администратора защищены")
 
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                INSERT INTO admin_users (user_id, role, is_active, granted_by)
-                VALUES (%s, 'admin', 1, %s)
+                INSERT INTO admin_users (user_id, role, is_active, permissions_json, granted_by)
+                VALUES (%s, 'admin', 1, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     role = 'admin',
                     is_active = 1,
+                    permissions_json = VALUES(permissions_json),
                     granted_by = VALUES(granted_by),
                     granted_at = CURRENT_TIMESTAMP
                 """,
-                (target_user_id, granted_by),
+                (
+                    target_user_id,
+                    json.dumps(role_default_permissions("admin"), ensure_ascii=False, sort_keys=True),
+                    granted_by,
+                ),
             )
     return {"status": "success", "user_id": target_user_id}
 
 
 @app.post("/api/admin/admins/revoke")
-async def admin_revoke(request: Request, admin=Depends(get_admin_user)):
+async def admin_revoke(
+    request: Request,
+    admin=Depends(require_permission(PERM_STAFF_MANAGE)),
+):
+    if not bool(admin.get("is_protected")):
+        raise HTTPException(status_code=403, detail="Только системный администратор может отзывать права администратора")
     data = await request.json()
     try:
         target_user_id = int(data.get("user_id") or 0)
@@ -4323,7 +4622,7 @@ async def admin_revoke(request: Request, admin=Depends(get_admin_user)):
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
                 """
-                SELECT user_id
+                SELECT user_id, is_protected
                 FROM admin_users
                 WHERE user_id = %s AND is_active = 1 AND role = 'admin'
                 LIMIT 1
@@ -4333,6 +4632,8 @@ async def admin_revoke(request: Request, admin=Depends(get_admin_user)):
             existing_admin = await cur.fetchone()
             if not existing_admin:
                 raise HTTPException(status_code=404, detail="Admin not found")
+            if bool(int(existing_admin.get("is_protected") or 0)):
+                raise HTTPException(status_code=403, detail="Права системного администратора защищены")
 
             await cur.execute("SELECT COUNT(*) AS cnt FROM admin_users WHERE is_active = 1 AND role = 'admin'")
             active_count = int((await cur.fetchone() or {}).get("cnt") or 0)
@@ -4352,7 +4653,10 @@ async def admin_revoke(request: Request, admin=Depends(get_admin_user)):
 
 
 @app.post("/api/admin/broadcast")
-async def admin_broadcast(request: Request, admin=Depends(get_admin_user)):
+async def admin_broadcast(
+    request: Request,
+    admin=Depends(require_permission(PERM_BROADCAST_MANAGE)),
+):
     data = await request.json()
     text = (data.get("text") or "").strip()
     if not text:
@@ -4392,7 +4696,7 @@ async def admin_broadcast(request: Request, admin=Depends(get_admin_user)):
 async def admin_market_options(
     kind: str = Query(default="forex"),
     min_payout: int = Query(default=DEVSBITE_MIN_PAYOUT, ge=0, le=100),
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_SETTINGS_STREAMS)),
 ):
     return await get_market_options_payload(kind, min_payout)
 
@@ -4402,61 +4706,70 @@ async def admin_stream_assets(
     analysis_type: str = Query(default="forex"),
     market: str = Query(default="currencies"),
     min_payout: int = Query(default=DEVSBITE_MIN_PAYOUT, ge=0, le=100),
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_SETTINGS_STREAMS)),
 ):
     return await get_stream_asset_options_payload(analysis_type, market, min_payout)
 
 
 @app.get("/api/admin/settings")
-async def admin_settings(admin=Depends(get_admin_user)):
-    stream_settings = await get_stream_settings_row()
-    support_links = await get_support_links_row()
-    pocket_settings = await get_pocket_api_settings_row()
-    system_access_settings = await get_system_access_settings_row()
-    shared_ai_settings = await get_admin_analysis_settings()
-    async with db_pool.acquire() as conn:
-        async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT id, system_prompt, model, updated_at FROM ai_settings WHERE id = 1")
-            ai_settings = await cur.fetchone()
-            await cur.execute(
-                """
-                SELECT
-                    p.id,
-                    p.name,
-                    p.icon,
-                    p.is_system,
-                    p.allowed_timeframes,
-                    GROUP_CONCAT(i.name ORDER BY i.id SEPARATOR ', ') AS indicators_list,
-                    GROUP_CONCAT(i.`key` ORDER BY i.id SEPARATOR ',') AS indicator_keys
-                FROM presets p
-                LEFT JOIN preset_indicators pi ON pi.preset_id = p.id
-                LEFT JOIN indicators i ON i.id = pi.indicator_id
-                GROUP BY p.id
-                ORDER BY p.is_system DESC, p.id ASC
-                """
-            )
-            stream_strategies = await cur.fetchall()
-    if not ai_settings:
-        ai_settings = {"id": 1, "system_prompt": "You are a helpful trading assistant.", "model": "gpt-4o-mini", "updated_at": None}
-    ai_settings["openai_api_key"] = ""
-    ai_settings["openai_key_configured"] = bool(shared_ai_settings.get("gpt_api_key"))
+async def admin_settings(
+    admin=Depends(require_any_permission(*SETTINGS_PERMISSIONS)),
+):
+    settings: Dict[str, Any] = {}
+    if has_permission(admin, PERM_SETTINGS_STREAMS):
+        settings["streams"] = await get_stream_settings_row()
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT
+                        p.id,
+                        p.name,
+                        p.icon,
+                        p.is_system,
+                        p.allowed_timeframes,
+                        GROUP_CONCAT(i.name ORDER BY i.id SEPARATOR ', ') AS indicators_list,
+                        GROUP_CONCAT(i.`key` ORDER BY i.id SEPARATOR ',') AS indicator_keys
+                    FROM presets p
+                    LEFT JOIN preset_indicators pi ON pi.preset_id = p.id
+                    LEFT JOIN indicators i ON i.id = pi.indicator_id
+                    GROUP BY p.id
+                    ORDER BY p.is_system DESC, p.id ASC
+                    """
+                )
+                settings["stream_strategies"] = await cur.fetchall() or []
+    if has_permission(admin, PERM_SETTINGS_AI):
+        shared_ai_settings = await get_admin_analysis_settings()
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT id, system_prompt, model, updated_at FROM ai_settings WHERE id = 1")
+                ai_settings = await cur.fetchone()
+        if not ai_settings:
+            ai_settings = {
+                "id": 1,
+                "system_prompt": "You are a helpful trading assistant.",
+                "model": "gpt-4o-mini",
+                "updated_at": None,
+            }
+        ai_settings["openai_api_key"] = ""
+        ai_settings["openai_key_configured"] = bool(shared_ai_settings.get("gpt_api_key"))
+        settings["ai"] = ai_settings
+    if has_permission(admin, PERM_SETTINGS_FUNNEL):
+        settings["support"] = await get_support_links_row()
+    if has_permission(admin, PERM_SETTINGS_API):
+        settings["pocket_api"] = await get_pocket_api_settings_row()
+    if has_permission(admin, PERM_SETTINGS_SYSTEM_ACCESS):
+        settings["system_access"] = await get_system_access_settings_row()
     return {
         "status": "success",
-        "settings": {
-            "ai": ai_settings,
-            "streams": stream_settings,
-            "stream_strategies": stream_strategies or [],
-            "support": support_links,
-            "pocket_api": pocket_settings,
-            "system_access": system_access_settings,
-        },
+        "settings": settings,
     }
 
 
 @app.put("/api/admin/settings/quiz-intro-video")
 async def admin_quiz_intro_video_upload(
     request: Request,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_SETTINGS_FUNNEL)),
 ):
     raw_content_length = (request.headers.get("content-length") or "").strip()
     if raw_content_length:
@@ -4554,7 +4867,7 @@ async def admin_quiz_intro_video_upload(
 
 @app.post("/api/admin/settings/quiz-intro-video/reset")
 async def admin_quiz_intro_video_reset(
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_SETTINGS_FUNNEL)),
 ):
     await reset_quiz_intro_video_to_default()
     support_settings = await get_support_links_row()
@@ -4568,7 +4881,7 @@ async def admin_quiz_intro_video_reset(
 @app.post("/api/admin/settings/quiz-intro-video/{video_id}/select")
 async def admin_quiz_intro_video_select(
     video_id: int,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_SETTINGS_FUNNEL)),
 ):
     await activate_quiz_intro_video(video_id, int(admin["user_id"]))
     support_settings = await get_support_links_row()
@@ -4582,7 +4895,7 @@ async def admin_quiz_intro_video_select(
 @app.delete("/api/admin/settings/quiz-intro-video/{video_id}")
 async def admin_quiz_intro_video_delete(
     video_id: int,
-    admin=Depends(get_admin_user),
+    admin=Depends(require_permission(PERM_SETTINGS_FUNNEL)),
 ):
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -4629,46 +4942,64 @@ async def admin_quiz_intro_video_delete(
 
 
 @app.post("/api/admin/settings")
-async def admin_settings_update(request: Request, admin=Depends(get_admin_user)):
+async def admin_settings_update(
+    request: Request,
+    admin=Depends(require_any_permission(*SETTINGS_PERMISSIONS)),
+):
     data = await request.json()
     ai_data = data.get("ai") or {}
     streams_data = data.get("streams") or {}
     support_data = data.get("support") or {}
     pocket_data = data.get("pocket_api") or {}
     system_access_data = data.get("system_access") or {}
+    section_permissions = {
+        "ai": PERM_SETTINGS_AI,
+        "streams": PERM_SETTINGS_STREAMS,
+        "support": PERM_SETTINGS_FUNNEL,
+        "pocket_api": PERM_SETTINGS_API,
+        "system_access": PERM_SETTINGS_SYSTEM_ACCESS,
+    }
+    for section_key, permission in section_permissions.items():
+        if section_key in data and not has_permission(admin, permission):
+            raise HTTPException(status_code=403, detail="Недостаточно прав для изменения этого раздела")
+    if not any(section_key in data for section_key in section_permissions):
+        raise HTTPException(status_code=400, detail="Не указан раздел настроек")
+
     system_prompt = (ai_data.get("system_prompt") or "").strip()
     model = (ai_data.get("model") or "").strip()
     openai_api_key = (ai_data.get("openai_api_key") or "").strip()
 
-    if not system_prompt:
-        raise HTTPException(status_code=400, detail="system_prompt is required")
-    if not model:
-        raise HTTPException(status_code=400, detail="model is required")
-    if openai_api_key:
-        validation = await analysis_ai_service.validate_openai_api_key(openai_api_key, model=model)
-        if not validation.get("ok"):
-            raise HTTPException(status_code=400, detail=validation.get("error") or "OpenAI key is invalid")
+    if "ai" in data:
+        if not system_prompt:
+            raise HTTPException(status_code=400, detail="system_prompt is required")
+        if not model:
+            raise HTTPException(status_code=400, detail="model is required")
+        if openai_api_key:
+            validation = await analysis_ai_service.validate_openai_api_key(openai_api_key, model=model)
+            if not validation.get("ok"):
+                raise HTTPException(status_code=400, detail=validation.get("error") or "OpenAI key is invalid")
 
     shared_sync: Dict[str, Any] = {}
 
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                INSERT INTO ai_settings (id, system_prompt, model)
-                VALUES (1, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                    system_prompt = VALUES(system_prompt),
-                    model = VALUES(model)
-                """,
-                (system_prompt, model),
-            )
-            if openai_api_key:
+            if "ai" in data:
                 await cur.execute(
-                    "UPDATE admin_analysis_settings SET gpt_api_key = %s, updated_by = %s WHERE id = 1",
-                    (openai_api_key, int(admin["user_id"])),
+                    """
+                    INSERT INTO ai_settings (id, system_prompt, model)
+                    VALUES (1, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        system_prompt = VALUES(system_prompt),
+                        model = VALUES(model)
+                    """,
+                    (system_prompt, model),
                 )
-                shared_sync["openai_api_key"] = openai_api_key
+                if openai_api_key:
+                    await cur.execute(
+                        "UPDATE admin_analysis_settings SET gpt_api_key = %s, updated_by = %s WHERE id = 1",
+                        (openai_api_key, int(admin["user_id"])),
+                    )
+                    shared_sync["openai_api_key"] = openai_api_key
             if isinstance(streams_data, dict) and streams_data:
                 is_enabled = 1 if bool(streams_data.get("is_enabled")) else 0
                 scope = str(streams_data.get("scope") or "all").strip().lower()
@@ -4934,7 +5265,7 @@ async def admin_settings_update(request: Request, admin=Depends(get_admin_user))
 
 
 @app.get("/api/admin/strategies")
-async def admin_strategies(admin=Depends(get_admin_user)):
+async def admin_strategies(admin=Depends(require_permission(PERM_STRATEGIES_MANAGE))):
     analysis_settings = await get_admin_analysis_settings()
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -5040,7 +5371,10 @@ async def admin_strategies(admin=Depends(get_admin_user)):
 
 
 @app.post("/api/admin/strategies/validate-gpt-key")
-async def admin_strategies_validate_gpt_key(request: Request, admin=Depends(get_admin_user)):
+async def admin_strategies_validate_gpt_key(
+    request: Request,
+    admin=Depends(require_permission(PERM_STRATEGIES_MANAGE)),
+):
     data = await request.json()
     api_key = (data.get("api_key") or "").strip()
     model = (data.get("model") or analysis_ai_service.DEFAULT_ANALYSIS_GPT_MODEL).strip()
@@ -5051,7 +5385,10 @@ async def admin_strategies_validate_gpt_key(request: Request, admin=Depends(get_
 
 
 @app.post("/api/admin/analysis-settings")
-async def admin_analysis_settings_update(request: Request, admin=Depends(get_admin_user)):
+async def admin_analysis_settings_update(
+    request: Request,
+    admin=Depends(require_permission(PERM_STRATEGIES_MANAGE)),
+):
     data = await request.json()
     engine = str(data.get("engine") or "backend").strip().lower()
     if engine not in ("backend", "gpt"):
@@ -5106,7 +5443,10 @@ async def admin_analysis_settings_update(request: Request, admin=Depends(get_adm
 
 
 @app.post("/api/admin/strategies/update")
-async def admin_strategies_update(request: Request, admin=Depends(get_admin_user)):
+async def admin_strategies_update(
+    request: Request,
+    admin=Depends(require_permission(PERM_STRATEGIES_MANAGE)),
+):
     data = await request.json()
     strategy_id = int(data.get("id") or 0)
     if not strategy_id:
@@ -5219,7 +5559,10 @@ async def admin_strategies_update(request: Request, admin=Depends(get_admin_user
 
 
 @app.post("/api/admin/strategies/delete")
-async def admin_strategies_delete(request: Request, admin=Depends(get_admin_user)):
+async def admin_strategies_delete(
+    request: Request,
+    admin=Depends(require_permission(PERM_STRATEGIES_MANAGE)),
+):
     data = await request.json()
     strategy_id = int(data.get("id") or 0)
     if not strategy_id:
@@ -6087,10 +6430,12 @@ async def get_profile(user=Depends(get_telegram_user)):
     if user:
         forex_status = await get_signal_access_status(int(user_id), "forex")
         binary_status = await get_signal_access_status(int(user_id), "binary")
+        admin_center_access = await has_admin_center_access(int(user_id))
         user["forex_access"] = 1 if truthy_db(forex_status.get("access")) == 1 else 0
         user["binary_access"] = 1 if truthy_db(binary_status.get("access")) == 1 else 0
         user["access_policy"] = forex_status.get("policy")
-        user["admin_url"] = build_admin_webapp_url() if int(user.get("is_admin") or 0) == 1 else ""
+        user["is_admin"] = 1 if admin_center_access else 0
+        user["admin_url"] = build_admin_webapp_url() if admin_center_access else ""
     return user or {"error": "Not found"}
 
 
@@ -7234,7 +7579,7 @@ async def build_main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
             )
         ]
     ]
-    if await is_admin_user(user_id):
+    if await has_admin_center_access(user_id):
         keyboard_rows.append(
             [
                 InlineKeyboardButton(
@@ -8014,8 +8359,8 @@ async def cmd_manager_stats(message: types.Message):
         return
     requester_id = int(message.from_user.id)
     target_query = str(message.text or "").strip()
-    staff_role = await get_staff_role(requester_id)
-    if staff_role not in STAFF_ROLES:
+    staff_profile = await get_staff_profile(requester_id)
+    if not staff_profile or not has_permission(staff_profile, PERM_STATS_COMMAND):
         await write_manager_stats_audit(requester_id, target_query, "denied")
         await message.answer("Insufficient permissions")
         return

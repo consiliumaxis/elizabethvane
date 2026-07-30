@@ -94,7 +94,8 @@ class ManagerStatsTest(unittest.TestCase):
         app = (PROJECT_ROOT / "frontend/src/admin/AdminApp.jsx").read_text(encoding="utf-8")
         page = (PROJECT_ROOT / "frontend/src/admin/pages/ManagersPage.jsx").read_text(encoding="utf-8")
 
-        self.assertIn("{ id: 'managers', label: tr('Managers', 'Менеджеры') }", app)
+        self.assertIn("{ id: 'managers', label: tr('Managers', 'Менеджеры'), visible:", app)
+        self.assertIn("PERMISSIONS.staffView", app)
         self.assertIn("<ManagersPage adminUser={adminUser} />", app)
         self.assertIn("/api/admin/staff", page)
         self.assertIn("/api/admin/staff/audit", page)

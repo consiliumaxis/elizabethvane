@@ -9,6 +9,12 @@ import AIChatterPage from './pages/AIChatterPage';
 import ManagersPage from './pages/ManagersPage';
 import { AdminLocaleProvider } from './i18n';
 import { useAdminLocale } from './useAdminLocale';
+import {
+  PERMISSIONS,
+  SETTINGS_PERMISSIONS,
+  hasAnyPermission,
+  hasPermission,
+} from './permissions';
 import './admin.css';
 
 function AdminAppContent({ adminUser, authError }) {
@@ -17,20 +23,23 @@ function AdminAppContent({ adminUser, authError }) {
   const [studioMode, setStudioMode] = useState(false);
 
   const tabs = useMemo(() => [
-    { id: 'statistics', label: tr('Statistics', 'Статистика') },
-    { id: 'dashboard', label: tr('Dashboard', 'Дашборд') },
-    { id: 'users', label: tr('Users', 'Пользователи') },
-    { id: 'managers', label: tr('Managers', 'Менеджеры') },
-    { id: 'broadcast', label: tr('Broadcast', 'Рассылка') },
-    { id: 'settings', label: tr('Settings', 'Настройки') },
-    { id: 'strategies', label: tr('Strategies', 'Стратегии') },
-    { id: 'aichatter', label: 'AI CHATTER' },
-  ], [tr]);
+    { id: 'statistics', label: tr('Statistics', 'Статистика'), visible: hasPermission(adminUser, PERMISSIONS.statisticsView) },
+    { id: 'dashboard', label: tr('Dashboard', 'Дашборд'), visible: hasPermission(adminUser, PERMISSIONS.dashboardView) },
+    { id: 'users', label: tr('Users', 'Пользователи'), visible: hasPermission(adminUser, PERMISSIONS.usersView) },
+    { id: 'managers', label: tr('Managers', 'Менеджеры'), visible: hasPermission(adminUser, PERMISSIONS.staffView) },
+    { id: 'broadcast', label: tr('Broadcast', 'Рассылка'), visible: hasPermission(adminUser, PERMISSIONS.broadcastManage) },
+    { id: 'settings', label: tr('Settings', 'Настройки'), visible: hasAnyPermission(adminUser, SETTINGS_PERMISSIONS) },
+    { id: 'strategies', label: tr('Strategies', 'Стратегии'), visible: hasPermission(adminUser, PERMISSIONS.strategiesManage) },
+    { id: 'aichatter', label: 'AI CHATTER', visible: hasPermission(adminUser, PERMISSIONS.aiChatterManage) },
+  ].filter((tab) => tab.visible), [adminUser, tr]);
+  const effectiveActiveTab = tabs.some((tab) => tab.id === activeTab)
+    ? activeTab
+    : tabs[0]?.id;
 
   const title = useMemo(() => {
-    const tab = tabs.find((item) => item.id === activeTab);
+    const tab = tabs.find((item) => item.id === effectiveActiveTab);
     return tab ? tab.label : tr('Admin Center', 'Админ-центр');
-  }, [activeTab, tabs, tr]);
+  }, [effectiveActiveTab, tabs, tr]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -65,7 +74,7 @@ function AdminAppContent({ adminUser, authError }) {
           <div className="admin-badge">{tr('Admin Center', 'Админ-центр')}</div>
           <h1 className="admin-title">{title}</h1>
           <div className="admin-muted">
-            {adminUser?.first_name || adminUser?.username || tr('Admin', 'Админ')} | ID {adminUser?.user_id || '-'}
+            {adminUser?.display_name || adminUser?.first_name || adminUser?.username || tr('Admin', 'Админ')} | ID {adminUser?.user_id || '-'}
           </div>
         </div>
       </header>
@@ -74,7 +83,7 @@ function AdminAppContent({ adminUser, authError }) {
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            className={`admin-tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+            className={`admin-tab-btn ${effectiveActiveTab === tab.id ? 'active' : ''}`}
             onClick={() => selectTab(tab.id)}
           >
             {tab.label}
@@ -83,19 +92,20 @@ function AdminAppContent({ adminUser, authError }) {
       </nav>
 
       <main className="admin-page">
-        {activeTab === 'statistics' && (
+        {effectiveActiveTab === 'statistics' && (
           <StudioStatisticsPage
             studioMode={studioMode}
             onStudioModeChange={setStudioMode}
+            canManageDays={hasPermission(adminUser, PERMISSIONS.statisticsManage)}
           />
         )}
-        {activeTab === 'dashboard' && <StatsPage />}
-        {activeTab === 'users' && <UsersPage />}
-        {activeTab === 'managers' && <ManagersPage adminUser={adminUser} />}
-        {activeTab === 'broadcast' && <BroadcastPage />}
-        {activeTab === 'settings' && <SettingsPage />}
-        {activeTab === 'strategies' && <StrategiesPage />}
-        {activeTab === 'aichatter' && <AIChatterPage />}
+        {effectiveActiveTab === 'dashboard' && <StatsPage />}
+        {effectiveActiveTab === 'users' && <UsersPage adminUser={adminUser} />}
+        {effectiveActiveTab === 'managers' && <ManagersPage adminUser={adminUser} />}
+        {effectiveActiveTab === 'broadcast' && <BroadcastPage />}
+        {effectiveActiveTab === 'settings' && <SettingsPage adminUser={adminUser} />}
+        {effectiveActiveTab === 'strategies' && <StrategiesPage />}
+        {effectiveActiveTab === 'aichatter' && <AIChatterPage />}
       </main>
     </div>
   );

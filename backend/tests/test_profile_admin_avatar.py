@@ -19,7 +19,8 @@ class ProfileAdminAvatarTest(unittest.TestCase):
         end = source.index("async def get_stream_settings_row", start)
         block = source[start:end]
 
-        self.assertLess(block.index("is_admin_user"), block.index("get_admin_panel_token"))
+        self.assertLess(block.index("get_staff_profile"), block.index("get_admin_panel_token"))
+        self.assertIn("ADMIN_CENTER_PERMISSIONS", block)
         self.assertIn("admin buttons working", block)
 
     def test_sync_does_not_overwrite_existing_avatar_with_empty_value(self):
