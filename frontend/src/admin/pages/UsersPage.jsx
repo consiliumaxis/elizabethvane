@@ -14,6 +14,19 @@ const formatBalance = (value) => {
 };
 const hasAccess = (value) => Number(value) === 1;
 const isManualTraderId = (user) => Number(user?.trader_id_is_manual || 0) === 1;
+const formatArchiveDate = (value) => {
+  if (!value) return '—';
+  const normalized = String(value).includes('T') ? String(value) : String(value).replace(' ', 'T');
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed);
+};
 
 export default function UsersPage() {
   const { tr } = useAdminLocale();
@@ -27,6 +40,14 @@ export default function UsersPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [accessModalOpen, setAccessModalOpen] = useState(false);
   const [balanceModalOpen, setBalanceModalOpen] = useState(false);
+  const [clearCacheModalOpen, setClearCacheModalOpen] = useState(false);
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [archives, setArchives] = useState([]);
+  const [archivesLoading, setArchivesLoading] = useState(false);
+  const [archiveDetail, setArchiveDetail] = useState(null);
+  const [archiveDetailLoading, setArchiveDetailLoading] = useState(false);
+  const [confirmationPhrase, setConfirmationPhrase] = useState('');
+  const [confirmationValue, setConfirmationValue] = useState('');
   const [accessForm, setAccessForm] = useState({ forex: true, binary: true });
   const [balanceForm, setBalanceForm] = useState({ balance: '0.00', sync: false });
 
@@ -50,10 +71,32 @@ export default function UsersPage() {
     }
   }, [tr]);
 
+  const loadArchives = useCallback(async (userId) => {
+    if (!userId) return;
+    setArchivesLoading(true);
+    try {
+      const res = await apiAdminFetchJson(
+        `/api/admin/users/${encodeURIComponent(userId)}/archives`
+      );
+      setArchives(res.archives || []);
+      setConfirmationPhrase(res.confirmation_phrase || `CLEAR ${userId}`);
+    } catch (e) {
+      setError(e.message || tr('Could not load data archives', 'Не удалось загрузить архивы данных'));
+    } finally {
+      setArchivesLoading(false);
+    }
+  }, [tr]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => loadUsers(''), 0);
     return () => window.clearTimeout(timer);
   }, [loadUsers]);
+
+  useEffect(() => {
+    if (!selectedUserId) return undefined;
+    const timer = window.setTimeout(() => loadArchives(selectedUserId), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadArchives, selectedUserId]);
 
   const selectedUser = useMemo(
     () => users.find((user) => String(user.user_id) === String(selectedUserId)) || null,
@@ -70,12 +113,22 @@ export default function UsersPage() {
   const openUserCard = (userId) => {
     setSelectedUserId(userId);
     setStatus('');
+    setError('');
+    setArchiveDetail(null);
+    setArchives([]);
+    setConfirmationPhrase('');
   };
 
   const closeUserCard = () => {
     setSelectedUserId(null);
     setAccessModalOpen(false);
     setBalanceModalOpen(false);
+    setClearCacheModalOpen(false);
+    setArchiveModalOpen(false);
+    setArchiveDetail(null);
+    setConfirmationValue('');
+    setArchives([]);
+    setConfirmationPhrase('');
     setStatus('');
   };
 
@@ -197,6 +250,82 @@ export default function UsersPage() {
     }
   };
 
+  const openClearCacheModal = () => {
+    if (!selectedUser) return;
+    setConfirmationValue('');
+    setClearCacheModalOpen(true);
+    setError('');
+  };
+
+  const clearUserCache = async () => {
+    if (!selectedUser || actionLoading) return;
+    const requiredPhrase = confirmationPhrase || `CLEAR ${selectedUser.user_id}`;
+    if (confirmationValue.trim() !== requiredPhrase) return;
+    setActionLoading(true);
+    setError('');
+    setStatus('');
+    try {
+      const res = await apiAdminFetchJson(
+        `/api/admin/users/${encodeURIComponent(selectedUser.user_id)}/clear-cache`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ confirmation: confirmationValue.trim() }),
+        }
+      );
+      replaceUser(res.user);
+      setClearCacheModalOpen(false);
+      setConfirmationValue('');
+      setStatus(tr(
+        `User data archived and cache cleared. Archive #${res.archive_id}.`,
+        `Данные пользователя помещены в архив, кэш очищен. Архив №${res.archive_id}.`
+      ));
+      await loadArchives(selectedUser.user_id);
+    } catch (e) {
+      setError(e.message || tr('Could not clear user cache', 'Не удалось очистить кэш пользователя'));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openArchiveModal = async () => {
+    if (!selectedUser) return;
+    setArchiveDetail(null);
+    setArchiveModalOpen(true);
+    await loadArchives(selectedUser.user_id);
+  };
+
+  const loadArchiveDetail = async (archiveId) => {
+    if (!selectedUser || !archiveId) return;
+    setArchiveDetailLoading(true);
+    setError('');
+    try {
+      const res = await apiAdminFetchJson(
+        `/api/admin/users/${encodeURIComponent(selectedUser.user_id)}/archives/${encodeURIComponent(archiveId)}`
+      );
+      setArchiveDetail(res.archive || null);
+    } catch (e) {
+      setError(e.message || tr('Could not open archive', 'Не удалось открыть архив'));
+    } finally {
+      setArchiveDetailLoading(false);
+    }
+  };
+
+  const downloadArchive = () => {
+    if (!archiveDetail?.snapshot) return;
+    const blob = new Blob(
+      [JSON.stringify(archiveDetail.snapshot, null, 2)],
+      { type: 'application/json;charset=utf-8' }
+    );
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `elizabeth-user-${archiveDetail.user_id}-archive-${archiveDetail.id}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const deleteUser = async () => {
     if (!selectedUser || actionLoading) return;
     const userName = getDisplayName(selectedUser);
@@ -225,6 +354,9 @@ export default function UsersPage() {
     const profileEditingAllowed = Number(selectedUser.profile_edit_allowed || 0) === 1;
     const manualTraderId = isManualTraderId(selectedUser);
     const canSyncPocket = Boolean(selectedUser.pocket_trader_id) && !manualTraderId;
+    const requiredConfirmation = confirmationPhrase || `CLEAR ${selectedUser.user_id}`;
+    const confirmationMatches = confirmationValue.trim() === requiredConfirmation;
+    const archiveSnapshot = archiveDetail?.snapshot || {};
     return (
       <div className="admin-card">
         <div className="admin-row-between">
@@ -286,12 +418,12 @@ export default function UsersPage() {
               <p>
                 {profileEditingAllowed
                   ? tr(
-                    'The user sees edit buttons in their profile and can change both values.',
-                    'В профиле пользователя видны карандаши — он может менять оба значения.'
+                    'The name and ID become clickable in the profile; the user can change both values.',
+                    'Имя и ID становятся кликабельными в профиле — пользователь может менять оба значения.'
                   )
                   : tr(
-                    'The values are read-only. Edit buttons are hidden from the user.',
-                    'Значения доступны только для просмотра. Карандаши у пользователя скрыты.'
+                    'The values are read-only and clicks do not open editing.',
+                    'Значения доступны только для просмотра, нажатие не открывает редактирование.'
                   )}
               </p>
             </div>
@@ -309,6 +441,45 @@ export default function UsersPage() {
               {tr(
                 'A Trader ID entered by the user is stored separately, marked as manual and never sent to Pocket API. Pocket balance synchronization is disabled for it.',
                 'Trader ID, введённый пользователем, хранится отдельно, помечается как ручной и не отправляется в Pocket API. Синхронизация баланса для него отключается.'
+              )}
+            </div>
+          </div>
+
+          <div className="admin-user-cache-panel">
+            <div className="admin-user-cache-copy">
+              <span className="admin-user-profile-permission-kicker">
+                {tr('User data', 'Данные пользователя')}
+              </span>
+              <strong>{tr('Archive and clear cache', 'Архив и очистка кэша')}</strong>
+              <p>
+                {tr(
+                  'Creates a complete snapshot of both systems, then resets chats, funnel stages, Trader ID, Pocket/AIO data, balance, analyses and strategies.',
+                  'Создаёт полный снимок обеих систем, затем сбрасывает чаты, этапы воронок, Trader ID, Pocket/AIO, баланс, анализы и стратегии.'
+                )}
+              </p>
+            </div>
+            <div className="admin-user-cache-actions">
+              <button
+                type="button"
+                className="admin-btn-outline"
+                onClick={openArchiveModal}
+                disabled={actionLoading || archivesLoading}
+              >
+                {tr('Data archive', 'Архив данных')} · {archives.length}
+              </button>
+              <button
+                type="button"
+                className="admin-btn-outline danger"
+                onClick={openClearCacheModal}
+                disabled={actionLoading}
+              >
+                {tr('Clear cache', 'Очистить кэш')}
+              </button>
+            </div>
+            <div className="admin-user-cache-note">
+              {tr(
+                'Telegram identity, staff access and previous archives are preserved so the user card remains available.',
+                'Telegram-идентичность, доступ сотрудника и предыдущие архивы сохраняются, поэтому карточка пользователя не исчезает.'
               )}
             </div>
           </div>
@@ -431,6 +602,226 @@ export default function UsersPage() {
                   {tr('Save', 'Сохранить')}
                 </button>
               </div>
+            </div>
+          </div>
+        ) : null}
+
+        {clearCacheModalOpen ? (
+          <div
+            className="admin-modal-backdrop"
+            onClick={() => {
+              if (!actionLoading) setClearCacheModalOpen(false);
+            }}
+          >
+            <div className="admin-modal admin-cache-confirm-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="admin-row-between">
+                <div>
+                  <span className="admin-user-profile-permission-kicker">
+                    {tr('Protected action', 'Защищённое действие')}
+                  </span>
+                  <h3 className="admin-section-title">{tr('Clear user cache', 'Очистить кэш пользователя')}</h3>
+                </div>
+                <button
+                  className="admin-btn-outline"
+                  onClick={() => setClearCacheModalOpen(false)}
+                  disabled={actionLoading}
+                >
+                  {tr('Close', 'Закрыть')}
+                </button>
+              </div>
+
+              <div className="admin-cache-warning">
+                <strong>{tr('An archive is created first', 'Сначала будет создан архив')}</strong>
+                <p>
+                  {tr(
+                    'After the snapshot is saved, live chats, AI memory, both funnel states, Trader ID, Pocket/AIO data, balance, analyses and custom strategies will be cleared.',
+                    'После сохранения снимка будут очищены активные чаты, память AI, состояния обеих воронок, Trader ID, Pocket/AIO, баланс, анализы и кастомные стратегии.'
+                  )}
+                </p>
+              </div>
+
+              <div className="admin-cache-preserved">
+                <span>{tr('Preserved', 'Сохраняется')}</span>
+                <div>
+                  <b>Telegram ID</b>
+                  <b>{tr('Telegram identity', 'Telegram-профиль')}</b>
+                  <b>{tr('Staff role', 'Роль сотрудника')}</b>
+                  <b>{tr('Previous archives', 'Предыдущие архивы')}</b>
+                </div>
+              </div>
+
+              <label className="admin-field">
+                <span className="admin-label">
+                  {tr('Type the phrase exactly', 'Введите фразу без изменений')}
+                </span>
+                <code className="admin-confirmation-phrase">{requiredConfirmation}</code>
+                <input
+                  className="admin-input"
+                  autoComplete="off"
+                  value={confirmationValue}
+                  onChange={(e) => setConfirmationValue(e.target.value)}
+                  placeholder={requiredConfirmation}
+                />
+              </label>
+
+              <div className="admin-row-actions admin-cache-confirm-actions">
+                <button
+                  type="button"
+                  className="admin-btn-outline"
+                  onClick={() => setClearCacheModalOpen(false)}
+                  disabled={actionLoading}
+                >
+                  {tr('Cancel', 'Отмена')}
+                </button>
+                <button
+                  type="button"
+                  className="admin-btn danger-solid"
+                  onClick={clearUserCache}
+                  disabled={!confirmationMatches || actionLoading}
+                >
+                  {actionLoading
+                    ? tr('Archiving and clearing…', 'Архивируем и очищаем…')
+                    : tr('Create archive and clear', 'Создать архив и очистить')}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {archiveModalOpen ? (
+          <div className="admin-modal-backdrop" onClick={() => setArchiveModalOpen(false)}>
+            <div className="admin-modal admin-archive-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="admin-row-between">
+                <div>
+                  <span className="admin-user-profile-permission-kicker">
+                    {tr('User data', 'Данные пользователя')}
+                  </span>
+                  <h3 className="admin-section-title">
+                    {archiveDetail
+                      ? `${tr('Archive', 'Архив')} #${archiveDetail.id}`
+                      : tr('Data archive', 'Архив данных')}
+                  </h3>
+                </div>
+                <button
+                  className="admin-btn-outline"
+                  onClick={() => setArchiveModalOpen(false)}
+                >
+                  {tr('Close', 'Закрыть')}
+                </button>
+              </div>
+
+              {archiveDetail ? (
+                <div className="admin-archive-detail">
+                  <div className="admin-row-actions">
+                    <button
+                      type="button"
+                      className="admin-btn-outline"
+                      onClick={() => setArchiveDetail(null)}
+                    >
+                      {tr('← Archive list', '← К списку архивов')}
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-btn"
+                      onClick={downloadArchive}
+                    >
+                      {tr('Download JSON', 'Скачать JSON')}
+                    </button>
+                  </div>
+
+                  <div className="admin-archive-summary-grid">
+                    <div>
+                      <span>{tr('Created', 'Создан')}</span>
+                      <strong>{formatArchiveDate(archiveDetail.archived_at)}</strong>
+                    </div>
+                    <div>
+                      <span>{tr('Records', 'Записей')}</span>
+                      <strong>{archiveDetail.summary?.total_records || 0}</strong>
+                    </div>
+                    <div>
+                      <span>{tr('Status', 'Статус')}</span>
+                      <strong>{archiveDetail.archive_status}</strong>
+                    </div>
+                  </div>
+
+                  {['main_app', 'ai_chatter'].map((sectionName) => (
+                    <section className="admin-archive-section" key={sectionName}>
+                      <div className="admin-row-between">
+                        <h4>{sectionName === 'main_app' ? 'Elizabeth App' : 'AI Chatter'}</h4>
+                        <span>
+                          {archiveDetail.summary?.sections?.[sectionName]?.records || 0}
+                          {' '}
+                          {tr('records', 'записей')}
+                        </span>
+                      </div>
+                      <div className="admin-archive-table-list">
+                        {Object.entries(archiveSnapshot[sectionName] || {}).map(([tableName, rows]) => {
+                          const normalizedRows = Array.isArray(rows) ? rows : [];
+                          return (
+                            <details key={tableName}>
+                              <summary>
+                                <span>{tableName}</span>
+                                <b>{normalizedRows.length}</b>
+                              </summary>
+                              <pre>
+                                {JSON.stringify(normalizedRows.slice(0, 25), null, 2)}
+                              </pre>
+                              {normalizedRows.length > 25 ? (
+                                <p>
+                                  {tr(
+                                    `Showing 25 of ${normalizedRows.length}. Download JSON for the complete archive.`,
+                                    `Показано 25 из ${normalizedRows.length}. Полные данные доступны в JSON-файле.`
+                                  )}
+                                </p>
+                              ) : null}
+                            </details>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              ) : (
+                <div className="admin-archive-list">
+                  {archivesLoading || archiveDetailLoading ? (
+                    <div className="admin-muted">{tr('Loading…', 'Загрузка…')}</div>
+                  ) : null}
+                  {!archivesLoading && archives.length === 0 ? (
+                    <div className="admin-archive-empty">
+                      <strong>{tr('No archives yet', 'Архивов пока нет')}</strong>
+                      <span>
+                        {tr(
+                          'The first entry will appear after clearing this user cache.',
+                          'Первая запись появится после очистки кэша этого пользователя.'
+                        )}
+                      </span>
+                    </div>
+                  ) : null}
+                  {archives.map((archive) => (
+                    <button
+                      type="button"
+                      className="admin-archive-row"
+                      key={archive.id}
+                      onClick={() => loadArchiveDetail(archive.id)}
+                      disabled={archiveDetailLoading}
+                    >
+                      <span className="admin-archive-row-date">
+                        <strong>{formatArchiveDate(archive.archived_at)}</strong>
+                        <small>
+                          {tr('Administrator', 'Администратор')}: {archive.archived_by_name || archive.archived_by}
+                        </small>
+                      </span>
+                      <span className="admin-archive-row-meta">
+                        <b>{archive.summary?.total_records || 0}</b>
+                        <small>{tr('records', 'записей')}</small>
+                      </span>
+                      <span className={`admin-archive-status is-${archive.archive_status}`}>
+                        {archive.archive_status}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ) : null}

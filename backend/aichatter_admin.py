@@ -246,6 +246,152 @@ async def _get_pool():
     return _pool
 
 
+async def snapshot_aichatter_user_data(telegram_id: int) -> Dict[str, list]:
+    telegram_id = int(telegram_id)
+    pool = await _get_pool()
+    snapshot: Dict[str, list] = {}
+    async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
+        await cur.execute(
+            "SELECT * FROM users WHERE tg_user_id = %s",
+            (telegram_id,),
+        )
+        user_rows = list(await cur.fetchall() or [])
+        snapshot["users"] = user_rows
+        trader_ids = sorted(
+            {
+                str(row.get("trader_id") or "").strip()
+                for row in user_rows
+                if str(row.get("trader_id") or "").strip()
+            }
+        )
+
+        direct_queries = (
+            ("messages", "SELECT * FROM messages WHERE tg_user_id = %s ORDER BY id ASC"),
+            (
+                "conversation_memory",
+                "SELECT * FROM conversation_memory WHERE tg_user_id = %s",
+            ),
+            ("user_state", "SELECT * FROM user_state WHERE tg_user_id = %s"),
+            (
+                "funnel_media_sent",
+                "SELECT * FROM funnel_media_sent WHERE tg_user_id = %s ORDER BY sent_at ASC",
+            ),
+            (
+                "bot_block_log",
+                "SELECT * FROM bot_block_log WHERE tg_user_id = %s ORDER BY id ASC",
+            ),
+        )
+        for table_name, query in direct_queries:
+            await cur.execute(query, (telegram_id,))
+            snapshot[table_name] = list(await cur.fetchall() or [])
+
+        if trader_ids:
+            placeholders = ",".join(["%s"] * len(trader_ids))
+            params = (telegram_id, *trader_ids)
+            await cur.execute(
+                f"""
+                SELECT *
+                FROM postback_events
+                WHERE tg_user_id = %s OR trader_id IN ({placeholders})
+                ORDER BY id ASC
+                """,
+                params,
+            )
+            snapshot["postback_events"] = list(await cur.fetchall() or [])
+            await cur.execute(
+                f"""
+                SELECT *
+                FROM postback_state
+                WHERE tg_user_id = %s OR trader_id IN ({placeholders})
+                ORDER BY created_at ASC
+                """,
+                params,
+            )
+            snapshot["postback_state"] = list(await cur.fetchall() or [])
+        else:
+            await cur.execute(
+                "SELECT * FROM postback_events WHERE tg_user_id = %s ORDER BY id ASC",
+                (telegram_id,),
+            )
+            snapshot["postback_events"] = list(await cur.fetchall() or [])
+            await cur.execute(
+                "SELECT * FROM postback_state WHERE tg_user_id = %s ORDER BY created_at ASC",
+                (telegram_id,),
+            )
+            snapshot["postback_state"] = list(await cur.fetchall() or [])
+    return snapshot
+
+
+async def clear_aichatter_user_data(telegram_id: int) -> Dict[str, int]:
+    telegram_id = int(telegram_id)
+    pool = await _get_pool()
+    deleted: Dict[str, int] = {}
+    async with pool.acquire() as conn:
+        await conn.begin()
+        try:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    "SELECT trader_id FROM users WHERE tg_user_id = %s",
+                    (telegram_id,),
+                )
+                user_rows = list(await cur.fetchall() or [])
+                trader_ids = sorted(
+                    {
+                        str(row.get("trader_id") or "").strip()
+                        for row in user_rows
+                        if str(row.get("trader_id") or "").strip()
+                    }
+                )
+
+            async with conn.cursor() as cur:
+                direct_deletes = (
+                    ("funnel_media_sent", "DELETE FROM funnel_media_sent WHERE tg_user_id = %s"),
+                    ("bot_block_log", "DELETE FROM bot_block_log WHERE tg_user_id = %s"),
+                    ("conversation_memory", "DELETE FROM conversation_memory WHERE tg_user_id = %s"),
+                    ("messages", "DELETE FROM messages WHERE tg_user_id = %s"),
+                    ("user_state", "DELETE FROM user_state WHERE tg_user_id = %s"),
+                )
+                for table_name, query in direct_deletes:
+                    await cur.execute(query, (telegram_id,))
+                    deleted[table_name] = max(0, int(cur.rowcount or 0))
+
+                if trader_ids:
+                    placeholders = ",".join(["%s"] * len(trader_ids))
+                    params = (telegram_id, *trader_ids)
+                    await cur.execute(
+                        f"DELETE FROM postback_events WHERE tg_user_id = %s OR trader_id IN ({placeholders})",
+                        params,
+                    )
+                    deleted["postback_events"] = max(0, int(cur.rowcount or 0))
+                    await cur.execute(
+                        f"DELETE FROM postback_state WHERE tg_user_id = %s OR trader_id IN ({placeholders})",
+                        params,
+                    )
+                    deleted["postback_state"] = max(0, int(cur.rowcount or 0))
+                else:
+                    await cur.execute(
+                        "DELETE FROM postback_events WHERE tg_user_id = %s",
+                        (telegram_id,),
+                    )
+                    deleted["postback_events"] = max(0, int(cur.rowcount or 0))
+                    await cur.execute(
+                        "DELETE FROM postback_state WHERE tg_user_id = %s",
+                        (telegram_id,),
+                    )
+                    deleted["postback_state"] = max(0, int(cur.rowcount or 0))
+
+                await cur.execute(
+                    "DELETE FROM users WHERE tg_user_id = %s",
+                    (telegram_id,),
+                )
+                deleted["users"] = max(0, int(cur.rowcount or 0))
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+    return deleted
+
+
 async def _ensure_postback_source_key(pool) -> None:
     async with pool.acquire() as conn, conn.cursor() as cur:
         await cur.execute(

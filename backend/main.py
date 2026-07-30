@@ -204,14 +204,36 @@ except ModuleNotFoundError:
         normalize_profile_trader_id,
     )
 try:
+    from backend.user_data_archive import (
+        ARCHIVE_VERSION,
+        build_archive_summary,
+        clear_cache_confirmation,
+        deserialize_archive_payload,
+        serialize_archive_payload,
+        validate_clear_cache_confirmation,
+    )
+except ModuleNotFoundError:
+    from user_data_archive import (
+        ARCHIVE_VERSION,
+        build_archive_summary,
+        clear_cache_confirmation,
+        deserialize_archive_payload,
+        serialize_archive_payload,
+        validate_clear_cache_confirmation,
+    )
+try:
     from backend.aichatter_admin import (
+        clear_aichatter_user_data,
         create_aichatter_admin_router,
+        snapshot_aichatter_user_data,
         sync_aichatter_pocket_event,
         sync_shared_ai_access_settings,
     )
 except ModuleNotFoundError:
     from aichatter_admin import (
+        clear_aichatter_user_data,
         create_aichatter_admin_router,
+        snapshot_aichatter_user_data,
         sync_aichatter_pocket_event,
         sync_shared_ai_access_settings,
     )
@@ -2593,6 +2615,261 @@ async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
     return await cur.fetchone()
 
 
+async def snapshot_main_user_data(user_id: int) -> Dict[str, list]:
+    user_id = int(user_id)
+    snapshot: Dict[str, list] = {}
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+            user_rows = list(await cur.fetchall() or [])
+            if not user_rows:
+                raise HTTPException(status_code=404, detail="User not found")
+            snapshot["users"] = user_rows
+
+            direct_queries = (
+                ("user_onboarding", "SELECT * FROM user_onboarding WHERE user_id = %s"),
+                (
+                    "user_mode_access",
+                    "SELECT * FROM user_mode_access WHERE user_id = %s ORDER BY mode ASC",
+                ),
+                (
+                    "user_analyses",
+                    "SELECT * FROM user_analyses WHERE user_id = %s ORDER BY id ASC",
+                ),
+                (
+                    "user_presets",
+                    "SELECT * FROM user_presets WHERE user_id = %s ORDER BY preset_id ASC",
+                ),
+                (
+                    "ai_chats",
+                    "SELECT * FROM ai_chats WHERE user_id = %s ORDER BY id ASC",
+                ),
+                (
+                    "aio_postback_events",
+                    "SELECT * FROM aio_postback_events WHERE user_id = %s ORDER BY id ASC",
+                ),
+                (
+                    "pocket_postback_events",
+                    "SELECT * FROM pocket_postback_events WHERE user_id = %s ORDER BY id ASC",
+                ),
+                (
+                    "preserved_staff_access",
+                    "SELECT * FROM admin_users WHERE user_id = %s",
+                ),
+                (
+                    "preserved_manager_audit",
+                    """
+                    SELECT *
+                    FROM manager_stats_audit
+                    WHERE target_user_id = %s OR requested_by = %s
+                    ORDER BY id ASC
+                    """,
+                ),
+            )
+            for table_name, query in direct_queries:
+                params = (user_id, user_id) if table_name == "preserved_manager_audit" else (user_id,)
+                await cur.execute(query, params)
+                snapshot[table_name] = list(await cur.fetchall() or [])
+
+            await cur.execute(
+                """
+                SELECT m.*
+                FROM ai_messages m
+                JOIN ai_chats c ON c.id = m.chat_id
+                WHERE c.user_id = %s
+                ORDER BY m.id ASC
+                """,
+                (user_id,),
+            )
+            snapshot["ai_messages"] = list(await cur.fetchall() or [])
+
+            preset_ids = [
+                int(row.get("preset_id"))
+                for row in snapshot["user_presets"]
+                if row.get("preset_id") is not None
+            ]
+            if preset_ids:
+                placeholders = ",".join(["%s"] * len(preset_ids))
+                await cur.execute(
+                    f"""
+                    SELECT *
+                    FROM presets
+                    WHERE is_system = 0 AND id IN ({placeholders})
+                    ORDER BY id ASC
+                    """,
+                    tuple(preset_ids),
+                )
+                custom_presets = list(await cur.fetchall() or [])
+                snapshot["custom_presets"] = custom_presets
+                custom_ids = [int(row["id"]) for row in custom_presets]
+                if custom_ids:
+                    custom_placeholders = ",".join(["%s"] * len(custom_ids))
+                    await cur.execute(
+                        f"""
+                        SELECT *
+                        FROM preset_indicators
+                        WHERE preset_id IN ({custom_placeholders})
+                        ORDER BY preset_id ASC, indicator_id ASC
+                        """,
+                        tuple(custom_ids),
+                    )
+                    snapshot["custom_preset_indicators"] = list(await cur.fetchall() or [])
+                else:
+                    snapshot["custom_preset_indicators"] = []
+            else:
+                snapshot["custom_presets"] = []
+                snapshot["custom_preset_indicators"] = []
+    return snapshot
+
+
+async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
+    user_id = int(user_id)
+    archive_id = int(archive_id)
+    deleted: Dict[str, int] = {}
+    async with db_pool.acquire() as conn:
+        await conn.begin()
+        try:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT up.preset_id
+                    FROM user_presets up
+                    JOIN presets p ON p.id = up.preset_id
+                    WHERE up.user_id = %s AND p.is_system = 0
+                    """,
+                    (user_id,),
+                )
+                custom_preset_ids = [
+                    int(row["preset_id"])
+                    for row in (await cur.fetchall() or [])
+                ]
+                await cur.execute(
+                    "SELECT id FROM ai_chats WHERE user_id = %s",
+                    (user_id,),
+                )
+                chat_ids = [int(row["id"]) for row in (await cur.fetchall() or [])]
+                await cur.execute(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'users'
+                      AND COLUMN_NAME IN ('access', 'deposit')
+                    """
+                )
+                legacy_columns = {
+                    str(row["COLUMN_NAME"])
+                    for row in (await cur.fetchall() or [])
+                }
+
+            async with conn.cursor() as cur:
+                if chat_ids:
+                    placeholders = ",".join(["%s"] * len(chat_ids))
+                    await cur.execute(
+                        f"DELETE FROM ai_messages WHERE chat_id IN ({placeholders})",
+                        tuple(chat_ids),
+                    )
+                    deleted["ai_messages"] = max(0, int(cur.rowcount or 0))
+                else:
+                    deleted["ai_messages"] = 0
+
+                direct_deletes = (
+                    ("ai_chats", "DELETE FROM ai_chats WHERE user_id = %s"),
+                    ("user_analyses", "DELETE FROM user_analyses WHERE user_id = %s"),
+                    ("user_onboarding", "DELETE FROM user_onboarding WHERE user_id = %s"),
+                    ("user_mode_access", "DELETE FROM user_mode_access WHERE user_id = %s"),
+                    ("aio_postback_events", "DELETE FROM aio_postback_events WHERE user_id = %s"),
+                    ("pocket_postback_events", "DELETE FROM pocket_postback_events WHERE user_id = %s"),
+                    ("user_presets", "DELETE FROM user_presets WHERE user_id = %s"),
+                )
+                for table_name, query in direct_deletes:
+                    await cur.execute(query, (user_id,))
+                    deleted[table_name] = max(0, int(cur.rowcount or 0))
+
+                if custom_preset_ids:
+                    placeholders = ",".join(["%s"] * len(custom_preset_ids))
+                    await cur.execute(
+                        f"DELETE FROM preset_indicators WHERE preset_id IN ({placeholders})",
+                        tuple(custom_preset_ids),
+                    )
+                    deleted["custom_preset_indicators"] = max(0, int(cur.rowcount or 0))
+                    await cur.execute(
+                        f"DELETE FROM presets WHERE is_system = 0 AND id IN ({placeholders})",
+                        tuple(custom_preset_ids),
+                    )
+                    deleted["custom_presets"] = max(0, int(cur.rowcount or 0))
+                else:
+                    deleted["custom_preset_indicators"] = 0
+                    deleted["custom_presets"] = 0
+
+                reset_parts = [
+                    "aio_visit_uuid = NULL",
+                    "trader_id = NULL",
+                    "profile_name = NULL",
+                    "profile_trader_id = NULL",
+                    "profile_updated_at = NULL",
+                    "pocket_click_id = NULL",
+                    "pocket_site_id = NULL",
+                    "pocket_cid = NULL",
+                    "pocket_sub_id1 = NULL",
+                    "pocket_sub_id2 = NULL",
+                    "pocket_registered = 0",
+                    "pocket_deposited = 0",
+                    "pocket_registered_at = NULL",
+                    "pocket_deposit_amount = 0",
+                    "country = NULL",
+                    "pocket_checked_at = NULL",
+                    "balance = 0",
+                    "balance_sync_enabled = 0",
+                    "balance_synced_at = NULL",
+                    "balance_sync_error = NULL",
+                    "mode = 'forex'",
+                    "strategy_id = NULL",
+                    "is_blocked = 0",
+                    "blocked_by = NULL",
+                    "blocked_at = NULL",
+                ]
+                if "access" in legacy_columns:
+                    reset_parts.append("access = 0")
+                if "deposit" in legacy_columns:
+                    reset_parts.append("deposit = 0")
+                await cur.execute(
+                    f"UPDATE users SET {', '.join(reset_parts)} WHERE user_id = %s",
+                    (user_id,),
+                )
+
+                await cur.execute(
+                    """
+                    UPDATE user_data_archives
+                    SET archive_status = 'complete',
+                        error = NULL,
+                        completed_at = NOW()
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (archive_id, user_id),
+                )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+    return deleted
+
+
+async def mark_user_archive_failed(archive_id: int, user_id: int, error: str) -> None:
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE user_data_archives
+                SET archive_status = 'partial',
+                    error = %s,
+                    completed_at = NOW()
+                WHERE id = %s AND user_id = %s
+                """,
+                (str(error or "Unknown error")[:4000], int(archive_id), int(user_id)),
+            )
+
+
 @app.get("/api/support/links")
 async def get_support_links():
     links = await get_support_links_row()
@@ -2966,6 +3243,176 @@ async def admin_studio_statistics_delete_day(
         "status": "success",
         "date": normalized_date.isoformat(),
         "deleted": deleted,
+    }
+
+
+@app.get("/api/admin/users/{target_user_id}/archives")
+async def admin_user_data_archives(
+    target_user_id: int,
+    admin=Depends(get_admin_user),
+):
+    target_user_id = int(target_user_id or 0)
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="User id is required")
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT a.id, a.user_id, a.archived_by, a.archive_status,
+                       a.summary, a.error, a.archived_at, a.completed_at,
+                       COALESCE(NULLIF(TRIM(actor.profile_name), ''),
+                                NULLIF(TRIM(actor.first_name), ''),
+                                NULLIF(TRIM(actor.username), ''),
+                                CAST(a.archived_by AS CHAR)) AS archived_by_name
+                FROM user_data_archives a
+                LEFT JOIN users actor ON actor.user_id = a.archived_by
+                WHERE a.user_id = %s
+                ORDER BY a.archived_at DESC, a.id DESC
+                """,
+                (target_user_id,),
+            )
+            rows = list(await cur.fetchall() or [])
+    for row in rows:
+        row["summary"] = deserialize_archive_payload(row.get("summary"))
+    return {
+        "status": "success",
+        "archives": rows,
+        "confirmation_phrase": clear_cache_confirmation(target_user_id),
+    }
+
+
+@app.get("/api/admin/users/{target_user_id}/archives/{archive_id}")
+async def admin_user_data_archive_detail(
+    target_user_id: int,
+    archive_id: int,
+    admin=Depends(get_admin_user),
+):
+    target_user_id = int(target_user_id or 0)
+    archive_id = int(archive_id or 0)
+    if not target_user_id or not archive_id:
+        raise HTTPException(status_code=400, detail="User and archive ids are required")
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT id, user_id, archived_by, archive_status, summary,
+                       snapshot, error, archived_at, completed_at
+                FROM user_data_archives
+                WHERE id = %s AND user_id = %s
+                LIMIT 1
+                """,
+                (archive_id, target_user_id),
+            )
+            row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Archive not found")
+    row["summary"] = deserialize_archive_payload(row.get("summary"))
+    row["snapshot"] = deserialize_archive_payload(row.get("snapshot"))
+    return {"status": "success", "archive": row}
+
+
+@app.post("/api/admin/users/{target_user_id}/clear-cache")
+async def admin_clear_user_cache(
+    target_user_id: int,
+    request: Request,
+    admin=Depends(get_admin_user),
+):
+    target_user_id = int(target_user_id or 0)
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="User id is required")
+    payload = await request.json()
+    if not validate_clear_cache_confirmation(
+        target_user_id,
+        payload.get("confirmation"),
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Type {clear_cache_confirmation(target_user_id)} to confirm",
+        )
+
+    main_snapshot = await snapshot_main_user_data(target_user_id)
+    aichatter_snapshot = await snapshot_aichatter_user_data(target_user_id)
+    user_row = (main_snapshot.get("users") or [{}])[0]
+    display_name = (
+        str(user_row.get("profile_name") or "").strip()
+        or str(user_row.get("first_name") or "").strip()
+        or str(user_row.get("username") or "").strip()
+        or f"User {target_user_id}"
+    )
+    trader_id = (
+        str(user_row.get("profile_trader_id") or "").strip()
+        or str(user_row.get("trader_id") or "").strip()
+    )
+    snapshot = {
+        "version": ARCHIVE_VERSION,
+        "identity": {
+            "user_id": target_user_id,
+            "display_name": display_name,
+            "username": str(user_row.get("username") or ""),
+            "trader_id": trader_id,
+        },
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "main_app": main_snapshot,
+        "ai_chatter": aichatter_snapshot,
+        "preserved": {
+            "telegram_identity": True,
+            "staff_access": True,
+            "archive_history": True,
+            "profile_edit_permission": True,
+            "manager_audit": True,
+        },
+    }
+    summary = build_archive_summary(snapshot)
+    snapshot_json = serialize_archive_payload(snapshot)
+    summary_json = serialize_archive_payload(summary)
+    archive_id = 0
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO user_data_archives
+                    (user_id, archived_by, archive_status, summary, snapshot)
+                VALUES (%s, %s, 'pending', %s, %s)
+                """,
+                (
+                    target_user_id,
+                    int(admin["user_id"]),
+                    summary_json,
+                    snapshot_json,
+                ),
+            )
+            archive_id = int(cur.lastrowid or 0)
+    if not archive_id:
+        raise HTTPException(status_code=500, detail="Could not create user archive")
+
+    try:
+        aichatter_deleted = await clear_aichatter_user_data(target_user_id)
+        main_deleted = await clear_main_user_data(target_user_id, archive_id)
+    except Exception as exc:
+        await mark_user_archive_failed(archive_id, target_user_id, str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Archive #{archive_id} was created, but cache clearing was incomplete",
+        ) from exc
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            updated_user = await fetch_admin_user_row(cur, target_user_id)
+    return {
+        "status": "success",
+        "archive_id": archive_id,
+        "archive": {
+            "id": archive_id,
+            "user_id": target_user_id,
+            "archive_status": "complete",
+            "summary": summary,
+        },
+        "deleted": {
+            "main_app": main_deleted,
+            "ai_chatter": aichatter_deleted,
+        },
+        "user": updated_user,
     }
 
 

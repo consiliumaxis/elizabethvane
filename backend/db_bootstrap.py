@@ -260,6 +260,24 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS user_data_archives (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    archived_by BIGINT NOT NULL,
+                    archive_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                    summary LONGTEXT NOT NULL,
+                    snapshot LONGTEXT NOT NULL,
+                    error TEXT NULL,
+                    archived_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP NULL DEFAULT NULL,
+                    KEY idx_user_data_archives_user (user_id, archived_at),
+                    KEY idx_user_data_archives_admin (archived_by, archived_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS admin_studio_daily_stats (
                     stat_date DATE NOT NULL PRIMARY KEY,
                     new_users BIGINT UNSIGNED NOT NULL DEFAULT 0,
