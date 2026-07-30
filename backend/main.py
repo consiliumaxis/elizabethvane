@@ -7,9 +7,11 @@ import hmac
 import json
 import secrets
 import random
+import re
+import shutil
 from decimal import Decimal
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 from fastapi import FastAPI, Request, Depends, HTTPException, Header, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -335,9 +337,24 @@ START_VIDEO_NOTE_FALLBACK_PATH = (
     os.getenv("START_VIDEO_NOTE_PATH")
     or os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "elizabeth_start_video_note.mp4")
 )
+_runtime_api_port = str(os.getenv("API_PORT") or "").strip()
+_runtime_environment = (
+    "test"
+    if _runtime_api_port == "7999"
+    else ("prod" if _runtime_api_port == "8000" else "local")
+)
+_default_quiz_intro_library_dir = (
+    os.path.join("/var/lib/elizabethvane", _runtime_environment, "quiz_intro_videos")
+    if os.name != "nt" and _runtime_environment in {"test", "prod"}
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "quiz_intro_library")
+)
+QUIZ_INTRO_VIDEO_LIBRARY_DIR = (
+    os.getenv("QUIZ_INTRO_VIDEO_LIBRARY_DIR")
+    or _default_quiz_intro_library_dir
+)
 START_VIDEO_NOTE_MANAGED_PATH = (
     os.getenv("QUIZ_INTRO_VIDEO_PATH")
-    or os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "quiz_intro_video.mp4")
+    or os.path.join(QUIZ_INTRO_VIDEO_LIBRARY_DIR, "active.mp4")
 )
 START_VIDEO_NOTE_LENGTH = get_env_int("START_VIDEO_NOTE_LENGTH", 240)
 MAX_QUIZ_INTRO_VIDEO_SIZE = 50 * 1024 * 1024
@@ -365,6 +382,66 @@ def get_quiz_intro_video_status(enabled: Any = True) -> Dict[str, Any]:
         "source": source,
         "max_size": MAX_QUIZ_INTRO_VIDEO_SIZE,
     }
+
+
+def get_quiz_intro_library_file_path(storage_name: str) -> str:
+    normalized = str(storage_name or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}\.mp4", normalized):
+        raise ValueError("Invalid quiz intro video storage name")
+    library_root = os.path.realpath(QUIZ_INTRO_VIDEO_LIBRARY_DIR)
+    file_path = os.path.realpath(os.path.join(library_root, normalized))
+    if os.path.dirname(file_path) != library_root:
+        raise ValueError("Invalid quiz intro video storage path")
+    return file_path
+
+
+def save_quiz_intro_video_file(payload: bytes, target_path: str) -> None:
+    target_dir = os.path.dirname(target_path) or "."
+    os.makedirs(target_dir, exist_ok=True)
+    temp_path = os.path.join(
+        target_dir,
+        f".{os.path.basename(target_path)}.upload-{secrets.token_hex(6)}",
+    )
+    try:
+        with open(temp_path, "wb") as uploaded_file:
+            uploaded_file.write(payload)
+            uploaded_file.flush()
+            os.fsync(uploaded_file.fileno())
+        os.replace(temp_path, target_path)
+    finally:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+
+
+def activate_quiz_intro_video_file(source_path: str) -> None:
+    target_dir = os.path.dirname(START_VIDEO_NOTE_MANAGED_PATH) or "."
+    os.makedirs(target_dir, exist_ok=True)
+    temp_path = os.path.join(
+        target_dir,
+        f".active.mp4.select-{secrets.token_hex(6)}",
+    )
+    try:
+        shutil.copy2(source_path, temp_path)
+        with open(temp_path, "rb") as active_file:
+            os.fsync(active_file.fileno())
+        os.replace(temp_path, START_VIDEO_NOTE_MANAGED_PATH)
+    finally:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+
+
+def get_file_sha256(file_path: str) -> str:
+    digest = hashlib.sha256()
+    with open(file_path, "rb") as source_file:
+        for chunk in iter(lambda: source_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def is_valid_mp4_payload(payload: bytes) -> bool:
@@ -1323,6 +1400,228 @@ def build_stream_local_analysis(
     }
     return apply_stream_override_to_analysis(analysis_data, stream_settings)
 
+async def get_quiz_intro_video_library() -> List[Dict[str, Any]]:
+    active_file_exists = os.path.isfile(START_VIDEO_NOTE_MANAGED_PATH)
+    rows: List[Dict[str, Any]] = []
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute(
+                        """
+                        SELECT id, storage_name, original_name, file_size, sha256,
+                               is_active, uploaded_by, activated_by,
+                               created_at, activated_at
+                        FROM admin_quiz_intro_videos
+                        WHERE environment = %s
+                        ORDER BY is_active DESC, created_at DESC, id DESC
+                        """,
+                        (_runtime_environment,),
+                    )
+                    rows = list(await cur.fetchall() or [])
+        except Exception as exc:
+            print(f"Quiz intro video library fallback: {exc}")
+            rows = []
+
+    uploaded_items = []
+    for row in rows:
+        try:
+            file_path = get_quiz_intro_library_file_path(row.get("storage_name") or "")
+        except ValueError:
+            file_path = ""
+        file_exists = bool(file_path and os.path.isfile(file_path))
+        uploaded_items.append(
+            {
+                "id": int(row.get("id") or 0),
+                "kind": "uploaded",
+                "original_name": str(row.get("original_name") or "video.mp4"),
+                "file_name": str(row.get("storage_name") or ""),
+                "file_size": int(row.get("file_size") or 0),
+                "sha256": str(row.get("sha256") or ""),
+                "is_active": bool(row.get("is_active")) and active_file_exists and file_exists,
+                "is_default": False,
+                "file_exists": file_exists,
+                "uploaded_by": row.get("uploaded_by"),
+                "activated_by": row.get("activated_by"),
+                "created_at": row.get("created_at"),
+                "activated_at": row.get("activated_at"),
+            }
+        )
+
+    try:
+        default_size = (
+            os.path.getsize(START_VIDEO_NOTE_FALLBACK_PATH)
+            if os.path.isfile(START_VIDEO_NOTE_FALLBACK_PATH)
+            else 0
+        )
+    except OSError:
+        default_size = 0
+    default_item = {
+        "id": "default",
+        "kind": "default",
+        "original_name": os.path.basename(START_VIDEO_NOTE_FALLBACK_PATH),
+        "file_name": os.path.basename(START_VIDEO_NOTE_FALLBACK_PATH),
+        "file_size": default_size,
+        "sha256": "",
+        "is_active": not active_file_exists,
+        "is_default": True,
+        "file_exists": os.path.isfile(START_VIDEO_NOTE_FALLBACK_PATH),
+        "uploaded_by": None,
+        "activated_by": None,
+        "created_at": None,
+        "activated_at": None,
+    }
+    return [default_item, *uploaded_items]
+
+
+async def attach_quiz_intro_video_media(
+    settings: Dict[str, Any],
+) -> Dict[str, Any]:
+    library = await get_quiz_intro_video_library()
+    status = get_quiz_intro_video_status(settings.get("quiz_intro_video_enabled", 1))
+    active_item = next((item for item in library if item.get("is_active")), None)
+    if active_item:
+        status.update(
+            {
+                "id": active_item.get("id"),
+                "file_name": active_item.get("original_name") or status.get("file_name"),
+                "file_size": active_item.get("file_size") or status.get("file_size"),
+                "source": active_item.get("kind") or status.get("source"),
+                "sha256": active_item.get("sha256") or "",
+                "created_at": active_item.get("created_at"),
+            }
+        )
+    settings["quiz_intro_video"] = status
+    settings["quiz_intro_video_library"] = library
+    return settings
+
+
+async def activate_quiz_intro_video(video_id: int, admin_user_id: int) -> Dict[str, Any]:
+    video_id = int(video_id)
+    previous_row = None
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT id, storage_name, original_name, file_size, sha256
+                FROM admin_quiz_intro_videos
+                WHERE id = %s AND environment = %s
+                LIMIT 1
+                """,
+                (video_id, _runtime_environment),
+            )
+            row = await cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Saved MP4 file not found")
+            await cur.execute(
+                """
+                SELECT id, storage_name
+                FROM admin_quiz_intro_videos
+                WHERE environment = %s AND is_active = 1
+                ORDER BY activated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (_runtime_environment,),
+            )
+            previous_row = await cur.fetchone()
+
+    try:
+        source_path = get_quiz_intro_library_file_path(row.get("storage_name") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not os.path.isfile(source_path):
+        raise HTTPException(status_code=404, detail="Saved MP4 file is missing on disk")
+
+    try:
+        activate_quiz_intro_video_file(source_path)
+        async with db_pool.acquire() as conn:
+            await conn.begin()
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        UPDATE admin_quiz_intro_videos
+                        SET is_active = 0
+                        WHERE environment = %s AND is_active = 1
+                        """,
+                        (_runtime_environment,),
+                    )
+                    await cur.execute(
+                        """
+                        UPDATE admin_quiz_intro_videos
+                        SET is_active = 1,
+                            activated_by = %s,
+                            activated_at = NOW()
+                        WHERE id = %s AND environment = %s
+                        """,
+                        (int(admin_user_id), video_id, _runtime_environment),
+                    )
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+    except Exception as exc:
+        try:
+            if previous_row and int(previous_row.get("id") or 0) != video_id:
+                previous_path = get_quiz_intro_library_file_path(
+                    previous_row.get("storage_name") or ""
+                )
+                if os.path.isfile(previous_path):
+                    activate_quiz_intro_video_file(previous_path)
+            elif not previous_row and os.path.isfile(START_VIDEO_NOTE_MANAGED_PATH):
+                os.remove(START_VIDEO_NOTE_MANAGED_PATH)
+        except Exception:
+            pass
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=500, detail=f"Could not activate MP4 file: {exc}") from exc
+    return row
+
+
+async def reset_quiz_intro_video_to_default() -> None:
+    previous_row = None
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT id, storage_name
+                FROM admin_quiz_intro_videos
+                WHERE environment = %s AND is_active = 1
+                ORDER BY activated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (_runtime_environment,),
+            )
+            previous_row = await cur.fetchone()
+    try:
+        if os.path.isfile(START_VIDEO_NOTE_MANAGED_PATH):
+            os.remove(START_VIDEO_NOTE_MANAGED_PATH)
+        async with db_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE admin_quiz_intro_videos
+                    SET is_active = 0
+                    WHERE environment = %s AND is_active = 1
+                    """,
+                    (_runtime_environment,),
+                )
+    except Exception as exc:
+        try:
+            if previous_row:
+                previous_path = get_quiz_intro_library_file_path(
+                    previous_row.get("storage_name") or ""
+                )
+                if os.path.isfile(previous_path):
+                    activate_quiz_intro_video_file(previous_path)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not restore the default MP4 file: {exc}",
+        ) from exc
+
+
 async def get_support_links_row():
     fallback = {
         "channel_url": (os.getenv("CHANNEL_URL") or "").strip(),
@@ -1338,10 +1637,7 @@ async def get_support_links_row():
         settings["quiz_intro_video_enabled"] = 1
         settings["quiz_config"] = normalize_quiz_config()
         settings["final_message_config"] = normalize_final_message_config()
-        settings["quiz_intro_video"] = get_quiz_intro_video_status(
-            settings.get("quiz_intro_video_enabled")
-        )
-        return settings
+        return await attach_quiz_intro_video_media(settings)
     try:
         async with db_pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -1361,19 +1657,13 @@ async def get_support_links_row():
         settings["quiz_intro_video_enabled"] = 1
         settings["quiz_config"] = normalize_quiz_config()
         settings["final_message_config"] = normalize_final_message_config()
-        settings["quiz_intro_video"] = get_quiz_intro_video_status(
-            settings.get("quiz_intro_video_enabled")
-        )
-        return settings
+        return await attach_quiz_intro_video_media(settings)
     if not row:
         settings = normalize_channel_settings(fallback)
         settings["quiz_intro_video_enabled"] = 1
         settings["quiz_config"] = normalize_quiz_config()
         settings["final_message_config"] = normalize_final_message_config()
-        settings["quiz_intro_video"] = get_quiz_intro_video_status(
-            settings.get("quiz_intro_video_enabled")
-        )
-        return settings
+        return await attach_quiz_intro_video_media(settings)
     merged = {
         "channel_id": row.get("channel_id") or fallback["channel_id"],
         "channel_url": row.get("channel_url") or fallback["channel_url"],
@@ -1393,10 +1683,7 @@ async def get_support_links_row():
     settings["quiz_intro_video_enabled"] = 1 if bool(
         int(merged.get("quiz_intro_video_enabled") or 0)
     ) else 0
-    settings["quiz_intro_video"] = get_quiz_intro_video_status(
-        settings["quiz_intro_video_enabled"]
-    )
-    return settings
+    return await attach_quiz_intro_video_media(settings)
 
 
 async def get_quiz_config_row():
@@ -4191,30 +4478,153 @@ async def admin_quiz_intro_video_upload(
     if not is_valid_mp4_payload(payload):
         raise HTTPException(status_code=400, detail="The uploaded file is not a valid MP4 container")
 
-    target_path = START_VIDEO_NOTE_MANAGED_PATH
-    target_dir = os.path.dirname(target_path) or "."
-    temp_path = f"{target_path}.upload-{secrets.token_hex(6)}"
+    raw_original_name = unquote(
+        str(request.headers.get("x-file-name") or "").strip()
+    )
+    original_name = os.path.basename(raw_original_name).strip()[:255]
+    if not original_name.lower().endswith(".mp4"):
+        original_name = f"quiz-intro-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.mp4"
+    payload_sha256 = hashlib.sha256(payload).hexdigest()
+
     try:
-        os.makedirs(target_dir, exist_ok=True)
-        with open(temp_path, "wb") as uploaded_file:
-            uploaded_file.write(payload)
-            uploaded_file.flush()
-            os.fsync(uploaded_file.fileno())
-        os.replace(temp_path, target_path)
+        if os.path.isfile(START_VIDEO_NOTE_FALLBACK_PATH) and secrets.compare_digest(
+            payload_sha256,
+            get_file_sha256(START_VIDEO_NOTE_FALLBACK_PATH),
+        ):
+            await reset_quiz_intro_video_to_default()
+            support_settings = await get_support_links_row()
+            return {
+                "status": "success",
+                "deduplicated": True,
+                "quiz_intro_video": support_settings.get("quiz_intro_video"),
+                "quiz_intro_video_library": support_settings.get("quiz_intro_video_library", []),
+            }
+
+        storage_name = f"{payload_sha256}.mp4"
+        target_path = get_quiz_intro_library_file_path(storage_name)
+        if not os.path.isfile(target_path):
+            save_quiz_intro_video_file(payload, target_path)
     except OSError as exc:
-        try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-        except OSError:
-            pass
         raise HTTPException(status_code=500, detail=f"Could not save MP4 file: {exc}")
+
+    upload_deduplicated = False
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                INSERT INTO admin_quiz_intro_videos
+                    (environment, storage_name, original_name, file_size, sha256, uploaded_by)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    original_name = VALUES(original_name),
+                    file_size = VALUES(file_size)
+                """,
+                (
+                    _runtime_environment,
+                    storage_name,
+                    original_name,
+                    len(payload),
+                    payload_sha256,
+                    int(admin["user_id"]),
+                ),
+            )
+            upload_deduplicated = not bool(cur.lastrowid)
+            await cur.execute(
+                """
+                SELECT id
+                FROM admin_quiz_intro_videos
+                WHERE environment = %s AND sha256 = %s
+                LIMIT 1
+                """,
+                (_runtime_environment, payload_sha256),
+            )
+            video_row = await cur.fetchone()
+    if not video_row:
+        raise HTTPException(status_code=500, detail="Could not add MP4 file to the library")
+
+    await activate_quiz_intro_video(int(video_row["id"]), int(admin["user_id"]))
+    support_settings = await get_support_links_row()
+    return {
+        "status": "success",
+        "deduplicated": upload_deduplicated,
+        "quiz_intro_video": support_settings.get("quiz_intro_video"),
+        "quiz_intro_video_library": support_settings.get("quiz_intro_video_library", []),
+    }
+
+
+@app.post("/api/admin/settings/quiz-intro-video/reset")
+async def admin_quiz_intro_video_reset(
+    admin=Depends(get_admin_user),
+):
+    await reset_quiz_intro_video_to_default()
+    support_settings = await get_support_links_row()
+    return {
+        "status": "success",
+        "quiz_intro_video": support_settings.get("quiz_intro_video"),
+        "quiz_intro_video_library": support_settings.get("quiz_intro_video_library", []),
+    }
+
+
+@app.post("/api/admin/settings/quiz-intro-video/{video_id}/select")
+async def admin_quiz_intro_video_select(
+    video_id: int,
+    admin=Depends(get_admin_user),
+):
+    await activate_quiz_intro_video(video_id, int(admin["user_id"]))
+    support_settings = await get_support_links_row()
+    return {
+        "status": "success",
+        "quiz_intro_video": support_settings.get("quiz_intro_video"),
+        "quiz_intro_video_library": support_settings.get("quiz_intro_video_library", []),
+    }
+
+
+@app.delete("/api/admin/settings/quiz-intro-video/{video_id}")
+async def admin_quiz_intro_video_delete(
+    video_id: int,
+    admin=Depends(get_admin_user),
+):
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT id, storage_name, is_active
+                FROM admin_quiz_intro_videos
+                WHERE id = %s AND environment = %s
+                LIMIT 1
+                """,
+                (int(video_id), _runtime_environment),
+            )
+            row = await cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Saved MP4 file not found")
+            if bool(row.get("is_active")):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Select another MP4 or restore the default before deleting this file",
+                )
+            try:
+                file_path = get_quiz_intro_library_file_path(row.get("storage_name") or "")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            try:
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=f"Could not delete MP4 file: {exc}")
+            await cur.execute(
+                """
+                DELETE FROM admin_quiz_intro_videos
+                WHERE id = %s AND environment = %s AND is_active = 0
+                """,
+                (int(video_id), _runtime_environment),
+            )
 
     support_settings = await get_support_links_row()
     return {
         "status": "success",
-        "quiz_intro_video": get_quiz_intro_video_status(
-            support_settings.get("quiz_intro_video_enabled", 1)
-        ),
+        "quiz_intro_video": support_settings.get("quiz_intro_video"),
+        "quiz_intro_video_library": support_settings.get("quiz_intro_video_library", []),
     }
 
 

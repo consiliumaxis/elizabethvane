@@ -2904,6 +2904,176 @@
   pointer-events: none;
 }
 
+.admin-quiz-video-library-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px dashed rgba(143, 106, 46, 0.24);
+  padding-top: 12px;
+}
+
+.admin-quiz-video-library-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.admin-quiz-video-library-head strong {
+  color: var(--text-main);
+  font-size: 0.88rem;
+}
+
+.admin-quiz-video-library-head span {
+  color: var(--text-soft);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.admin-quiz-video-reset {
+  flex: 0 0 auto;
+}
+
+.admin-quiz-video-library {
+  display: grid;
+  gap: 7px;
+  max-height: 390px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.admin-quiz-video-library-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(143, 106, 46, 0.16);
+  border-radius: 13px;
+  background: rgba(255, 253, 249, 0.7);
+  padding: 9px;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.admin-quiz-video-library-item.is-active {
+  border-color: rgba(57, 132, 76, 0.38);
+  background: linear-gradient(135deg, rgba(238, 249, 240, 0.9), rgba(255, 252, 244, 0.92));
+  box-shadow: inset 3px 0 0 rgba(57, 132, 76, 0.58);
+}
+
+.admin-quiz-video-library-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(143, 106, 46, 0.25);
+  border-radius: 12px;
+  color: #75501b;
+  background: rgba(143, 106, 46, 0.1);
+  font-size: 0.64rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.admin-quiz-video-library-icon.is-default {
+  border-color: rgba(173, 128, 51, 0.42);
+  color: #fff8e9;
+  background: linear-gradient(145deg, #9b7129, #684717);
+  box-shadow: 0 5px 12px rgba(87, 57, 19, 0.16);
+}
+
+.admin-quiz-video-library-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-quiz-video-library-copy > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-quiz-video-library-copy strong {
+  color: var(--text-main);
+  font-size: 0.79rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-quiz-video-library-copy span,
+.admin-quiz-video-library-copy small {
+  color: var(--text-soft);
+  font-size: 0.66rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-quiz-video-library-badge {
+  border: 1px solid rgba(57, 132, 76, 0.28);
+  border-radius: 999px;
+  color: #286b3b;
+  background: rgba(57, 132, 76, 0.1);
+  padding: 2px 6px;
+  font-size: 0.58rem;
+  text-transform: uppercase;
+}
+
+.admin-quiz-video-library-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.admin-quiz-video-library-actions .admin-btn-outline,
+.admin-quiz-video-library-actions .admin-mini-action {
+  min-height: 34px;
+  padding: 7px 9px;
+  font-size: 0.68rem;
+}
+
+.admin-quiz-video-current-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  color: #fff;
+  background: #347d48;
+  font-size: 0.86rem;
+  font-weight: 900;
+}
+
+.admin-quiz-video-confirm-modal {
+  width: min(500px, 100%);
+}
+
+.admin-quiz-video-confirm-copy {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  border: 1px solid rgba(143, 106, 46, 0.2);
+  border-radius: 13px;
+  background: rgba(255, 250, 242, 0.78);
+  padding: 12px;
+}
+
+.admin-quiz-video-confirm-copy strong {
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.admin-quiz-video-confirm-copy p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.admin-quiz-video-confirm-actions {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .admin-funnel-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3898,6 +4068,24 @@
 
   .admin-quiz-video-upload {
     width: 100%;
+  }
+
+  .admin-quiz-video-library-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-quiz-video-reset {
+    width: 100%;
+  }
+
+  .admin-quiz-video-library-item {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .admin-quiz-video-library-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
   }
 
   .admin-final-add-actions {

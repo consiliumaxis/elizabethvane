@@ -365,6 +365,27 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS admin_quiz_intro_videos (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    environment VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT 'prod',
+                    storage_name VARCHAR(80) CHARACTER SET ascii NOT NULL,
+                    original_name VARCHAR(255) NOT NULL,
+                    file_size BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                    sha256 CHAR(64) CHARACTER SET ascii NOT NULL,
+                    is_active TINYINT(1) NOT NULL DEFAULT 0,
+                    uploaded_by BIGINT NULL,
+                    activated_by BIGINT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    activated_at TIMESTAMP NULL DEFAULT NULL,
+                    UNIQUE KEY uq_admin_quiz_intro_videos_storage (environment, storage_name),
+                    UNIQUE KEY uq_admin_quiz_intro_videos_sha256 (environment, sha256),
+                    KEY idx_admin_quiz_intro_videos_active (environment, is_active, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS user_onboarding (
                     user_id BIGINT NOT NULL PRIMARY KEY,
                     quiz_name VARCHAR(255) NULL,

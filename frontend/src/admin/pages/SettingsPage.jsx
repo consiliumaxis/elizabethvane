@@ -221,6 +221,20 @@ const formatBytes = (value) => {
   return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 1 : 2)} MB`;
 };
 
+const formatMediaDate = (value) => {
+  if (!value) return '';
+  const normalized = String(value).includes('T') ? String(value) : String(value).replace(' ', 'T');
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed);
+};
+
 const normalizeQuizConfig = (rawConfig) => {
   const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
   return QUIZ_STEPS.reduce((acc, step) => {
@@ -427,13 +441,17 @@ export default function SettingsPage() {
   const [quizConfig, setQuizConfig] = useState(() => normalizeQuizConfig());
   const [quizIntroVideoEnabled, setQuizIntroVideoEnabled] = useState(true);
   const [quizIntroVideoMeta, setQuizIntroVideoMeta] = useState({
+    id: 'default',
     file_exists: false,
     file_name: '',
     file_size: 0,
     source: 'missing',
     max_size: QUIZ_INTRO_VIDEO_MAX_SIZE,
   });
+  const [quizIntroVideoLibrary, setQuizIntroVideoLibrary] = useState([]);
   const [quizIntroVideoUploading, setQuizIntroVideoUploading] = useState(false);
+  const [quizIntroVideoAction, setQuizIntroVideoAction] = useState('');
+  const [quizIntroVideoConfirm, setQuizIntroVideoConfirm] = useState(null);
   const [funnelEditorTab, setFunnelEditorTab] = useState('quiz');
   const [finalMessageConfig, setFinalMessageConfig] = useState(() =>
     normalizeFinalMessageConfig(DEFAULT_FINAL_MESSAGE_CONFIG)
@@ -516,12 +534,18 @@ export default function SettingsPage() {
         quizIntroVideo.enabled ?? support.quiz_intro_video_enabled ?? 1
       )));
       setQuizIntroVideoMeta({
+        id: quizIntroVideo.id ?? 'default',
         file_exists: Boolean(quizIntroVideo.file_exists),
         file_name: String(quizIntroVideo.file_name || ''),
         file_size: Number(quizIntroVideo.file_size || 0),
         source: String(quizIntroVideo.source || 'missing'),
         max_size: Number(quizIntroVideo.max_size || QUIZ_INTRO_VIDEO_MAX_SIZE),
       });
+      setQuizIntroVideoLibrary(
+        Array.isArray(support.quiz_intro_video_library)
+          ? support.quiz_intro_video_library
+          : []
+      );
       setFinalMessageConfig(normalizeFinalMessageConfig(support.final_message_config));
 
       const pocket = settingsRes?.settings?.pocket_api || {};
@@ -841,6 +865,28 @@ export default function SettingsPage() {
     });
   };
 
+  const applyQuizIntroVideoMedia = (response, fallback = {}) => {
+    const video = response?.quiz_intro_video || {};
+    setQuizIntroVideoMeta({
+      id: video.id ?? fallback.id ?? 'default',
+      file_exists: Boolean(video.file_exists),
+      file_name: String(video.file_name || fallback.file_name || ''),
+      file_size: Number(video.file_size || fallback.file_size || 0),
+      source: String(video.source || fallback.source || 'missing'),
+      max_size: Number(
+        video.max_size
+        || fallback.max_size
+        || quizIntroVideoMeta.max_size
+        || QUIZ_INTRO_VIDEO_MAX_SIZE
+      ),
+    });
+    setQuizIntroVideoLibrary(
+      Array.isArray(response?.quiz_intro_video_library)
+        ? response.quiz_intro_video_library
+        : []
+    );
+  };
+
   const uploadQuizIntroVideo = async (file) => {
     if (!file) return;
     const extensionIsMp4 = String(file.name || '').toLowerCase().endsWith('.mp4');
@@ -863,25 +909,89 @@ export default function SettingsPage() {
     try {
       const response = await apiAdminFetchJson('/api/admin/settings/quiz-intro-video', {
         method: 'PUT',
-        headers: { 'Content-Type': file.type || 'video/mp4' },
+        headers: {
+          'Content-Type': file.type || 'video/mp4',
+          'X-File-Name': encodeURIComponent(file.name || 'video.mp4'),
+        },
         body: file,
       });
-      const video = response?.quiz_intro_video || {};
-      setQuizIntroVideoMeta({
-        file_exists: Boolean(video.file_exists),
-        file_name: String(video.file_name || file.name || ''),
-        file_size: Number(video.file_size || file.size || 0),
-        source: String(video.source || 'uploaded'),
-        max_size: Number(video.max_size || maxSize),
+      applyQuizIntroVideoMedia(response, {
+        file_name: file.name,
+        file_size: file.size,
+        source: 'uploaded',
+        max_size: maxSize,
       });
       setStatus(tr(
-        'The quiz intro video note was replaced',
-        'Кружок перед опросником заменён'
+        response?.deduplicated
+          ? 'This MP4 is already saved. It is now selected.'
+          : 'The MP4 was saved to the library and selected',
+        response?.deduplicated
+          ? 'Этот MP4 уже был сохранён. Теперь он выбран.'
+          : 'MP4 сохранён в библиотеку и выбран'
       ));
     } catch (e) {
       setError(e.message || tr('Could not upload the MP4 file', 'Не удалось загрузить MP4'));
     } finally {
       setQuizIntroVideoUploading(false);
+    }
+  };
+
+  const selectQuizIntroVideo = async (video) => {
+    if (!video || video.is_active || quizIntroVideoAction) return;
+    if (video.is_default || String(video.id) === 'default') {
+      setQuizIntroVideoConfirm({ action: 'reset', video });
+      return;
+    }
+    setQuizIntroVideoAction(`select:${video.id}`);
+    setError('');
+    setStatus('');
+    try {
+      const response = await apiAdminFetchJson(
+        `/api/admin/settings/quiz-intro-video/${encodeURIComponent(video.id)}/select`,
+        { method: 'POST' }
+      );
+      applyQuizIntroVideoMedia(response);
+      setStatus(tr(
+        'The saved MP4 is now used before the questionnaire',
+        'Сохранённый MP4 выбран для отправки перед опросником'
+      ));
+    } catch (e) {
+      setError(e.message || tr('Could not select the saved MP4', 'Не удалось выбрать сохранённый MP4'));
+    } finally {
+      setQuizIntroVideoAction('');
+    }
+  };
+
+  const confirmQuizIntroVideoAction = async () => {
+    const confirmation = quizIntroVideoConfirm;
+    if (!confirmation || quizIntroVideoAction) return;
+    const isDelete = confirmation.action === 'delete';
+    setQuizIntroVideoAction(
+      isDelete ? `delete:${confirmation.video?.id}` : 'reset'
+    );
+    setError('');
+    setStatus('');
+    try {
+      const response = await apiAdminFetchJson(
+        isDelete
+          ? `/api/admin/settings/quiz-intro-video/${encodeURIComponent(confirmation.video.id)}`
+          : '/api/admin/settings/quiz-intro-video/reset',
+        { method: isDelete ? 'DELETE' : 'POST' }
+      );
+      applyQuizIntroVideoMedia(response);
+      setQuizIntroVideoConfirm(null);
+      setStatus(isDelete
+        ? tr('The MP4 was deleted from the library', 'MP4 удалён из библиотеки')
+        : tr(
+          'The system default video note has been restored',
+          'Восстановлен системный кружок по умолчанию'
+        ));
+    } catch (e) {
+      setError(e.message || (isDelete
+        ? tr('Could not delete the MP4', 'Не удалось удалить MP4')
+        : tr('Could not restore the default MP4', 'Не удалось восстановить MP4 по умолчанию')));
+    } finally {
+      setQuizIntroVideoAction('');
     }
   };
 
@@ -1748,8 +1858,8 @@ export default function SettingsPage() {
                   <strong>
                     {quizIntroVideoMeta.file_exists
                       ? (quizIntroVideoMeta.source === 'uploaded'
-                        ? tr('Custom video note', 'Свой кружок')
-                        : tr('Default video note', 'Стандартный кружок'))
+                        ? tr('Selected from the MP4 library', 'Выбран из библиотеки MP4')
+                        : tr('System default video note', 'Системный кружок по умолчанию'))
                       : tr('Video note is missing', 'Кружок не загружен')}
                   </strong>
                   <span>
@@ -1777,11 +1887,198 @@ export default function SettingsPage() {
                   />
                   {quizIntroVideoUploading
                     ? tr('Uploading…', 'Загрузка...')
-                    : (quizIntroVideoMeta.file_exists
-                      ? tr('Replace MP4', 'Заменить MP4')
-                      : tr('Upload MP4', 'Загрузить MP4'))}
+                    : tr('Add MP4', 'Добавить MP4')}
                 </label>
               </div>
+
+              <div className="admin-quiz-video-library-head">
+                <div>
+                  <strong>{tr('Saved MP4 library', 'Библиотека сохранённых MP4')}</strong>
+                  <span>
+                    {tr(
+                      'Uploads are kept outside the deployment folder and are not lost after an update.',
+                      'Загрузки хранятся вне папки деплоя и не пропадают после обновления.'
+                    )}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="admin-btn-outline admin-quiz-video-reset"
+                  disabled={
+                    quizIntroVideoAction
+                    || quizIntroVideoMeta.source === 'default'
+                    || quizIntroVideoMeta.id === 'default'
+                  }
+                  onClick={() => setQuizIntroVideoConfirm({
+                    action: 'reset',
+                    video: quizIntroVideoLibrary.find((item) => item.is_default) || null,
+                  })}
+                >
+                  {tr('Restore default', 'Сбросить до стандартного')}
+                </button>
+              </div>
+
+              <div className="admin-quiz-video-library">
+                {quizIntroVideoLibrary.map((video) => {
+                  const isDefault = Boolean(video.is_default);
+                  const isActive = Boolean(video.is_active);
+                  const busy = quizIntroVideoAction.endsWith(`:${video.id}`);
+                  return (
+                    <article
+                      className={`admin-quiz-video-library-item ${isActive ? 'is-active' : ''}`}
+                      key={`${video.kind || 'video'}:${video.id}`}
+                    >
+                      <div className={`admin-quiz-video-library-icon ${isDefault ? 'is-default' : ''}`}>
+                        {isDefault ? 'EV' : 'MP4'}
+                      </div>
+                      <div className="admin-quiz-video-library-copy">
+                        <div>
+                          <strong>
+                            {isDefault
+                              ? tr('System default', 'Системный по умолчанию')
+                              : (video.original_name || video.file_name)}
+                          </strong>
+                          {isActive ? (
+                            <b className="admin-quiz-video-library-badge">
+                              {tr('Selected', 'Выбран')}
+                            </b>
+                          ) : null}
+                        </div>
+                        <span>
+                          {isDefault
+                            ? tr(
+                              'Protected video included with Elizabeth Bot',
+                              'Защищённый кружок из комплекта Elizabeth Bot'
+                            )
+                            : (video.original_name || video.file_name)}
+                        </span>
+                        <small>
+                          {formatBytes(video.file_size)}
+                          {video.created_at ? ` · ${formatMediaDate(video.created_at)}` : ''}
+                          {!video.file_exists ? ` · ${tr('file is missing', 'файл отсутствует')}` : ''}
+                        </small>
+                      </div>
+                      <div className="admin-quiz-video-library-actions">
+                        {!isActive ? (
+                          <button
+                            type="button"
+                            className="admin-btn-outline"
+                            disabled={Boolean(quizIntroVideoAction) || !video.file_exists}
+                            onClick={() => selectQuizIntroVideo(video)}
+                          >
+                            {busy ? tr('Selecting…', 'Выбираем…') : tr('Select', 'Выбрать')}
+                          </button>
+                        ) : (
+                          <span className="admin-quiz-video-current-mark">✓</span>
+                        )}
+                        {!isDefault && !isActive ? (
+                          <button
+                            type="button"
+                            className="admin-mini-action danger"
+                            disabled={Boolean(quizIntroVideoAction)}
+                            onClick={() => setQuizIntroVideoConfirm({ action: 'delete', video })}
+                          >
+                            {tr('Delete', 'Удалить')}
+                          </button>
+                        ) : null}
+                      </div>
+                    </article>
+                  );
+                })}
+                {!quizIntroVideoLibrary.length ? (
+                  <div className="admin-muted">
+                    {tr('The MP4 library is loading…', 'Библиотека MP4 загружается…')}
+                  </div>
+                ) : null}
+              </div>
+
+              {quizIntroVideoConfirm ? (
+                <div
+                  className="admin-modal-backdrop"
+                  onClick={() => {
+                    if (!quizIntroVideoAction) setQuizIntroVideoConfirm(null);
+                  }}
+                >
+                  <div
+                    className="admin-modal admin-quiz-video-confirm-modal"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="admin-row-between">
+                      <div>
+                        <div className="admin-quiz-video-eyebrow">
+                          {tr('Confirmation', 'Подтверждение')}
+                        </div>
+                        <h3 className="admin-section-title">
+                          {quizIntroVideoConfirm.action === 'delete'
+                            ? tr('Delete saved MP4?', 'Удалить сохранённый MP4?')
+                            : tr('Restore the system default?', 'Восстановить системный кружок?')}
+                        </h3>
+                      </div>
+                      <button
+                        type="button"
+                        className="admin-btn-outline"
+                        disabled={Boolean(quizIntroVideoAction)}
+                        onClick={() => setQuizIntroVideoConfirm(null)}
+                      >
+                        {tr('Close', 'Закрыть')}
+                      </button>
+                    </div>
+                    <div className="admin-quiz-video-confirm-copy">
+                      {quizIntroVideoConfirm.action === 'delete' ? (
+                        <>
+                          <strong>
+                            {quizIntroVideoConfirm.video?.original_name
+                              || tr('Saved MP4', 'Сохранённый MP4')}
+                          </strong>
+                          <p>
+                            {tr(
+                              'The file will be permanently removed from the library. This does not affect the system default.',
+                              'Файл будет безвозвратно удалён из библиотеки. Системный кружок по умолчанию не изменится.'
+                            )}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <strong>
+                            {tr(
+                              'The current selection will remain in the library',
+                              'Текущий выбранный MP4 останется в библиотеке'
+                            )}
+                          </strong>
+                          <p>
+                            {tr(
+                              'New users will receive the original Elizabeth video note before question 1.',
+                              'Новые пользователи снова будут получать оригинальный кружок Elizabeth перед вопросом 1.'
+                            )}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                    <div className="admin-row-actions admin-quiz-video-confirm-actions">
+                      <button
+                        type="button"
+                        className="admin-btn-outline"
+                        disabled={Boolean(quizIntroVideoAction)}
+                        onClick={() => setQuizIntroVideoConfirm(null)}
+                      >
+                        {tr('Cancel', 'Отмена')}
+                      </button>
+                      <button
+                        type="button"
+                        className={`admin-btn ${quizIntroVideoConfirm.action === 'delete' ? 'danger-solid' : ''}`}
+                        disabled={Boolean(quizIntroVideoAction)}
+                        onClick={confirmQuizIntroVideoAction}
+                      >
+                        {quizIntroVideoAction
+                          ? tr('Please wait…', 'Подождите…')
+                          : (quizIntroVideoConfirm.action === 'delete'
+                            ? tr('Delete MP4', 'Удалить MP4')
+                            : tr('Restore default', 'Восстановить стандартный'))}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
             </div>
 
