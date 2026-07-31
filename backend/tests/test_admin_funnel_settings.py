@@ -68,6 +68,24 @@ class AdminFunnelSettingsTest(unittest.TestCase):
         self.assertIn("check_subscription_enabled", source)
         self.assertIn("channel_gate_completed_at", source)
 
+    def test_completed_quiz_opens_app_without_channel_gate(self):
+        source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+        finish_source = source.split("async def finish_quiz_and_open_app", 1)[1].split(
+            "async def route_user_after_start", 1
+        )[0]
+        route_source = source.split("async def route_user_after_start", 1)[1].split(
+            "async def write_manager_stats_audit", 1
+        )[0]
+        continue_source = source.split("async def handle_funnel_continue", 1)[1].split(
+            "async def handle_funnel_open_menu", 1
+        )[0]
+
+        self.assertNotIn("send_channel_gate", finish_source)
+        self.assertIn("complete_channel_subscription", finish_source)
+        self.assertIn("send_funnel_final_message", finish_source)
+        self.assertNotIn("send_channel_gate", route_source)
+        self.assertNotIn("is_user_channel_member", continue_source)
+
 
 if __name__ == "__main__":
     unittest.main()

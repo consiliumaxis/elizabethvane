@@ -7897,6 +7897,15 @@ async def complete_channel_subscription(
                 (user_id,),
             )
             first_confirmation = cur.rowcount > 0
+            await cur.execute(
+                """
+                UPDATE user_onboarding
+                SET channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())
+                WHERE user_id = %s
+                  AND quiz_completed_at IS NOT NULL
+                """,
+                (user_id,),
+            )
     if not first_confirmation:
         return False
     asyncio.create_task(
@@ -8018,6 +8027,26 @@ def build_funnel_final_keyboard(final_message_config: Dict[str, Any]) -> Optiona
     return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
 
+async def send_funnel_final_message(chat_id: int) -> bool:
+    settings = await get_support_links_row()
+    final_message_config = normalize_final_message_config(settings.get("final_message_config"))
+    if not final_message_config["enabled"]:
+        return False
+    keyboard = build_funnel_final_keyboard(final_message_config)
+    if not keyboard:
+        return False
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=final_message_config["message_text"],
+            reply_markup=keyboard,
+        )
+        return True
+    except Exception as send_error:
+        print(f"[Bot] final funnel message send failed: {send_error}")
+        return False
+
+
 async def show_funnel_final_message(callback: types.CallbackQuery) -> bool:
     if not callback.message:
         return False
@@ -8036,16 +8065,7 @@ async def show_funnel_final_message(callback: types.CallbackQuery) -> bool:
         return True
     except Exception as edit_error:
         print(f"[Bot] final funnel message edit failed: {edit_error}")
-    try:
-        await bot.send_message(
-            chat_id=callback.message.chat.id,
-            text=final_message_config["message_text"],
-            reply_markup=keyboard,
-        )
-        return True
-    except Exception as send_error:
-        print(f"[Bot] final funnel message send failed: {send_error}")
-        return False
+    return await send_funnel_final_message(callback.message.chat.id)
 
 
 @dp.chat_join_request()
@@ -8187,23 +8207,46 @@ async def deliver_quiz_aio_fields(
             )
 
 
-async def finish_quiz_and_show_channel(message: types.Message, user_id: int, skipped: bool = False):
+async def finish_quiz_and_open_app(
+    message: types.Message,
+    user_id: int,
+    *,
+    skipped: bool = False,
+    first_name: str = "",
+    username: str = "",
+):
     asyncio.create_task(send_aio_postback_event(user_id, QUIZ_COMPLETE_EVENT))
     if skipped:
         await message.answer("No problem.")
-        await send_channel_gate(message.chat.id)
-        return
+    else:
+        await message.answer(
+            "Thank you, I've saved your answers.\n\n"
+            "Later, if you want help with a more suitable broker setup for your capital and experience, "
+            "you can message the manager.\n\n"
+            "Trading involves risk. The app helps you with structure and analysis, but the final decision is always yours."
+        )
 
-    await message.answer(
-        "Thank you, I've saved your answers.\n\n"
-        "Later, if you want help with a more suitable broker setup for your capital and experience, "
-        "you can message the manager.\n\n"
-        "Trading involves risk. The app helps you with structure and analysis, but the final decision is always yours."
+    # Users reach the bot from the channel, so completing the questionnaire is
+    # sufficient confirmation. Keep the same one-time downstream event/media
+    # trigger that previously ran after the channel gate.
+    await complete_channel_subscription(
+        user_id,
+        first_name=first_name,
+        username=username,
     )
-    await send_channel_gate(message.chat.id)
+    final_message_shown = await send_funnel_final_message(message.chat.id)
+    if not final_message_shown:
+        user_name = first_name or username or "Trader"
+        await send_main_menu(message.chat.id, user_id, user_name)
 
 
-async def route_user_after_start(message: types.Message, user_id: int, user_name: str) -> bool:
+async def route_user_after_start(
+    message: types.Message,
+    user_id: int,
+    user_name: str,
+    *,
+    username: str = "",
+) -> bool:
     # Staff access must not depend on the customer's onboarding state. A
     # manager may still have an unfinished quiz/channel gate, but /start must
     # always give them a way into the Admin Center.
@@ -8228,7 +8271,14 @@ async def route_user_after_start(message: types.Message, user_id: int, user_name
         await send_main_menu(message.chat.id, user_id, user_name)
         return True
 
-    await send_channel_gate(message.chat.id)
+    await complete_channel_subscription(
+        user_id,
+        first_name=user_name,
+        username=username,
+    )
+    final_message_shown = await send_funnel_final_message(message.chat.id)
+    if not final_message_shown:
+        await send_main_menu(message.chat.id, user_id, user_name)
     return False
 
 
@@ -8445,7 +8495,12 @@ async def cmd_start(message: types.Message):
 
     asyncio.create_task(send_aio_postback_event(user_id, "bot_start"))
     asyncio.create_task(send_aio_user_fields(user_id, first_name=first_name, username=username))
-    ai_chat_ready = await route_user_after_start(message, user_id, user_name)
+    ai_chat_ready = await route_user_after_start(
+        message,
+        user_id,
+        user_name,
+        username=username,
+    )
     if ai_chat_ready:
         await forward_message_to_ai_chatter(message, text_override="Hello", is_start=True)
 
@@ -8502,7 +8557,13 @@ async def handle_onboarding_answer(message: types.Message):
         await send_quiz_question(message.chat.id, next_step)
         return
 
-    await finish_quiz_and_show_channel(message, user_id, skipped=skip_flow)
+    await finish_quiz_and_open_app(
+        message,
+        user_id,
+        skipped=skip_flow,
+        first_name=message.from_user.first_name or "",
+        username=message.from_user.username or "",
+    )
 
 
 @dp.callback_query(lambda callback: str(callback.data or "").startswith(f"{QUIZ_ANSWER_CALLBACK_PREFIX}:"))
@@ -8549,7 +8610,13 @@ async def handle_quiz_answer_callback(callback: types.CallbackQuery):
         await send_quiz_question(callback.message.chat.id, next_step)
         return
 
-    await finish_quiz_and_show_channel(callback.message, user_id, skipped=skip_flow)
+    await finish_quiz_and_open_app(
+        callback.message,
+        user_id,
+        skipped=skip_flow,
+        first_name=callback.from_user.first_name or "",
+        username=callback.from_user.username or "",
+    )
 
 
 @dp.callback_query(lambda callback: callback.data == FUNNEL_CONTINUE_CALLBACK)
@@ -8565,22 +8632,11 @@ async def handle_funnel_continue(callback: types.CallbackQuery):
             show_alert=True,
         )
         return
-    channel_subscribed = bool(row.get("channel_subscribed_at"))
-    if not channel_subscribed:
-        settings = await get_support_links_row()
-        channel_subscribed = await is_user_channel_member(user_id, settings.get("channel_id"))
-        if channel_subscribed:
-            await complete_channel_subscription(
-                user_id,
-                first_name=callback.from_user.first_name or "",
-                username=callback.from_user.username or "",
-            )
-        else:
-            await callback.answer(
-                "Please join the channel first, then return to trading.",
-                show_alert=True,
-            )
-            return
+    await complete_channel_subscription(
+        user_id,
+        first_name=callback.from_user.first_name or "",
+        username=callback.from_user.username or "",
+    )
 
     if db_pool:
         async with db_pool.acquire() as conn:
@@ -8596,7 +8652,7 @@ async def handle_funnel_continue(callback: types.CallbackQuery):
                 )
 
     user_name = callback.from_user.first_name or callback.from_user.username or "Trader"
-    await callback.answer("Subscription confirmed")
+    await callback.answer("Opening trading")
     final_message_shown = await show_funnel_final_message(callback)
     if not final_message_shown:
         await send_main_menu(callback.message.chat.id, user_id, user_name)

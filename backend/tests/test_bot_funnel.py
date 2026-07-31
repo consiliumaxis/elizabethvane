@@ -186,14 +186,14 @@ class BotFunnelTest(unittest.TestCase):
         )
         self.assertTrue((PROJECT_ROOT / "backend" / "assets" / "elizabeth_start_video_note.mp4").exists())
 
-    def test_go_to_trading_shows_configured_final_message_with_menu_fallback(self):
+    def test_legacy_go_to_trading_opens_configured_final_message_without_channel_check(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 
         callback_handler = source.split("async def handle_funnel_continue", 1)[1].split(
             "@dp.callback_query", 1
         )[0]
         self.assertIn("row = await get_onboarding_row(user_id)", callback_handler)
-        self.assertIn("await is_user_channel_member", callback_handler)
+        self.assertNotIn("await is_user_channel_member", callback_handler)
         self.assertIn("await complete_channel_subscription", callback_handler)
         self.assertIn("await show_funnel_final_message(callback)", callback_handler)
         self.assertIn("await send_main_menu", callback_handler)
@@ -216,7 +216,7 @@ class BotFunnelTest(unittest.TestCase):
         self.assertIn("await callback.message.edit_reply_markup(reply_markup=None)", handler)
 
         saver = source.split("async def save_quiz_answer", 1)[1].split(
-            "async def finish_quiz_and_show_channel", 1
+            "async def finish_quiz_and_open_app", 1
         )[0]
         self.assertIn("asyncio.create_task(deliver_quiz_aio_fields", saver)
         self.assertIn("async def deliver_quiz_aio_fields", saver)
