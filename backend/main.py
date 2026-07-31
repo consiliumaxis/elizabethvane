@@ -60,6 +60,16 @@ try:
 except ModuleNotFoundError:
     from stream_matching import stream_requested_asset_matches
 try:
+    from backend.stream_indicators import (
+        coherent_stream_indicator_value,
+        stream_indicator_is_neutral_only,
+    )
+except ModuleNotFoundError:
+    from stream_indicators import (
+        coherent_stream_indicator_value,
+        stream_indicator_is_neutral_only,
+    )
+try:
     from backend.video_note import prepare_square_video_note
 except ModuleNotFoundError:
     from video_note import prepare_square_video_note
@@ -1223,6 +1233,10 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
     indicators = analysis_data.get("indicators")
     votes = {"BUY": 0, "SELL": 0, "NEUTRAL": 0}
     weighted_scores = {"buy": 0.0, "sell": 0.0, "neutral": 0.0}
+    try:
+        indicator_price = float(analysis_data.get("price") or analysis_data.get("entry_price") or 100.0)
+    except (TypeError, ValueError):
+        indicator_price = 100.0
 
     if isinstance(indicators, dict):
         indicator_keys = list(indicators.keys())
@@ -1230,6 +1244,7 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
 
         locked_signals = {}
         for indicator_key in indicator_keys:
+            has_manual_override = False
             for alias in aliases_for_indicator(indicator_key):
                 raw_override = manual_overrides.get(alias)
                 manual_signal = (
@@ -1239,7 +1254,10 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
                 )
                 if manual_signal in ("BUY", "SELL", "NEUTRAL"):
                     locked_signals[indicator_key] = manual_signal
+                    has_manual_override = True
                     break
+            if not has_manual_override and stream_indicator_is_neutral_only(indicator_key):
+                locked_signals[indicator_key] = "NEUTRAL"
 
         opposite_signal = "SELL" if forced_signal == "BUY" else "BUY"
         forced_locked = sum(1 for signal in locked_signals.values() if signal == forced_signal)
@@ -1286,13 +1304,17 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
             if isinstance(indicator_data, dict):
                 signal = locked_signals.get(indicator_key) or generated_by_key.get(indicator_key) or forced_signal
                 indicator_data["signal"] = signal
+                has_manual_value = False
                 for alias in aliases_for_indicator(indicator_key):
                     raw_override = manual_overrides.get(alias)
                     if isinstance(raw_override, dict):
                         manual_value = str(raw_override.get("value") or "").strip()
                         if manual_value:
                             indicator_data["value"] = manual_value
+                            has_manual_value = True
                             break
+                if not has_manual_value:
+                    indicator_data["value"] = coherent_stream_indicator_value(indicator_key, signal, indicator_price)
                 votes[signal] = votes.get(signal, 0) + 1
     else:
         indicator_count = 0
@@ -1447,51 +1469,8 @@ def build_stream_local_analysis(
     if not indicator_keys:
         indicator_keys = ["RSI", "MACD", "EMA50", "EMA200", "ADX", "DMI", "ATR", "ICHIMOKU"]
 
-    def indicator_value(key: str):
-        normalized = str(key or "").upper().replace(" ", "").replace("-", "").replace("_", "")
-        direction = str(stream_settings.get("forced_signal") or "BUY").upper()
-        bullish = direction != "SELL"
-        price_step = max(abs(price) * 0.0015, 0.0001)
-
-        def fmt(value: float, digits: int = 3) -> str:
-            return f"{float(value):.{digits}f}"
-
-        if normalized == "RSI":
-            return 52.0
-        if normalized == "MACD":
-            return 0.0
-        if normalized in ("ATR",):
-            return round(max(abs(price) * 0.002, 0.0001), 5)
-        if normalized in ("EMA921", "EMA9", "EMA21"):
-            return {"e9": round(price * 1.0003, 5), "e21": round(price * 0.9997, 5)}
-        if normalized.startswith("EMA"):
-            return round(price, 5)
-        if normalized == "ADX":
-            return 24.0
-        if normalized in ("PSAR", "PARABOLICSAR"):
-            return round(price - price_step if bullish else price + price_step, 5)
-        if normalized in ("PIVOTPOINTS", "PIVOTPOINTSHL", "PIVOTPOINT"):
-            return f"P {fmt(price)}"
-        if normalized == "SUPERTREND":
-            return fmt(price - price_step * 1.8 if bullish else price + price_step * 1.8)
-        if normalized == "OBV":
-            return "1.24M" if bullish else "-1.24M"
-        if normalized == "DMI":
-            return "+DI 26 / -DI 18" if bullish else "+DI 18 / -DI 26"
-        if normalized == "ICHIMOKU":
-            return "Above cloud" if bullish else "Below cloud"
-        if normalized in ("STOCH", "STOCHASTIC"):
-            return 58.0 if bullish else 42.0
-        if normalized in ("BB", "BOLLINGERBANDS", "BOLLINGERBAND"):
-            return "Mid band"
-        if normalized == "CCI":
-            return 74.0 if bullish else -74.0
-        if normalized == "FIBONACCI":
-            return "61.8%"
-        return "Neutral"
-
     indicators = {
-        key: {"value": indicator_value(key), "signal": "NEUTRAL"}
+        key: {"value": coherent_stream_indicator_value(key, "NEUTRAL", price), "signal": "NEUTRAL"}
         for key in indicator_keys
     }
     step = max(abs(price) * 0.005, 0.0005)
@@ -5489,6 +5468,7 @@ async def admin_strategies_update(
             seen.add(ind_id)
             indicator_ids.append(ind_id)
 
+    saved_indicator_count = None
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
@@ -5561,7 +5541,8 @@ async def admin_strategies_update(
                         "INSERT INTO preset_indicators (preset_id, indicator_id) VALUES (%s, %s)",
                         [(strategy_id, ind_id) for ind_id in valid_ids],
                     )
-    return {"status": "success"}
+                saved_indicator_count = len(valid_ids)
+    return {"status": "success", "indicator_count": saved_indicator_count}
 
 
 @app.post("/api/admin/strategies/delete")

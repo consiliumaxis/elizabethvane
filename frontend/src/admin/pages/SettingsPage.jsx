@@ -1462,24 +1462,32 @@ export default function SettingsPage({ adminUser }) {
             </div>
             <div className="admin-field">
               <label className="admin-label">{tr('Asset', 'Актив')}</label>
-              <input
+              <select
                 className="admin-input"
-                list={`stream-asset-options-${streamAnalysisType}-${streamMarket}`}
-                placeholder={streamMarketLoading
-                  ? tr('Loading assets…', 'Загружаем активы...')
-                  : streamAnalysisType === 'binary'
-                    ? tr('For example, Netflix OTC', 'Например Netflix OTC')
-                    : tr('For example, AUD/CHF', 'Например AUD/CHF')}
                 value={streamSymbol}
                 onChange={(e) => setStreamSymbol(e.target.value)}
-              />
-              <datalist id={`stream-asset-options-${streamAnalysisType}-${streamMarket}`}>
+                disabled={streamMarketLoading}
+              >
+                <option value="">
+                  {streamMarketLoading
+                    ? tr('Loading assets…', 'Загружаем активы...')
+                    : tr('Use the asset selected by the user', 'Использовать актив, выбранный пользователем')}
+                </option>
+                {streamSymbol && !streamMarketOptions.some((asset) => asset.pair === streamSymbol) ? (
+                  <option value={streamSymbol}>{streamSymbol}</option>
+                ) : null}
                 {streamMarketOptions.map((asset) => (
                   <option key={`${asset.pair}-${asset.payout || asset.label || 'np'}`} value={asset.pair}>
-                    {asset.payout ? `${asset.payout}%` : asset.label || selectedStreamMarketTitle}
+                    {asset.pair}{asset.payout ? ` · ${asset.payout}%` : asset.label && asset.label !== asset.pair ? ` · ${asset.label}` : ''}
                   </option>
                 ))}
-              </datalist>
+              </select>
+              <div className="admin-note">
+                {tr(
+                  'A native selector is used so the asset list also opens correctly inside Telegram on a phone.',
+                  'Обычный список корректно открывается внутри Telegram на телефоне.'
+                )}
+              </div>
             </div>
             <div className="admin-field">
               <label className="admin-label">{tr('Current price', 'Текущая цена')}</label>

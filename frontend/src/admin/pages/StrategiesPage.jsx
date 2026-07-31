@@ -267,7 +267,7 @@ export default function StrategiesPage() {
     setError('');
     setStatus('');
     try {
-      await apiAdminFetchJson('/api/admin/strategies/update', {
+      const res = await apiAdminFetchJson('/api/admin/strategies/update', {
         method: 'POST',
         body: JSON.stringify({
           id: form.id,
@@ -279,7 +279,17 @@ export default function StrategiesPage() {
           indicators: form.indicators,
         }),
       });
-      setStatus(tr(`Strategy ${form.id} has been saved`, `Стратегия ${form.id} сохранена`));
+      const savedIndicatorCount = Number(res?.indicator_count);
+      if (Number.isFinite(savedIndicatorCount) && savedIndicatorCount !== form.indicators.length) {
+        throw new Error(tr(
+          `The strategy saved only ${savedIndicatorCount} of ${form.indicators.length} indicators`,
+          `В стратегии сохранилось только ${savedIndicatorCount} из ${form.indicators.length} индикаторов`
+        ));
+      }
+      setStatus(tr(
+        `Strategy ${form.id} has been saved · ${form.indicators.length} indicators`,
+        `Стратегия ${form.id} сохранена · индикаторов: ${form.indicators.length}`
+      ));
       await load();
     } catch (e) {
       setError(e.message || tr('Could not save the strategy', 'Не удалось сохранить стратегию'));
