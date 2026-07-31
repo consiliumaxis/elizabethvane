@@ -1,5 +1,6 @@
 import json
 import unittest
+from pathlib import Path
 
 from backend.staff_permissions import (
     ALL_PERMISSIONS,
@@ -79,6 +80,17 @@ class StaffPermissionsTests(unittest.TestCase):
 
         self.assertTrue(permissions_are_subset(allowed, actor))
         self.assertFalse(permissions_are_subset(elevated, actor))
+
+    def test_staff_start_menu_is_not_blocked_by_customer_onboarding(self):
+        source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+        route_source = source.split("async def route_user_after_start", 1)[1].split(
+            "async def write_manager_stats_audit", 1
+        )[0]
+
+        staff_check = route_source.index("if await has_admin_center_access(user_id):")
+        onboarding_check = route_source.index("row = await ensure_onboarding_row(user_id)")
+        self.assertLess(staff_check, onboarding_check)
+        self.assertIn("await send_main_menu(message.chat.id, user_id, user_name)", route_source)
 
 
 if __name__ == "__main__":

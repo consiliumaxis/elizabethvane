@@ -8204,6 +8204,13 @@ async def finish_quiz_and_show_channel(message: types.Message, user_id: int, ski
 
 
 async def route_user_after_start(message: types.Message, user_id: int, user_name: str) -> bool:
+    # Staff access must not depend on the customer's onboarding state. A
+    # manager may still have an unfinished quiz/channel gate, but /start must
+    # always give them a way into the Admin Center.
+    if await has_admin_center_access(user_id):
+        await send_main_menu(message.chat.id, user_id, user_name)
+        return False
+
     if not db_pool:
         await send_main_menu(message.chat.id, user_id, user_name)
         return True
