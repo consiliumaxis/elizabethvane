@@ -53,7 +53,6 @@ export default function Profile({
   const isDemo = currentMode === 'demo';
   const forexAvailable = Number(user.forex_access ?? 1) === 1;
   const binaryAvailable = Number(user.binary_access ?? 1) === 1;
-  const isAdmin = Number(user.is_admin || 0) === 1 && Boolean(user.admin_url);
   const profileEditingAllowed = Number(user.profile_edit_allowed || 0) === 1;
   const selectedStrategy = strategies.find(s => s.id === user.strategy_id) || {};
 
@@ -214,11 +213,6 @@ export default function Profile({
     }, 1500);
   };
 
-  const openAdminCenter = () => {
-    if (!user.admin_url) return;
-    window.location.href = user.admin_url;
-  };
-
   return (
     <div className="page-container">
       <div className="profile-wrapper">
@@ -325,12 +319,6 @@ export default function Profile({
             </div>
           </div>
         )}
-
-        {isAdmin ? (
-          <button className="admin-center-profile-btn" onClick={openAdminCenter}>
-            Admin Center
-          </button>
-        ) : null}
 
         <div className="strategies-section" ref={strategyRef}>
           <button className="start-analysis-btn" onClick={onStartAnalysis}>

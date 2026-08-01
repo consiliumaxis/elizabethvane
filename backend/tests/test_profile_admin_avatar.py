@@ -44,6 +44,14 @@ class ProfileAdminAvatarTest(unittest.TestCase):
         self.assertIn("user.username", source)
         self.assertNotIn('<h2 className="profile-name">Elizabeth Vane</h2>', source)
 
+    def test_profile_does_not_render_admin_center_entry(self):
+        source = (PROJECT_ROOT / "frontend/src/components/pages/Profile.jsx").read_text(encoding="utf-8")
+        styles = (PROJECT_ROOT / "frontend/src/components/pages/Profile.css").read_text(encoding="utf-8")
+
+        self.assertNotIn("admin-center-profile-btn", source)
+        self.assertNotIn("openAdminCenter", source)
+        self.assertNotIn("admin-center-profile-btn", styles)
+
     def test_admin_users_render_user_avatar(self):
         source = (PROJECT_ROOT / "frontend/src/admin/pages/UsersPage.jsx").read_text(encoding="utf-8")
 
