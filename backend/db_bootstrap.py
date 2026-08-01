@@ -3,6 +3,11 @@ import json
 import aiomysql
 
 try:
+    from backend.admin_config import env_int_list
+except ModuleNotFoundError:
+    from admin_config import env_int_list
+
+try:
     from backend.analysis_ai_service import DEFAULT_ANALYSIS_GPT_MODEL, DEFAULT_ANALYSIS_GPT_PROMPT
 except ModuleNotFoundError:
     from analysis_ai_service import DEFAULT_ANALYSIS_GPT_MODEL, DEFAULT_ANALYSIS_GPT_PROMPT
@@ -1184,12 +1189,16 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 default_admin_user_id = int(raw_default_admin_id)
             except (TypeError, ValueError):
                 default_admin_user_id = 7097261848
-            await cur.execute(
+            protected_admin_user_ids = env_int_list(
+                "ADMIN_PROTECTED_USER_IDS",
+                (default_admin_user_id, 405935431),
+            )
+            await cur.executemany(
                 """
                 INSERT INTO admin_users (user_id, role, is_active, is_protected, granted_by)
                 VALUES (%s, 'admin', 1, 1, %s)
                 ON DUPLICATE KEY UPDATE role = 'admin', is_active = 1, is_protected = 1
                 """,
-                (default_admin_user_id, default_admin_user_id),
+                [(user_id, default_admin_user_id) for user_id in protected_admin_user_ids],
             )
 
