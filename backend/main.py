@@ -196,9 +196,17 @@ try:
 except ModuleNotFoundError:
     from chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
 try:
-    from backend.registration_links import DEFAULT_REGISTRATION_URL, build_registration_url
+    from backend.registration_links import (
+        DEFAULT_REGISTRATION_URL,
+        build_registration_url,
+        parse_registration_link_target,
+    )
 except ModuleNotFoundError:
-    from registration_links import DEFAULT_REGISTRATION_URL, build_registration_url
+    from registration_links import (
+        DEFAULT_REGISTRATION_URL,
+        build_registration_url,
+        parse_registration_link_target,
+    )
 try:
     from backend.access_policy import (
         ACCESS_POLICY_REGISTRATION_DEPOSIT,
@@ -4139,6 +4147,58 @@ async def admin_users(
             total = int((await cur.fetchone() or {}).get("cnt") or 0)
 
     return {"status": "success", "users": users_rows or [], "total": total, "limit": limit, "offset": offset}
+
+
+@app.get("/api/admin/users/{target_user_id}/pocket")
+async def admin_user_pocket_details(
+    target_user_id: int,
+    admin=Depends(require_permission(PERM_USERS_VIEW)),
+):
+    target_user_id = int(target_user_id or 0)
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="User id is required")
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT user_id, trader_id, pocket_click_id, pocket_site_id, pocket_cid,
+                       pocket_sub_id1, pocket_sub_id2, pocket_sub_id3,
+                       COALESCE(pocket_registered, 0) AS pocket_registered,
+                       COALESCE(pocket_deposited, 0) AS pocket_deposited,
+                       pocket_registered_at,
+                       COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                       country, pocket_checked_at, aio_visit_uuid, chatterfy_lead_id
+                FROM users
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (target_user_id,),
+            )
+            pocket_row = await cur.fetchone()
+            if not pocket_row:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            await cur.execute(
+                """
+                SELECT id, event_slug, status, reason, trader_id, deposit_amount,
+                       country, site_id, cid, sub_id1, sub_id2, sub_id3,
+                       chatterfy_status, chatterfy_response_status, chatterfy_error,
+                       aichatter_status, aichatter_error, created_at
+                FROM pocket_postback_events
+                WHERE user_id = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT 50
+                """,
+                (target_user_id,),
+            )
+            postbacks = list(await cur.fetchall() or [])
+
+    return {
+        "status": "success",
+        "pocket": pocket_row,
+        "postbacks": postbacks,
+    }
 
 
 @app.post("/api/admin/users/block")
@@ -8716,25 +8776,40 @@ def mask_chatterfy_lead_id(value: str) -> str:
     return f"{normalized[:4]}…{normalized[-4:]}"
 
 
-async def get_registration_link_by_chatterfy_lead_id(lead_id: str) -> Dict[str, Any]:
+async def get_registration_link_by_target(target_kind: str, target_value: str) -> Dict[str, Any]:
     if not db_pool:
         return {"status": "unavailable"}
-    normalized_lead_id = normalize_chatterfy_lead_id(lead_id)
-    if not normalized_lead_id:
-        return {"status": "invalid_query"}
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute(
-                """
-                SELECT user_id
-                FROM users
-                WHERE chatterfy_lead_id = %s OR pocket_sub_id3 = %s
-                ORDER BY updated_at DESC, user_id DESC
-                LIMIT 2
-                """,
-                (normalized_lead_id, normalized_lead_id),
-            )
+            if target_kind == "username":
+                normalized_username = str(target_value or "").strip().lower().lstrip("@")
+                if not re.fullmatch(r"[a-z0-9_]{5,32}", normalized_username):
+                    return {"status": "invalid_query"}
+                await cur.execute(
+                    """
+                    SELECT user_id
+                    FROM users
+                    WHERE LOWER(COALESCE(username, '')) IN (%s, %s)
+                    ORDER BY updated_at DESC, user_id DESC
+                    LIMIT 2
+                    """,
+                    (normalized_username, f"@{normalized_username}"),
+                )
+            else:
+                normalized_lead_id = normalize_chatterfy_lead_id(target_value)
+                if not normalized_lead_id:
+                    return {"status": "invalid_query"}
+                await cur.execute(
+                    """
+                    SELECT user_id
+                    FROM users
+                    WHERE chatterfy_lead_id = %s OR pocket_sub_id3 = %s
+                    ORDER BY updated_at DESC, user_id DESC
+                    LIMIT 2
+                    """,
+                    (normalized_lead_id, normalized_lead_id),
+                )
             matches = list(await cur.fetchall() or [])
     if not matches:
         return {"status": "not_found"}
@@ -8748,15 +8823,22 @@ async def get_registration_link_by_chatterfy_lead_id(lead_id: str) -> Dict[str, 
     return {"status": "success", "user_id": user_id, "url": link_data["url"]}
 
 
+async def get_registration_link_by_chatterfy_lead_id(lead_id: str) -> Dict[str, Any]:
+    return await get_registration_link_by_target("lead_id", lead_id)
+
+
 @dp.message(Command("link"))
 async def cmd_manager_registration_link(message: types.Message):
     if not message.from_user:
         return
     requester_id = int(message.from_user.id)
     raw_command = str(message.text or "").strip()
-    raw_parts = raw_command.split(maxsplit=1)
-    raw_lead_id = raw_parts[1].strip() if len(raw_parts) == 2 else ""
-    audit_query = f"/link {mask_chatterfy_lead_id(raw_lead_id)}".strip()
+    target_kind, target_value = parse_registration_link_target(raw_command)
+    audit_query = (
+        f"/link @{target_value}"
+        if target_kind == "username"
+        else f"/link {mask_chatterfy_lead_id(str(target_value or ''))}".strip()
+    )
 
     staff_profile = await get_staff_profile(requester_id)
     if not staff_profile or not has_permission(staff_profile, PERM_STATS_COMMAND):
@@ -8767,12 +8849,12 @@ async def cmd_manager_registration_link(message: types.Message):
         await write_manager_command_audit("link", requester_id, audit_query, "private_chat_required")
         await message.answer("The /link command is available only in a private chat with the bot.")
         return
-    if not normalize_chatterfy_lead_id(raw_lead_id):
+    if not target_kind or not target_value:
         await write_manager_command_audit("link", requester_id, audit_query, "invalid_query")
-        await message.answer("Usage: /link chatterfy_lead_id")
+        await message.answer("Usage: /link @username or /link chatterfy_lead_id")
         return
 
-    result = await get_registration_link_by_chatterfy_lead_id(raw_lead_id)
+    result = await get_registration_link_by_target(target_kind, target_value)
     if result.get("status") == "not_found":
         await write_manager_command_audit("link", requester_id, audit_query, "not_found")
         await message.answer("Client link not found")

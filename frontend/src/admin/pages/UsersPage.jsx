@@ -28,6 +28,16 @@ const formatArchiveDate = (value) => {
     minute: '2-digit',
   }).format(parsed);
 };
+const formatPocketValue = (value) => (
+  value === null || value === undefined || String(value).trim() === '' ? '—' : String(value)
+);
+const getPocketEventLabel = (eventSlug, tr) => {
+  const normalized = String(eventSlug || '').trim().toLowerCase();
+  if (normalized === 'registration') return tr('Registration', 'Регистрация');
+  if (normalized === 'ftd') return tr('First deposit', 'Первый депозит');
+  if (normalized === 'dep') return tr('Repeat deposit', 'Повторный депозит');
+  return eventSlug || tr('Pocket event', 'Событие Pocket');
+};
 
 const ARCHIVE_TABLE_LABELS = {
   users: ['User profile', 'Профиль пользователя'],
@@ -308,6 +318,9 @@ export default function UsersPage({ adminUser }) {
   const [archivesLoading, setArchivesLoading] = useState(false);
   const [archiveDetail, setArchiveDetail] = useState(null);
   const [archiveDetailLoading, setArchiveDetailLoading] = useState(false);
+  const [pocketDetails, setPocketDetails] = useState(null);
+  const [pocketLoading, setPocketLoading] = useState(false);
+  const [pocketError, setPocketError] = useState('');
   const [confirmationPhrase, setConfirmationPhrase] = useState('');
   const [confirmationValue, setConfirmationValue] = useState('');
   const [accessForm, setAccessForm] = useState({ forex: true, binary: true });
@@ -349,6 +362,26 @@ export default function UsersPage({ adminUser }) {
     }
   }, [tr]);
 
+  const loadPocketDetails = useCallback(async (userId) => {
+    if (!userId) return;
+    setPocketLoading(true);
+    setPocketError('');
+    try {
+      const res = await apiAdminFetchJson(
+        `/api/admin/users/${encodeURIComponent(userId)}/pocket`
+      );
+      setPocketDetails({
+        pocket: res.pocket || {},
+        postbacks: res.postbacks || [],
+      });
+    } catch (e) {
+      setPocketDetails(null);
+      setPocketError(e.message || tr('Could not load Pocket data', 'Не удалось загрузить данные Pocket'));
+    } finally {
+      setPocketLoading(false);
+    }
+  }, [tr]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => loadUsers(''), 0);
     return () => window.clearTimeout(timer);
@@ -359,6 +392,12 @@ export default function UsersPage({ adminUser }) {
     const timer = window.setTimeout(() => loadArchives(selectedUserId), 0);
     return () => window.clearTimeout(timer);
   }, [canArchiveClear, loadArchives, selectedUserId]);
+
+  useEffect(() => {
+    if (!selectedUserId) return undefined;
+    const timer = window.setTimeout(() => loadPocketDetails(selectedUserId), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadPocketDetails, selectedUserId]);
 
   const selectedUser = useMemo(
     () => users.find((user) => String(user.user_id) === String(selectedUserId)) || null,
@@ -379,6 +418,8 @@ export default function UsersPage({ adminUser }) {
     setArchiveDetail(null);
     setArchives([]);
     setConfirmationPhrase('');
+    setPocketDetails(null);
+    setPocketError('');
   };
 
   const closeUserCard = () => {
@@ -391,6 +432,8 @@ export default function UsersPage({ adminUser }) {
     setConfirmationValue('');
     setArchives([]);
     setConfirmationPhrase('');
+    setPocketDetails(null);
+    setPocketError('');
     setStatus('');
   };
 
@@ -542,6 +585,7 @@ export default function UsersPage({ adminUser }) {
         `Данные пользователя помещены в архив, кэш очищен. Архив №${res.archive_id}.`
       ));
       await loadArchives(selectedUser.user_id);
+      await loadPocketDetails(selectedUser.user_id);
     } catch (e) {
       setError(e.message || tr('Could not clear user cache', 'Не удалось очистить кэш пользователя'));
     } finally {
@@ -620,6 +664,9 @@ export default function UsersPage({ adminUser }) {
     const confirmationMatches = confirmationValue.trim() === requiredConfirmation;
     const archiveSnapshot = archiveDetail?.snapshot || {};
     const archiveProfile = getArchiveProfile(archiveSnapshot);
+    const pocket = pocketDetails?.pocket || {};
+    const pocketPostbacks = pocketDetails?.postbacks || [];
+    const latestPocketPostback = pocketPostbacks[0] || null;
     return (
       <div className="admin-card">
         <div className="admin-row-between">
@@ -673,6 +720,117 @@ export default function UsersPage({ adminUser }) {
             <div><span>{tr('Blocked', 'Блокировка')}:</span> {isBlocked ? `${tr('Yes', 'Да')}${selectedUser.blocked_at ? `, ${selectedUser.blocked_at}` : ''}` : tr('No', 'Нет')}</div>
             <div><span>{tr('Created', 'Создан')}:</span> {selectedUser.created_at || '-'}</div>
           </div>
+
+          <section className="admin-user-pocket-panel">
+            <div className="admin-user-pocket-head">
+              <div>
+                <span className="admin-user-profile-permission-kicker">Affiliate tracking</span>
+                <strong>Pocket Option</strong>
+                <p>
+                  {tr(
+                    'Registration, deposits and tracking identifiers received from Pocket postbacks.',
+                    'Регистрация, депозиты и идентификаторы, полученные из postback Pocket.'
+                  )}
+                </p>
+              </div>
+              {!pocketLoading && !pocketError ? (
+                <div className="admin-user-pocket-statuses">
+                  <span className={Number(pocket.pocket_registered) === 1 ? 'is-success' : 'is-muted'}>
+                    {Number(pocket.pocket_registered) === 1
+                      ? tr('Registered', 'Регистрация есть')
+                      : tr('Not registered', 'Нет регистрации')}
+                  </span>
+                  <span className={Number(pocket.pocket_deposited) === 1 ? 'is-success' : 'is-muted'}>
+                    {Number(pocket.pocket_deposited) === 1
+                      ? tr('Deposit received', 'Депозит получен')
+                      : tr('No deposit', 'Депозита нет')}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+
+            {pocketLoading ? (
+              <div className="admin-user-pocket-message">{tr('Loading Pocket data…', 'Загружаем данные Pocket…')}</div>
+            ) : null}
+            {pocketError ? <div className="admin-error">{pocketError}</div> : null}
+
+            {!pocketLoading && !pocketError ? (
+              <>
+                <div className="admin-user-pocket-summary">
+                  <div>
+                    <span>{tr('Pocket Trader ID', 'Trader ID от Pocket')}</span>
+                    <strong>{formatPocketValue(pocket.trader_id || selectedUser.pocket_trader_id)}</strong>
+                  </div>
+                  <div>
+                    <span>{tr('Total deposits', 'Сумма депозитов')}</span>
+                    <strong>{formatBalance(pocket.pocket_deposit_amount)}</strong>
+                  </div>
+                  <div>
+                    <span>{tr('Registration date', 'Дата регистрации')}</span>
+                    <strong>{formatArchiveDate(pocket.pocket_registered_at)}</strong>
+                  </div>
+                  <div>
+                    <span>{tr('Country', 'Страна')}</span>
+                    <strong>{formatPocketValue(pocket.country)}</strong>
+                  </div>
+                  <div>
+                    <span>{tr('Last Pocket event', 'Последнее событие Pocket')}</span>
+                    <strong>{latestPocketPostback ? getPocketEventLabel(latestPocketPostback.event_slug, tr) : '—'}</strong>
+                  </div>
+                  <div>
+                    <span>{tr('Event received', 'Событие получено')}</span>
+                    <strong>{latestPocketPostback ? formatArchiveDate(latestPocketPostback.created_at) : '—'}</strong>
+                  </div>
+                </div>
+
+                <details className="admin-user-pocket-details">
+                  <summary>{tr('Technical identifiers', 'Технические идентификаторы')}</summary>
+                  <div className="admin-user-pocket-technical">
+                    <div><span>Click ID</span><code>{formatPocketValue(pocket.pocket_click_id || pocket.user_id)}</code></div>
+                    <div><span>Site ID</span><code>{formatPocketValue(pocket.pocket_site_id)}</code></div>
+                    <div><span>CID</span><code>{formatPocketValue(pocket.pocket_cid)}</code></div>
+                    <div><span>Sub ID 1</span><code>{formatPocketValue(pocket.pocket_sub_id1)}</code></div>
+                    <div><span>Sub ID 2 · AIO</span><code>{formatPocketValue(pocket.pocket_sub_id2 || pocket.aio_visit_uuid)}</code></div>
+                    <div><span>Sub ID 3 · Chatterfy</span><code>{formatPocketValue(pocket.pocket_sub_id3 || pocket.chatterfy_lead_id)}</code></div>
+                    <div><span>AIO visit UUID</span><code>{formatPocketValue(pocket.aio_visit_uuid)}</code></div>
+                    <div><span>Chatterfy lead ID</span><code>{formatPocketValue(pocket.chatterfy_lead_id)}</code></div>
+                    <div><span>{tr('Last Pocket check', 'Последняя проверка Pocket')}</span><code>{formatArchiveDate(pocket.pocket_checked_at)}</code></div>
+                  </div>
+                </details>
+
+                <details className="admin-user-pocket-details">
+                  <summary>
+                    {tr('Pocket postback history', 'История postback Pocket')} · {pocketPostbacks.length}
+                  </summary>
+                  {pocketPostbacks.length ? (
+                    <div className="admin-user-pocket-events">
+                      {pocketPostbacks.map((event) => (
+                        <article key={event.id} className="admin-user-pocket-event">
+                          <div>
+                            <strong>{getPocketEventLabel(event.event_slug, tr)}</strong>
+                            <span>{formatArchiveDate(event.created_at)}</span>
+                          </div>
+                          <div className="admin-user-pocket-event-meta">
+                            <span>{tr('Pocket status', 'Статус Pocket')}: <b>{formatPocketValue(event.status)}</b></span>
+                            <span>{tr('Amount', 'Сумма')}: <b>{formatBalance(event.deposit_amount)}</b></span>
+                            <span>AI Chatter: <b>{formatPocketValue(event.aichatter_status)}</b></span>
+                            <span>Chatterfy: <b>{formatPocketValue(event.chatterfy_status)}</b></span>
+                          </div>
+                          {event.reason || event.aichatter_error || event.chatterfy_error ? (
+                            <p>{event.reason || event.aichatter_error || event.chatterfy_error}</p>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="admin-user-pocket-message">
+                      {tr('No Pocket postbacks have been received yet.', 'Postback-события Pocket ещё не получены.')}
+                    </div>
+                  )}
+                </details>
+              </>
+            ) : null}
+          </section>
 
           {canProfileEdit ? (
           <div className={`admin-user-profile-permission ${profileEditingAllowed ? 'is-enabled' : ''}`}>

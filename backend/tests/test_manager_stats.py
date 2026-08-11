@@ -103,6 +103,7 @@ class ManagerStatsTest(unittest.TestCase):
         self.assertIn("tr('Manager command history', 'История команд менеджеров')", page)
         self.assertIn("tr('Managers and administrators', 'Менеджеры и администраторы')", page)
         self.assertIn("/stats @nickname", page)
+        self.assertIn("/link @username", page)
         self.assertIn("/link chatterfy_lead_id", page)
 
 

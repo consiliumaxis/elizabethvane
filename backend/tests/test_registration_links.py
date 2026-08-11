@@ -2,13 +2,28 @@ import unittest
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
-from registration_links import build_registration_url
+from registration_links import build_registration_url, parse_registration_link_target
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class RegistrationLinksTest(unittest.TestCase):
+    def test_parses_link_username_and_chatterfy_lead_targets(self):
+        self.assertEqual(
+            parse_registration_link_target("/link @Client_Name"),
+            ("username", "client_name"),
+        )
+        self.assertEqual(
+            parse_registration_link_target("/link@ElizabethVane_bot @Client_Name"),
+            ("username", "client_name"),
+        )
+        self.assertEqual(
+            parse_registration_link_target("/link lead-019ff2de"),
+            ("lead_id", "lead-019ff2de"),
+        )
+        self.assertEqual(parse_registration_link_target("/link @bad user"), (None, None))
+
     def test_appends_all_tracking_fields_to_plain_campaign_url(self):
         result = build_registration_url(
             "https://u3.shortink.io/register?utm_campaign=836376&ac=elizabeth_vane_rev1",
@@ -49,6 +64,8 @@ class RegistrationLinksTest(unittest.TestCase):
         backend = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
         profile = (PROJECT_ROOT / "frontend/src/components/pages/Profile.jsx").read_text(encoding="utf-8")
         settings = (PROJECT_ROOT / "frontend/src/admin/pages/SettingsPage.jsx").read_text(encoding="utf-8")
+        users = (PROJECT_ROOT / "frontend/src/admin/pages/UsersPage.jsx").read_text(encoding="utf-8")
+        managers = (PROJECT_ROOT / "frontend/src/admin/pages/ManagersPage.jsx").read_text(encoding="utf-8")
 
         self.assertIn('@dp.message(Command("link"))', backend)
         self.assertIn('/api/user/registration-link', backend)
@@ -58,6 +75,10 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertIn('Number(user.pocket_registered || 0) !== 1', profile)
         self.assertIn("'/api/user/registration-link'", profile)
         self.assertIn("{'{sub_id3}'}", settings)
+        self.assertIn('/api/admin/users/${encodeURIComponent(userId)}/pocket', users)
+        self.assertIn("Pocket postback history", users)
+        self.assertIn("/link @username", managers)
+        self.assertIn("get_registration_link_by_target(target_kind, target_value)", backend)
 
 
 if __name__ == "__main__":

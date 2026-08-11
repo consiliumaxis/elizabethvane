@@ -411,6 +411,7 @@ export default function ManagersPage({ adminUser }) {
           <strong>{tr('Quick client lookup', 'Быстрый поиск клиента')}</strong>
           <code>/stats @nickname</code>
           <code>/stats 123456789</code>
+          <code>/link @username</code>
           <code>/link chatterfy_lead_id</code>
         </div>
       </section>

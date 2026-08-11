@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timezone
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
@@ -12,10 +12,31 @@ DEFAULT_REGISTRATION_URL = (
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_]+)\}")
 _REQUIRED_TRACKING_KEYS = ("click_id", "sub_id2", "sub_id3")
+_TELEGRAM_USERNAME_RE = re.compile(r"[A-Za-z0-9_]{5,32}")
+_CHATTERFY_LEAD_ID_RE = re.compile(r"[A-Za-z0-9._:@-]{1,255}")
 
 
 def _clean(value: object, max_length: int = 512) -> str:
     return str(value if value is not None else "").strip()[:max_length]
+
+
+def parse_registration_link_target(message_text: object) -> Tuple[Optional[str], Optional[str]]:
+    """Parse ``/link`` argument as a Telegram username or Chatterfy lead id."""
+
+    parts = str(message_text or "").strip().split(maxsplit=1)
+    if len(parts) != 2 or not parts[0].lower().startswith("/link"):
+        return None, None
+    raw_target = parts[1].strip()
+    if not raw_target or any(character.isspace() for character in raw_target):
+        return None, None
+    if raw_target.startswith("@"):
+        username = raw_target[1:]
+        if not _TELEGRAM_USERNAME_RE.fullmatch(username):
+            return None, None
+        return "username", username.lower()
+    if not _CHATTERFY_LEAD_ID_RE.fullmatch(raw_target):
+        return None, None
+    return "lead_id", raw_target
 
 
 def build_registration_url(
