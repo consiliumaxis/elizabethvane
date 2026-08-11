@@ -669,7 +669,7 @@ export default function UsersPage({ adminUser }) {
     const latestPocketPostback = pocketPostbacks[0] || null;
     const telegramChatId = pocket.user_id || selectedUser.user_id || '';
     const chatterfyChatId = pocket.chatterfy_lead_id || pocket.pocket_sub_id3 || '';
-    const trackerClickId = pocket.aio_visit_uuid || pocket.pocket_sub_id2 || '';
+    const trackerClickId = pocket.pocket_sub_id2 || pocket.aio_visit_uuid || '';
     const chatterfyLinked = Boolean(chatterfyChatId);
     return (
       <div className="admin-card">
@@ -794,7 +794,7 @@ export default function UsersPage({ adminUser }) {
                     <div><span>Site ID</span><code>{formatPocketValue(pocket.pocket_site_id)}</code></div>
                     <div><span>CID</span><code>{formatPocketValue(pocket.pocket_cid)}</code></div>
                     <div><span>Sub ID 1</span><code>{formatPocketValue(pocket.pocket_sub_id1)}</code></div>
-                    <div><span>Sub ID 2 · AIO</span><code>{formatPocketValue(pocket.pocket_sub_id2 || pocket.aio_visit_uuid)}</code></div>
+                    <div><span>Sub ID 2 · Chatterfy tracker</span><code>{formatPocketValue(pocket.pocket_sub_id2 || pocket.aio_visit_uuid)}</code></div>
                     <div><span>Sub ID 3 · Chatterfy</span><code>{formatPocketValue(pocket.pocket_sub_id3 || pocket.chatterfy_lead_id)}</code></div>
                     <div><span>AIO visit UUID</span><code>{formatPocketValue(pocket.aio_visit_uuid)}</code></div>
                     <div><span>Chatterfy lead ID</span><code>{formatPocketValue(pocket.chatterfy_lead_id)}</code></div>

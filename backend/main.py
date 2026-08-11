@@ -2046,6 +2046,16 @@ def normalize_chatterfy_lead_id(value: object) -> str:
     return normalized
 
 
+def normalize_tracking_sub_id(value: object) -> str:
+    """Normalize an opaque tracker click ID without treating it as a UUID."""
+    normalized = str(value or "").strip()
+    if not normalized or len(normalized) > 255:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._~:@+\-=]+", normalized):
+        return ""
+    return normalized
+
+
 async def get_personal_registration_link(user_id: int) -> Optional[Dict[str, Any]]:
     if not db_pool or int(user_id or 0) <= 0:
         return None
@@ -2070,16 +2080,16 @@ async def get_personal_registration_link(user_id: int) -> Optional[Dict[str, Any
         return None
 
     access_settings = await get_system_access_settings_row()
-    aio_visit_uuid = normalize_aio_visit_uuid(
-        user_row.get("aio_visit_uuid") or user_row.get("pocket_sub_id2")
-    ) or ""
+    tracker_click_id = normalize_tracking_sub_id(user_row.get("pocket_sub_id2"))
+    if not tracker_click_id:
+        tracker_click_id = normalize_aio_visit_uuid(user_row.get("aio_visit_uuid")) or ""
     chatterfy_lead_id = normalize_chatterfy_lead_id(
         user_row.get("chatterfy_lead_id") or user_row.get("pocket_sub_id3")
     )
     registration_url = build_registration_url(
         access_settings.get("registration_url") or DEFAULT_REGISTRATION_URL,
         click_id=int(user_row["user_id"]),
-        aio_visit_uuid=aio_visit_uuid,
+        tracker_click_id=tracker_click_id,
         chatterfy_lead_id=chatterfy_lead_id,
         values={
             "site_id": user_row.get("pocket_site_id") or "",
@@ -2660,6 +2670,7 @@ class ChatterfyLeadBindingRequest(BaseModel):
     user_id: int
     chatterfy_lead_id: str
     aio_visit_uuid: str = ""
+    tracker_click_id: str = ""
 
 
 def require_ai_chatter_gateway_secret(supplied_secret: str) -> None:
@@ -2681,6 +2692,7 @@ async def bind_user_tracking_identity(
     *,
     chatterfy_lead_id: str = "",
     aio_visit_uuid: str = "",
+    tracker_click_id: str = "",
 ) -> Dict[str, str]:
     if not db_pool:
         raise HTTPException(status_code=503, detail="Database is unavailable")
@@ -2695,7 +2707,11 @@ async def bind_user_tracking_identity(
     normalized_aio_visit_uuid = normalize_aio_visit_uuid(raw_aio_visit_uuid) or ""
     if raw_aio_visit_uuid and not normalized_aio_visit_uuid:
         raise HTTPException(status_code=400, detail="Invalid aio_visit_uuid")
-    if not normalized_lead_id and not normalized_aio_visit_uuid:
+    raw_tracker_click_id = str(tracker_click_id or "").strip()
+    normalized_tracker_click_id = normalize_tracking_sub_id(raw_tracker_click_id)
+    if raw_tracker_click_id and not normalized_tracker_click_id:
+        raise HTTPException(status_code=400, detail="Invalid tracker_click_id")
+    if not normalized_lead_id and not normalized_aio_visit_uuid and not normalized_tracker_click_id:
         raise HTTPException(status_code=400, detail="At least one tracking ID is required")
 
     async with db_pool.acquire() as conn:
@@ -2715,8 +2731,14 @@ async def bind_user_tracking_identity(
                     raise HTTPException(status_code=409, detail="chatterfy_lead_id is already linked")
             await cur.execute(
                 """
-                INSERT INTO users (user_id, aio_visit_uuid, chatterfy_lead_id, lang, mode)
-                VALUES (%s, NULLIF(%s, ''), NULLIF(%s, ''), 'ru', 'forex')
+                INSERT INTO users (
+                    user_id, aio_visit_uuid, chatterfy_lead_id,
+                    pocket_sub_id2, pocket_sub_id3, lang, mode
+                )
+                VALUES (
+                    %s, NULLIF(%s, ''), NULLIF(%s, ''),
+                    NULLIF(%s, ''), NULLIF(%s, ''), 'ru', 'forex'
+                )
                 ON DUPLICATE KEY UPDATE
                     aio_visit_uuid = CASE
                         WHEN VALUES(aio_visit_uuid) IS NOT NULL THEN VALUES(aio_visit_uuid)
@@ -2725,13 +2747,28 @@ async def bind_user_tracking_identity(
                     chatterfy_lead_id = CASE
                         WHEN VALUES(chatterfy_lead_id) IS NOT NULL THEN VALUES(chatterfy_lead_id)
                         ELSE chatterfy_lead_id
+                    END,
+                    pocket_sub_id2 = CASE
+                        WHEN VALUES(pocket_sub_id2) IS NOT NULL THEN VALUES(pocket_sub_id2)
+                        ELSE pocket_sub_id2
+                    END,
+                    pocket_sub_id3 = CASE
+                        WHEN VALUES(pocket_sub_id3) IS NOT NULL THEN VALUES(pocket_sub_id3)
+                        ELSE pocket_sub_id3
                     END
                 """,
-                (int(user_id), normalized_aio_visit_uuid, normalized_lead_id),
+                (
+                    int(user_id),
+                    normalized_aio_visit_uuid,
+                    normalized_lead_id,
+                    normalized_tracker_click_id,
+                    normalized_lead_id,
+                ),
             )
     return {
         "aio_visit_uuid": normalized_aio_visit_uuid,
         "chatterfy_lead_id": normalized_lead_id,
+        "tracker_click_id": normalized_tracker_click_id,
     }
 
 
@@ -2746,6 +2783,7 @@ async def receive_chatterfy_lead_binding(
         payload.user_id,
         chatterfy_lead_id=payload.chatterfy_lead_id,
         aio_visit_uuid=payload.aio_visit_uuid,
+        tracker_click_id=payload.tracker_click_id,
     )
     return {"status": "ok", "tracking": tracking}
 
@@ -2775,11 +2813,21 @@ async def receive_chatterfy_lead_postback(request: Request):
         or payload.get("chat_id")
         or ""
     )
-    aio_visit_uuid = payload.get("aio_visit_uuid") or payload.get("visit_uuid") or ""
+    raw_aio_visit_uuid = str(payload.get("aio_visit_uuid") or payload.get("visit_uuid") or "").strip()
+    tracker_click_id = (
+        payload.get("tracker_click_id")
+        or payload.get("tracker.clickid")
+        or payload.get("tracker_clickid")
+        or payload.get("clickid")
+        or raw_aio_visit_uuid
+        or ""
+    )
+    aio_visit_uuid = normalize_aio_visit_uuid(raw_aio_visit_uuid) or ""
     tracking = await bind_user_tracking_identity(
         user_id,
         chatterfy_lead_id=str(lead_id),
         aio_visit_uuid=str(aio_visit_uuid),
+        tracker_click_id=str(tracker_click_id),
     )
     return {"status": "ok", "tracking": tracking}
 
