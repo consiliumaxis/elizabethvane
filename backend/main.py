@@ -409,6 +409,7 @@ AI_CHATTER_GATEWAY_URL = (
     os.getenv("AI_CHATTER_GATEWAY_URL") or "http://127.0.0.1:8091/incoming"
 ).strip()
 AI_CHATTER_GATEWAY_SECRET = (os.getenv("AI_CHATTER_GATEWAY_SECRET") or "").strip()
+CHATTERFY_WEBHOOK_SECRET = (os.getenv("CHATTERFY_WEBHOOK_SECRET") or "").strip()
 BOT_AI_MANAGER_ENABLED = (
     (os.getenv("BOT_AI_MANAGER_ENABLED") or "1").strip().lower()
     not in {"0", "false", "no", "off"}
@@ -2668,6 +2669,13 @@ def require_ai_chatter_gateway_secret(supplied_secret: str) -> None:
         raise HTTPException(status_code=401, detail="Invalid AI Chatter secret")
 
 
+def require_chatterfy_webhook_secret(supplied_secret: str) -> None:
+    if not CHATTERFY_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Chatterfy webhook is not configured")
+    if not secrets.compare_digest(str(supplied_secret or ""), CHATTERFY_WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid Chatterfy webhook secret")
+
+
 async def bind_user_tracking_identity(
     user_id: int,
     *,
@@ -2744,12 +2752,12 @@ async def receive_chatterfy_lead_binding(
 
 @app.api_route("/api/integrations/chatterfy/lead", methods=["GET", "POST"])
 async def receive_chatterfy_lead_postback(request: Request):
-    """Webhook-friendly variant for Chatterfy, protected by the shared gateway secret."""
+    """Bind a Chatterfy chat to Telegram using a dedicated webhook secret."""
     payload = await read_postback_payload(request)
     supplied_secret = str(
         payload.get("secret") or request.headers.get("X-AI-Chatter-Secret") or ""
     ).strip()
-    require_ai_chatter_gateway_secret(supplied_secret)
+    require_chatterfy_webhook_secret(supplied_secret)
 
     raw_user_id = payload.get("tgid") or payload.get("tg_user_id") or payload.get("user_id")
     try:
