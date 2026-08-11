@@ -53,6 +53,8 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertIn('@dp.message(Command("link"))', backend)
         self.assertIn('/api/user/registration-link', backend)
         self.assertIn('/api/internal/chatterfy/lead', backend)
+        self.assertIn('text="Registration link"', backend)
+        self.assertIn('not registration_link.get("registered")', backend)
         self.assertIn('Number(user.pocket_registered || 0) !== 1', profile)
         self.assertIn("'/api/user/registration-link'", profile)
         self.assertIn("{'{sub_id3}'}", settings)

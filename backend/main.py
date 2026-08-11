@@ -7805,6 +7805,20 @@ async def build_main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
             )
         ]
     ]
+    try:
+        registration_link = await get_personal_registration_link(user_id)
+    except Exception as exc:
+        registration_link = None
+        print(f"[Bot] registration link button failed for user={user_id}: {exc}")
+    if registration_link and not registration_link.get("registered"):
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Registration link",
+                    url=str(registration_link["url"]),
+                )
+            ]
+        )
     if await has_admin_center_access(user_id):
         keyboard_rows.append(
             [
