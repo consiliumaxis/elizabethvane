@@ -640,6 +640,149 @@
   overflow-wrap: anywhere;
 }
 
+.admin-user-chatterfy-panel {
+  display: grid;
+  gap: 11px;
+  border: 1px solid rgba(112, 76, 149, 0.22);
+  border-radius: 15px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(112, 76, 149, 0.11), transparent 44%),
+    rgba(255, 250, 242, 0.82);
+  padding: 13px;
+}
+
+.admin-user-chatterfy-panel.is-linked {
+  border-color: rgba(55, 137, 76, 0.3);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(65, 148, 85, 0.11), transparent 44%),
+    rgba(247, 252, 246, 0.88);
+}
+
+.admin-user-chatterfy-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-user-chatterfy-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-user-chatterfy-head strong {
+  color: var(--text-main);
+  font-size: 1rem;
+}
+
+.admin-user-chatterfy-head p,
+.admin-user-chatterfy-hint {
+  max-width: 640px;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.admin-user-chatterfy-state {
+  flex: 0 0 auto;
+  border: 1px solid rgba(143, 106, 46, 0.2);
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 0.67rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.admin-user-chatterfy-state.is-success {
+  border-color: rgba(55, 137, 76, 0.3);
+  background: rgba(229, 247, 233, 0.92);
+  color: #28673a;
+}
+
+.admin-user-chatterfy-state.is-pending {
+  border-color: rgba(143, 106, 46, 0.24);
+  background: rgba(143, 106, 46, 0.08);
+  color: var(--accent-strong);
+}
+
+.admin-user-chatterfy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-user-chatterfy-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(112, 76, 149, 0.13);
+  border-radius: 12px;
+  background: rgba(255, 253, 248, 0.8);
+  padding: 9px 10px;
+}
+
+.admin-user-chatterfy-grid span {
+  color: var(--text-soft);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.admin-user-chatterfy-grid span code {
+  margin-left: 3px;
+  color: #67478a;
+  font-size: 0.64rem;
+}
+
+.admin-user-chatterfy-grid strong {
+  color: var(--text-main);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-user-chatterfy-grid small {
+  width: fit-content;
+  border-radius: 999px;
+  background: rgba(112, 76, 149, 0.09);
+  color: #67478a;
+  padding: 2px 6px;
+  font-size: 0.61rem;
+  font-weight: 800;
+}
+
+.admin-user-chatterfy-map {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-top: 1px dashed rgba(112, 76, 149, 0.2);
+  padding-top: 10px;
+}
+
+.admin-user-chatterfy-map > span {
+  width: 100%;
+  color: var(--text-soft);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.admin-user-chatterfy-map code {
+  border-radius: 8px;
+  background: rgba(112, 76, 149, 0.08);
+  color: #67478a;
+  padding: 4px 7px;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.admin-user-chatterfy-hint {
+  border-left: 3px solid rgba(143, 106, 46, 0.36);
+  padding-left: 9px;
+}
+
 .admin-user-profile-permission {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -4392,6 +4535,14 @@
   }
 
   .admin-user-pocket-technical {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-user-chatterfy-head {
+    flex-direction: column;
+  }
+
+  .admin-user-chatterfy-grid {
     grid-template-columns: 1fr;
   }
 

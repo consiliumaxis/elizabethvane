@@ -80,6 +80,9 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertIn("{'{sub_id3}'}", settings)
         self.assertIn('/api/admin/users/${encodeURIComponent(userId)}/pocket', users)
         self.assertIn("Pocket postback history", users)
+        self.assertIn("Chatterfy Chat ID", users)
+        self.assertIn("tracker.clickid", users)
+        self.assertIn("sub_id3 ←", users)
         self.assertIn("/link @username", managers)
         self.assertIn("get_registration_link_by_target(target_kind, target_value)", backend)
 

@@ -667,6 +667,10 @@ export default function UsersPage({ adminUser }) {
     const pocket = pocketDetails?.pocket || {};
     const pocketPostbacks = pocketDetails?.postbacks || [];
     const latestPocketPostback = pocketPostbacks[0] || null;
+    const telegramChatId = pocket.user_id || selectedUser.user_id || '';
+    const chatterfyChatId = pocket.chatterfy_lead_id || pocket.pocket_sub_id3 || '';
+    const trackerClickId = pocket.aio_visit_uuid || pocket.pocket_sub_id2 || '';
+    const chatterfyLinked = Boolean(chatterfyChatId);
     return (
       <div className="admin-card">
         <div className="admin-row-between">
@@ -828,6 +832,69 @@ export default function UsersPage({ adminUser }) {
                     </div>
                   )}
                 </details>
+              </>
+            ) : null}
+          </section>
+
+          <section className={`admin-user-chatterfy-panel ${chatterfyLinked ? 'is-linked' : ''}`}>
+            <div className="admin-user-chatterfy-head">
+              <div>
+                <span className="admin-user-profile-permission-kicker">Webhook identity</span>
+                <strong>Chatterfy</strong>
+                <p>
+                  {tr(
+                    'Identifiers received from the Chatterfy flow and used to build the personal registration URL.',
+                    'Идентификаторы из воронки Chatterfy, которые используются при сборке персональной ссылки регистрации.'
+                  )}
+                </p>
+              </div>
+              <span className={`admin-user-chatterfy-state ${chatterfyLinked ? 'is-success' : 'is-pending'}`}>
+                {chatterfyLinked
+                  ? tr('Webhook linked', 'Webhook привязан')
+                  : tr('Waiting for webhook', 'Ожидается webhook')}
+              </span>
+            </div>
+
+            {pocketLoading ? (
+              <div className="admin-user-pocket-message">{tr('Loading Chatterfy data…', 'Загружаем данные Chatterfy…')}</div>
+            ) : null}
+            {pocketError ? <div className="admin-error">{pocketError}</div> : null}
+
+            {!pocketLoading && !pocketError ? (
+              <>
+                <div className="admin-user-chatterfy-grid">
+                  <div>
+                    <span>Telegram Chat ID <code>{'{chatId}'}</code></span>
+                    <strong>{formatPocketValue(telegramChatId)}</strong>
+                    <small>click_id</small>
+                  </div>
+                  <div>
+                    <span>Chatterfy Chat ID <code>{'{id}'}</code></span>
+                    <strong>{formatPocketValue(chatterfyChatId)}</strong>
+                    <small>sub_id3</small>
+                  </div>
+                  <div>
+                    <span>Tracker Click ID <code>{'{tracker.clickid}'}</code></span>
+                    <strong>{formatPocketValue(trackerClickId)}</strong>
+                    <small>sub_id2</small>
+                  </div>
+                </div>
+
+                <div className="admin-user-chatterfy-map">
+                  <span>{tr('Registration link mapping', 'Подстановка в ссылку регистрации')}</span>
+                  <code>click_id ← {'{chatId}'}</code>
+                  <code>sub_id2 ← {'{tracker.clickid}'}</code>
+                  <code>sub_id3 ← {'{id}'}</code>
+                </div>
+
+                {!chatterfyLinked ? (
+                  <p className="admin-user-chatterfy-hint">
+                    {tr(
+                      'The Telegram ID is known, but Chatterfy has not sent its internal chat ID yet. The value will appear automatically after the webhook runs.',
+                      'Telegram ID уже известен, но Chatterfy ещё не передал внутренний ID чата. Значение появится автоматически после срабатывания webhook.'
+                    )}
+                  </p>
+                ) : null}
               </>
             ) : null}
           </section>
