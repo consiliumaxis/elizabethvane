@@ -115,7 +115,15 @@ def normalize_pocket_postback_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         128,
     )
     event_time = _normalize_pocket_text(
-        _first_payload_value(payload, "event_time", "transaction_time", "datetime", "created_at", "date"),
+        _first_payload_value(
+            payload,
+            "event_time",
+            "transaction_time",
+            "date_time",
+            "datetime",
+            "created_at",
+            "date",
+        ),
         64,
     )
     ac = _normalize_pocket_text(_first_payload_value(payload, "ac"), 255)
