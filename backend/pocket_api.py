@@ -102,6 +102,7 @@ def normalize_pocket_postback_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     cid = _normalize_pocket_text(_first_payload_value(payload, "cid", "campaign_id"), 128)
     sub_id1 = _normalize_pocket_text(_first_payload_value(payload, "sub_id1", "subid1", "sub_id"), 255)
     sub_id2 = _normalize_pocket_text(_first_payload_value(payload, "sub_id2", "subid2"), 255)
+    sub_id3 = _normalize_pocket_text(_first_payload_value(payload, "sub_id3", "subid3"), 255)
     provider_event_id = _normalize_pocket_text(
         _first_payload_value(
             payload,
@@ -142,7 +143,7 @@ def normalize_pocket_postback_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     payload_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    unique_source = trader_id or cid or sub_id2 or sub_id1 or click_id or "unknown"
+    unique_source = trader_id or cid or sub_id3 or sub_id2 or sub_id1 or click_id or "unknown"
     if provider_event_id:
         unique_key = _normalize_pocket_text(f"{event_slug or 'unknown'}:provider:{provider_event_id}", 191)
     elif event_slug == POCKET_DEPOSIT_EVENT:
@@ -161,6 +162,7 @@ def normalize_pocket_postback_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         "cid": cid,
         "sub_id1": sub_id1,
         "sub_id2": sub_id2,
+        "sub_id3": sub_id3,
         "provider_event_id": provider_event_id,
         "event_time": event_time,
         "payload_fingerprint": payload_fingerprint,

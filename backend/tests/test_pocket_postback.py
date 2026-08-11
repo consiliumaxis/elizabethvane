@@ -25,6 +25,8 @@ class PocketPostbackSourceTest(unittest.TestCase):
             "pocket_cid",
             "pocket_sub_id1",
             "pocket_sub_id2",
+            "pocket_sub_id3",
+            "chatterfy_lead_id",
             "trader_id",
         ):
             self.assertIn(field, source)
@@ -38,6 +40,8 @@ class PocketPostbackSourceTest(unittest.TestCase):
             "pocket_cid",
             "pocket_sub_id1",
             "pocket_sub_id2",
+            "pocket_sub_id3",
+            "chatterfy_lead_id",
             "pocket_registered",
             "pocket_deposited",
             "pocket_deposit_amount",
@@ -56,6 +60,7 @@ class PocketPostbackSourceTest(unittest.TestCase):
         self.assertIn("recent_exact_duplicate", source)
         self.assertIn("INTERVAL 2 MINUTE", source)
         self.assertIn("sync_aichatter_pocket_event", source)
+        self.assertIn("clickid=sub_id3", source)
 
 
 if __name__ == "__main__":

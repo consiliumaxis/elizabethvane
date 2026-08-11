@@ -32,6 +32,7 @@ class PocketApiTest(unittest.TestCase):
                 "cid": "84664",
                 "sub_id1": "welcome",
                 "sub_id2": "tracker-click-123",
+                "sub_id3": "lead-456",
                 "date_time": "2026-08-12 14:30:00",
             }
         )
@@ -44,6 +45,7 @@ class PocketApiTest(unittest.TestCase):
         self.assertEqual(normalized["cid"], "84664")
         self.assertEqual(normalized["sub_id1"], "welcome")
         self.assertEqual(normalized["sub_id2"], "tracker-click-123")
+        self.assertEqual(normalized["sub_id3"], "lead-456")
         self.assertEqual(normalized["event_time"], "2026-08-12 14:30:00")
         self.assertEqual(normalized["unique_key"], "registration:7097261848:900102")
 

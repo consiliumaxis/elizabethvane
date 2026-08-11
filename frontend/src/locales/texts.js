@@ -79,6 +79,11 @@ export const texts = {
       manualTraderIdHint: "A manually entered Trader ID is not verified through Pocket. Automatic Pocket balance synchronization will be disabled.",
       profileUpdated: "Profile updated",
       profileEditFailed: "Could not update profile",
+      registrationLinkTitle: "Registration link",
+      registrationLinkHint: "Your personal tracked link is generated securely when you open it.",
+      registrationLinkButton: "Open link",
+      registrationLinkLoading: "Preparing...",
+      registrationLinkFailed: "Could not create the registration link",
       enableDemo: "Enable Demo Mode",
       exitDemo: "Exit Demo Mode"
     },

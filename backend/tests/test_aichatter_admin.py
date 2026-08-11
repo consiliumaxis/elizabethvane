@@ -30,6 +30,8 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertEqual([value for key, value in query if key == "ac"], ["elizabeth_vane_rev1"])
         self.assertIn(("site_id", ""), query)
         self.assertIn(("trader_id", ""), query)
+        self.assertIn(("sub_id2", ""), query)
+        self.assertIn(("sub_id3", ""), query)
 
     def test_router_exposes_complete_admin_surface(self):
         source = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")
@@ -196,7 +198,8 @@ class AichatterAdminTest(unittest.TestCase):
         config = (PROJECT_ROOT / "services/evanechat_bot/config.py").read_text(encoding="utf-8")
 
         self.assertIn('@app.post("/api/internal/aichatter/dialog-start")', backend)
-        self.assertIn("secrets.compare_digest(x_ai_chatter_secret, AI_CHATTER_GATEWAY_SECRET)", backend)
+        self.assertIn("require_ai_chatter_gateway_secret(x_ai_chatter_secret)", backend)
+        self.assertIn("secrets.compare_digest(str(supplied_secret or \"\"), AI_CHATTER_GATEWAY_SECRET)", backend)
         self.assertIn("send_aio_postback_event(payload.user_id, CHATTERFY_START_EVENT)", backend)
         self.assertIn("AI_CHATTER_AIO_EVENT_URL", config)
         self.assertIn("async def notify_aio_dialog_start", bot)

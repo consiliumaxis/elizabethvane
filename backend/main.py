@@ -196,6 +196,10 @@ try:
 except ModuleNotFoundError:
     from chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
 try:
+    from backend.registration_links import DEFAULT_REGISTRATION_URL, build_registration_url
+except ModuleNotFoundError:
+    from registration_links import DEFAULT_REGISTRATION_URL, build_registration_url
+try:
     from backend.access_policy import (
         ACCESS_POLICY_REGISTRATION_DEPOSIT,
         normalize_access_policy,
@@ -1990,7 +1994,7 @@ def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str,
     return {
         "policy": policy,
         "min_deposit_amount": str(min_deposit),
-        "registration_url": str((row or {}).get("registration_url") or "").strip(),
+        "registration_url": str((row or {}).get("registration_url") or DEFAULT_REGISTRATION_URL).strip(),
         "updated_at": (row or {}).get("updated_at"),
         "updated_by": (row or {}).get("updated_by"),
     }
@@ -1998,7 +2002,11 @@ def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str,
 
 async def get_system_access_settings_row() -> Dict[str, Any]:
     default_settings = serialize_system_access_settings(
-        {"policy": ACCESS_POLICY_REGISTRATION_DEPOSIT, "min_deposit_amount": "0", "registration_url": ""}
+        {
+            "policy": ACCESS_POLICY_REGISTRATION_DEPOSIT,
+            "min_deposit_amount": "0",
+            "registration_url": DEFAULT_REGISTRATION_URL,
+        }
     )
     if not db_pool:
         return default_settings
@@ -2018,6 +2026,64 @@ async def get_system_access_settings_row() -> Dict[str, Any]:
     except Exception as e:
         print(f"System access settings fallback: {e}")
         return default_settings
+
+
+def normalize_chatterfy_lead_id(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or len(normalized) > 255:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._:@-]+", normalized):
+        return ""
+    return normalized
+
+
+async def get_personal_registration_link(user_id: int) -> Optional[Dict[str, Any]]:
+    if not db_pool or int(user_id or 0) <= 0:
+        return None
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT user_id, aio_visit_uuid, chatterfy_lead_id,
+                       trader_id, profile_trader_id, country,
+                       pocket_site_id, pocket_cid, pocket_sub_id1,
+                       pocket_sub_id2, pocket_sub_id3,
+                       COALESCE(pocket_registered, 0) AS pocket_registered
+                FROM users
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (int(user_id),),
+            )
+            user_row = await cur.fetchone()
+    if not user_row:
+        return None
+
+    access_settings = await get_system_access_settings_row()
+    aio_visit_uuid = normalize_aio_visit_uuid(
+        user_row.get("aio_visit_uuid") or user_row.get("pocket_sub_id2")
+    ) or ""
+    chatterfy_lead_id = normalize_chatterfy_lead_id(
+        user_row.get("chatterfy_lead_id") or user_row.get("pocket_sub_id3")
+    )
+    registration_url = build_registration_url(
+        access_settings.get("registration_url") or DEFAULT_REGISTRATION_URL,
+        click_id=int(user_row["user_id"]),
+        aio_visit_uuid=aio_visit_uuid,
+        chatterfy_lead_id=chatterfy_lead_id,
+        values={
+            "site_id": user_row.get("pocket_site_id") or "",
+            "trader_id": user_row.get("profile_trader_id") or user_row.get("trader_id") or "",
+            "cid": user_row.get("pocket_cid") or "",
+            "sub_id1": user_row.get("pocket_sub_id1") or "",
+            "country": user_row.get("country") or "",
+        },
+    )
+    return {
+        "url": registration_url,
+        "registered": truthy_db(user_row.get("pocket_registered")) == 1,
+    }
 
 
 def truthy_db(value) -> int:
@@ -2270,10 +2336,10 @@ async def insert_pocket_postback_log(
                 """
                 INSERT IGNORE INTO pocket_postback_events (
                     event_slug, unique_key, user_id, click_id, trader_id, deposit_amount,
-                    country, site_id, cid, sub_id1, sub_id2, provider_event_id, payload_fingerprint,
+                    country, site_id, cid, sub_id1, sub_id2, sub_id3, provider_event_id, payload_fingerprint,
                     raw_payload, status, reason, source_ip
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     normalized.get("event_slug") or "unknown",
@@ -2287,6 +2353,7 @@ async def insert_pocket_postback_log(
                     normalized.get("cid") or None,
                     normalized.get("sub_id1") or None,
                     normalized.get("sub_id2") or None,
+                    normalized.get("sub_id3") or None,
                     normalized.get("provider_event_id") or None,
                     normalized.get("payload_fingerprint") or None,
                     json.dumps(safe_payload, ensure_ascii=False, default=str),
@@ -2576,6 +2643,129 @@ class AIChatterDialogStartRequest(BaseModel):
     user_id: int
     first_name: str = ""
     username: str = ""
+    aio_visit_uuid: str = ""
+    chatterfy_lead_id: str = ""
+
+
+class ChatterfyLeadBindingRequest(BaseModel):
+    user_id: int
+    chatterfy_lead_id: str
+    aio_visit_uuid: str = ""
+
+
+def require_ai_chatter_gateway_secret(supplied_secret: str) -> None:
+    if not AI_CHATTER_GATEWAY_SECRET:
+        raise HTTPException(status_code=503, detail="AI Chatter integration is not configured")
+    if not secrets.compare_digest(str(supplied_secret or ""), AI_CHATTER_GATEWAY_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid AI Chatter secret")
+
+
+async def bind_user_tracking_identity(
+    user_id: int,
+    *,
+    chatterfy_lead_id: str = "",
+    aio_visit_uuid: str = "",
+) -> Dict[str, str]:
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database is unavailable")
+    if int(user_id or 0) <= 0:
+        raise HTTPException(status_code=400, detail="user_id must be positive")
+
+    raw_lead_id = str(chatterfy_lead_id or "").strip()
+    normalized_lead_id = normalize_chatterfy_lead_id(raw_lead_id)
+    if raw_lead_id and not normalized_lead_id:
+        raise HTTPException(status_code=400, detail="Invalid chatterfy_lead_id")
+    raw_aio_visit_uuid = str(aio_visit_uuid or "").strip()
+    normalized_aio_visit_uuid = normalize_aio_visit_uuid(raw_aio_visit_uuid) or ""
+    if raw_aio_visit_uuid and not normalized_aio_visit_uuid:
+        raise HTTPException(status_code=400, detail="Invalid aio_visit_uuid")
+    if not normalized_lead_id and not normalized_aio_visit_uuid:
+        raise HTTPException(status_code=400, detail="At least one tracking ID is required")
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            if normalized_lead_id:
+                await cur.execute(
+                    """
+                    SELECT user_id
+                    FROM users
+                    WHERE user_id <> %s
+                      AND (chatterfy_lead_id = %s OR pocket_sub_id3 = %s)
+                    LIMIT 1
+                    """,
+                    (int(user_id), normalized_lead_id, normalized_lead_id),
+                )
+                if await cur.fetchone():
+                    raise HTTPException(status_code=409, detail="chatterfy_lead_id is already linked")
+            await cur.execute(
+                """
+                INSERT INTO users (user_id, aio_visit_uuid, chatterfy_lead_id, lang, mode)
+                VALUES (%s, NULLIF(%s, ''), NULLIF(%s, ''), 'ru', 'forex')
+                ON DUPLICATE KEY UPDATE
+                    aio_visit_uuid = CASE
+                        WHEN VALUES(aio_visit_uuid) IS NOT NULL THEN VALUES(aio_visit_uuid)
+                        ELSE aio_visit_uuid
+                    END,
+                    chatterfy_lead_id = CASE
+                        WHEN VALUES(chatterfy_lead_id) IS NOT NULL THEN VALUES(chatterfy_lead_id)
+                        ELSE chatterfy_lead_id
+                    END
+                """,
+                (int(user_id), normalized_aio_visit_uuid, normalized_lead_id),
+            )
+    return {
+        "aio_visit_uuid": normalized_aio_visit_uuid,
+        "chatterfy_lead_id": normalized_lead_id,
+    }
+
+
+@app.post("/api/internal/chatterfy/lead")
+async def receive_chatterfy_lead_binding(
+    payload: ChatterfyLeadBindingRequest,
+    x_ai_chatter_secret: str = Header(default="", alias="X-AI-Chatter-Secret"),
+):
+    """Persist the Chatterfy lead-to-Telegram mapping before registration."""
+    require_ai_chatter_gateway_secret(x_ai_chatter_secret)
+    tracking = await bind_user_tracking_identity(
+        payload.user_id,
+        chatterfy_lead_id=payload.chatterfy_lead_id,
+        aio_visit_uuid=payload.aio_visit_uuid,
+    )
+    return {"status": "ok", "tracking": tracking}
+
+
+@app.api_route("/api/integrations/chatterfy/lead", methods=["GET", "POST"])
+async def receive_chatterfy_lead_postback(request: Request):
+    """Webhook-friendly variant for Chatterfy, protected by the shared gateway secret."""
+    payload = await read_postback_payload(request)
+    supplied_secret = str(
+        payload.get("secret") or request.headers.get("X-AI-Chatter-Secret") or ""
+    ).strip()
+    require_ai_chatter_gateway_secret(supplied_secret)
+
+    raw_user_id = payload.get("tgid") or payload.get("tg_user_id") or payload.get("user_id")
+    try:
+        user_id = int(str(raw_user_id or "").strip())
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Valid tgid is required")
+    lead_id = (
+        payload.get("chatterfy_lead_id")
+        or payload.get("lead_id")
+        or payload.get("leadid")
+        or payload.get("chatterfy_id")
+        or payload.get("contact_id")
+        or payload.get("subscriber_id")
+        or payload.get("dialog_id")
+        or payload.get("chat_id")
+        or ""
+    )
+    aio_visit_uuid = payload.get("aio_visit_uuid") or payload.get("visit_uuid") or ""
+    tracking = await bind_user_tracking_identity(
+        user_id,
+        chatterfy_lead_id=str(lead_id),
+        aio_visit_uuid=str(aio_visit_uuid),
+    )
+    return {"status": "ok", "tracking": tracking}
 
 
 @app.post("/api/internal/aichatter/dialog-start")
@@ -2584,12 +2774,16 @@ async def receive_ai_chatter_dialog_start(
     x_ai_chatter_secret: str = Header(default="", alias="X-AI-Chatter-Secret"),
 ):
     """Accept the first-dialog signal from the isolated AI Chatter service."""
-    if not AI_CHATTER_GATEWAY_SECRET:
-        raise HTTPException(status_code=503, detail="AI Chatter integration is not configured")
-    if not secrets.compare_digest(x_ai_chatter_secret, AI_CHATTER_GATEWAY_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid AI Chatter secret")
+    require_ai_chatter_gateway_secret(x_ai_chatter_secret)
     if payload.user_id <= 0:
         raise HTTPException(status_code=400, detail="user_id must be positive")
+
+    if payload.chatterfy_lead_id or payload.aio_visit_uuid:
+        await bind_user_tracking_identity(
+            payload.user_id,
+            chatterfy_lead_id=payload.chatterfy_lead_id,
+            aio_visit_uuid=payload.aio_visit_uuid,
+        )
 
     event_result = await send_aio_postback_event(payload.user_id, CHATTERFY_START_EVENT)
     return {"status": "ok", "event": event_result}
@@ -2753,6 +2947,9 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
     cid = normalized.get("cid") or ""
     sub_id1 = normalized.get("sub_id1") or ""
     sub_id2 = normalized.get("sub_id2") or ""
+    sub_id3 = normalized.get("sub_id3") or ""
+    aio_visit_uuid_from_postback = normalize_aio_visit_uuid(sub_id2) or ""
+    chatterfy_lead_id_from_postback = normalize_chatterfy_lead_id(sub_id3)
     deposit_amount = normalize_deposit_amount(normalized.get("deposit_amount"))
 
     if event_slug not in {POCKET_REGISTRATION_EVENT, POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT}:
@@ -2779,7 +2976,15 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         await conn.begin()
         try:
             async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute("SELECT user_id, aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1 FOR UPDATE", (telegram_id,))
+                await cur.execute(
+                    """
+                    SELECT user_id, aio_visit_uuid, chatterfy_lead_id
+                    FROM users
+                    WHERE user_id = %s
+                    LIMIT 1 FOR UPDATE
+                    """,
+                    (telegram_id,),
+                )
                 user_row = await cur.fetchone()
                 if not user_row:
                     await conn.rollback()
@@ -2809,15 +3014,16 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                     """
                     INSERT IGNORE INTO pocket_postback_events (
                         event_slug, unique_key, user_id, click_id, trader_id, deposit_amount,
-                        country, site_id, cid, sub_id1, sub_id2, provider_event_id, payload_fingerprint,
+                        country, site_id, cid, sub_id1, sub_id2, sub_id3, provider_event_id, payload_fingerprint,
                         raw_payload, status, source_ip
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'received', %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'received', %s)
                     """,
                     (
                         event_slug, normalized.get("unique_key"), telegram_id, click_id or None,
                         trader_id or None, f"{deposit_amount:.2f}", normalized.get("country") or None,
                         site_id or None, cid or None,
-                        sub_id1 or None, sub_id2 or None, normalized.get("provider_event_id") or None,
+                        sub_id1 or None, sub_id2 or None, sub_id3 or None,
+                        normalized.get("provider_event_id") or None,
                         normalized.get("payload_fingerprint") or None,
                         json.dumps(safe_payload, ensure_ascii=False, default=str), source_ip,
                     ),
@@ -2842,6 +3048,9 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                             pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
                             pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
                             pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
+                            pocket_sub_id3 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id3 END,
+                            aio_visit_uuid = CASE WHEN %s <> '' THEN %s ELSE aio_visit_uuid END,
+                            chatterfy_lead_id = CASE WHEN %s <> '' THEN %s ELSE chatterfy_lead_id END,
                             country = CASE WHEN %s <> '' THEN %s ELSE country END,
                             pocket_registered = 1,
                             pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
@@ -2849,7 +3058,9 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                         WHERE user_id = %s
                         """,
                         (trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
-                         sub_id1, sub_id1, sub_id2, sub_id2,
+                         sub_id1, sub_id1, sub_id2, sub_id2, sub_id3, sub_id3,
+                         aio_visit_uuid_from_postback, aio_visit_uuid_from_postback,
+                         chatterfy_lead_id_from_postback, chatterfy_lead_id_from_postback,
                          normalized.get("country") or "", normalized.get("country") or "", telegram_id),
                     )
                 else:
@@ -2862,6 +3073,9 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                             pocket_cid = CASE WHEN %s <> '' THEN %s ELSE pocket_cid END,
                             pocket_sub_id1 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id1 END,
                             pocket_sub_id2 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id2 END,
+                            pocket_sub_id3 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id3 END,
+                            aio_visit_uuid = CASE WHEN %s <> '' THEN %s ELSE aio_visit_uuid END,
+                            chatterfy_lead_id = CASE WHEN %s <> '' THEN %s ELSE chatterfy_lead_id END,
                             country = CASE WHEN %s <> '' THEN %s ELSE country END,
                             pocket_registered = 1,
                             pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
@@ -2871,12 +3085,19 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                         WHERE user_id = %s
                         """,
                         (trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
-                         sub_id1, sub_id1, sub_id2, sub_id2,
+                         sub_id1, sub_id1, sub_id2, sub_id2, sub_id3, sub_id3,
+                         aio_visit_uuid_from_postback, aio_visit_uuid_from_postback,
+                         chatterfy_lead_id_from_postback, chatterfy_lead_id_from_postback,
                          normalized.get("country") or "", normalized.get("country") or "",
                          f"{deposit_amount:.2f}", telegram_id),
                     )
                 await cur.execute(
-                    "SELECT COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount FROM users WHERE user_id = %s",
+                    """
+                    SELECT COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                           aio_visit_uuid, chatterfy_lead_id
+                    FROM users
+                    WHERE user_id = %s
+                    """,
                     (telegram_id,),
                 )
                 updated_user_row = await cur.fetchone() or {}
@@ -2906,7 +3127,8 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
             click_id=click_id,
             deposit_amount=deposit_amount,
             metadata={
-                "site_id": site_id, "cid": cid, "sub_id1": sub_id1, "sub_id2": sub_id2,
+                "site_id": site_id, "cid": cid, "sub_id1": sub_id1,
+                "sub_id2": sub_id2, "sub_id3": sub_id3,
                 "ac": normalized.get("ac"), "country": normalized.get("country"),
                 "promo": normalized.get("promo"), "device_type": normalized.get("device_type"),
             },
@@ -2917,9 +3139,9 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
     chatterfy_result = await send_chatterfy_pocket_postback(
         log_id=log_id,
         event_slug=event_slug,
-        clickid=sub_id2,
+        clickid=sub_id3,
         trader_id=trader_id,
-        trader_aio_id=(user_row or {}).get("aio_visit_uuid") or "",
+        trader_aio_id=(updated_user_row or {}).get("aio_visit_uuid") or "",
         tgid=int(telegram_id),
         revenue=f"{deposit_amount:.2f}" if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT} else "",
         unique_key=normalized.get("unique_key") or event_slug,
@@ -2936,6 +3158,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         "cid": cid or None,
         "sub_id1": sub_id1 or None,
         "sub_id2": sub_id2 or None,
+        "sub_id3": sub_id3 or None,
         "access_granted": access_granted,
         "access_policy": signal_access_status.get("policy"),
         "aio": aio_result,
@@ -2978,6 +3201,7 @@ async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
                COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
                u.profile_updated_at,
                COALESCE(u.balance, 0) AS balance,
+               COALESCE(u.pocket_registered, 0) AS pocket_registered,
                COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                u.balance_synced_at, u.balance_sync_error,
                COALESCE(fx.is_enabled, 0) AS forex_access,
@@ -3188,6 +3412,7 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
 
                 reset_parts = [
                     "aio_visit_uuid = NULL",
+                    "chatterfy_lead_id = NULL",
                     "trader_id = NULL",
                     "profile_name = NULL",
                     "profile_trader_id = NULL",
@@ -3197,6 +3422,7 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                     "pocket_cid = NULL",
                     "pocket_sub_id1 = NULL",
                     "pocket_sub_id2 = NULL",
+                    "pocket_sub_id3 = NULL",
                     "pocket_registered = 0",
                     "pocket_deposited = 0",
                     "pocket_registered_at = NULL",
@@ -4227,6 +4453,7 @@ async def admin_staff_audit(
             (
                 CAST(audit.requested_by AS CHAR) LIKE %s
                 OR CAST(COALESCE(audit.target_user_id, 0) AS CHAR) LIKE %s
+                OR audit.command_name LIKE %s
                 OR audit.target_query LIKE %s
                 OR COALESCE(requester.username, '') LIKE %s
                 OR COALESCE(requester.first_name, '') LIKE %s
@@ -4235,7 +4462,7 @@ async def admin_staff_audit(
             )
             """
         )
-        params.extend([like_value] * 7)
+        params.extend([like_value] * 8)
     where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
     async with db_pool.acquire() as conn:
@@ -4255,6 +4482,7 @@ async def admin_staff_audit(
                 f"""
                 SELECT
                     audit.id,
+                    audit.command_name,
                     audit.requested_by,
                     audit.target_query,
                     audit.target_user_id,
@@ -6398,8 +6626,9 @@ async def get_profile(user=Depends(get_telegram_user)):
                        CASE WHEN NULLIF(TRIM(u.profile_trader_id), '') IS NULL THEN 0 ELSE 1 END AS trader_id_is_manual,
                        COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
                        u.profile_updated_at,
-                       COALESCE(u.balance, 0) AS balance,
-                       COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
+                        COALESCE(u.balance, 0) AS balance,
+                        COALESCE(u.pocket_registered, 0) AS pocket_registered,
+                        COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                        u.balance_synced_at,
                        COALESCE(fx.is_enabled, 0) AS forex_access,
                        COALESCE(bin.is_enabled, 0) AS binary_access,
@@ -6424,6 +6653,16 @@ async def get_profile(user=Depends(get_telegram_user)):
         user["is_admin"] = 1 if admin_center_access else 0
         user["admin_url"] = build_admin_webapp_url() if admin_center_access else ""
     return user or {"error": "Not found"}
+
+
+@app.post("/api/user/registration-link")
+async def get_user_registration_link(user=Depends(get_telegram_user)):
+    link_data = await get_personal_registration_link(int(user["user_id"]))
+    if not link_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    if link_data.get("registered"):
+        raise HTTPException(status_code=409, detail="registration_already_completed")
+    return {"status": "success", "url": link_data["url"]}
 
 
 @app.patch("/api/user/profile")
@@ -8269,6 +8508,22 @@ async def write_manager_stats_audit(
     result_status: str,
     target_user_id: Optional[int] = None,
 ) -> None:
+    await write_manager_command_audit(
+        "stats",
+        requested_by,
+        target_query,
+        result_status,
+        target_user_id,
+    )
+
+
+async def write_manager_command_audit(
+    command_name: str,
+    requested_by: int,
+    target_query: str,
+    result_status: str,
+    target_user_id: Optional[int] = None,
+) -> None:
     if not db_pool:
         return
     try:
@@ -8277,10 +8532,11 @@ async def write_manager_stats_audit(
                 await cur.execute(
                     """
                     INSERT INTO manager_stats_audit
-                        (requested_by, target_query, target_user_id, result_status)
-                    VALUES (%s, %s, %s, %s)
+                        (command_name, requested_by, target_query, target_user_id, result_status)
+                    VALUES (%s, %s, %s, %s, %s)
                     """,
                     (
+                        str(command_name or "unknown").strip().lower()[:16],
                         int(requested_by),
                         str(target_query or "")[:255],
                         int(target_user_id) if target_user_id else None,
@@ -8288,7 +8544,7 @@ async def write_manager_stats_audit(
                     ),
                 )
     except Exception as exc:
-        print(f"[Manager stats] audit failed: {exc}")
+        print(f"[Manager command] audit failed: {exc}")
 
 
 def get_country_from_pocket_rows(rows: List[Dict[str, Any]]) -> str:
@@ -8437,6 +8693,89 @@ async def cmd_manager_stats(message: types.Message):
         int(summary["user_id"]),
     )
     await message.answer(format_manager_stats(summary))
+
+
+def mask_chatterfy_lead_id(value: str) -> str:
+    normalized = str(value or "").strip()
+    if len(normalized) <= 8:
+        return "***"
+    return f"{normalized[:4]}…{normalized[-4:]}"
+
+
+async def get_registration_link_by_chatterfy_lead_id(lead_id: str) -> Dict[str, Any]:
+    if not db_pool:
+        return {"status": "unavailable"}
+    normalized_lead_id = normalize_chatterfy_lead_id(lead_id)
+    if not normalized_lead_id:
+        return {"status": "invalid_query"}
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT user_id
+                FROM users
+                WHERE chatterfy_lead_id = %s OR pocket_sub_id3 = %s
+                ORDER BY updated_at DESC, user_id DESC
+                LIMIT 2
+                """,
+                (normalized_lead_id, normalized_lead_id),
+            )
+            matches = list(await cur.fetchall() or [])
+    if not matches:
+        return {"status": "not_found"}
+    if len(matches) > 1:
+        return {"status": "ambiguous"}
+
+    user_id = int(matches[0]["user_id"])
+    link_data = await get_personal_registration_link(user_id)
+    if not link_data:
+        return {"status": "not_found"}
+    return {"status": "success", "user_id": user_id, "url": link_data["url"]}
+
+
+@dp.message(Command("link"))
+async def cmd_manager_registration_link(message: types.Message):
+    if not message.from_user:
+        return
+    requester_id = int(message.from_user.id)
+    raw_command = str(message.text or "").strip()
+    raw_parts = raw_command.split(maxsplit=1)
+    raw_lead_id = raw_parts[1].strip() if len(raw_parts) == 2 else ""
+    audit_query = f"/link {mask_chatterfy_lead_id(raw_lead_id)}".strip()
+
+    staff_profile = await get_staff_profile(requester_id)
+    if not staff_profile or not has_permission(staff_profile, PERM_STATS_COMMAND):
+        await write_manager_command_audit("link", requester_id, audit_query, "denied")
+        await message.answer("Insufficient permissions")
+        return
+    if str(message.chat.type) not in {"private", "ChatType.PRIVATE"}:
+        await write_manager_command_audit("link", requester_id, audit_query, "private_chat_required")
+        await message.answer("The /link command is available only in a private chat with the bot.")
+        return
+    if not normalize_chatterfy_lead_id(raw_lead_id):
+        await write_manager_command_audit("link", requester_id, audit_query, "invalid_query")
+        await message.answer("Usage: /link chatterfy_lead_id")
+        return
+
+    result = await get_registration_link_by_chatterfy_lead_id(raw_lead_id)
+    if result.get("status") == "not_found":
+        await write_manager_command_audit("link", requester_id, audit_query, "not_found")
+        await message.answer("Client link not found")
+        return
+    if result.get("status") != "success":
+        await write_manager_command_audit("link", requester_id, audit_query, "invalid_query")
+        await message.answer("The lead ID is not linked uniquely. Contact an administrator.")
+        return
+
+    await write_manager_command_audit(
+        "link",
+        requester_id,
+        audit_query,
+        "success",
+        int(result["user_id"]),
+    )
+    await message.answer(str(result["url"]), disable_web_page_preview=True)
 
 
 @dp.message(CommandStart())

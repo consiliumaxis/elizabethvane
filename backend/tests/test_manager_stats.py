@@ -79,6 +79,7 @@ class ManagerStatsTest(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS manager_stats_audit", schema)
         self.assertIn("country VARCHAR(32)", schema)
         self.assertIn('@dp.message(Command("stats"))', backend)
+        self.assertIn('@dp.message(Command("link"))', backend)
         self.assertIn('await message.answer("Insufficient permissions")', backend)
         self.assertIn("async def get_manager_stats_summary", backend)
         self.assertIn('@app.get("/api/admin/staff/audit")', backend)
@@ -99,9 +100,10 @@ class ManagerStatsTest(unittest.TestCase):
         self.assertIn("<ManagersPage adminUser={adminUser} />", app)
         self.assertIn("/api/admin/staff", page)
         self.assertIn("/api/admin/staff/audit", page)
-        self.assertIn("tr('/stats request history', 'История запросов /stats')", page)
+        self.assertIn("tr('Manager command history', 'История команд менеджеров')", page)
         self.assertIn("tr('Managers and administrators', 'Менеджеры и администраторы')", page)
         self.assertIn("/stats @nickname", page)
+        self.assertIn("/link chatterfy_lead_id", page)
 
 
 if __name__ == "__main__":

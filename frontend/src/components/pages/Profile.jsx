@@ -30,6 +30,8 @@ export default function Profile({
   const [profileEditValue, setProfileEditValue] = useState('');
   const [profileEditError, setProfileEditError] = useState('');
   const [profileEditSaving, setProfileEditSaving] = useState(false);
+  const [registrationLinkLoading, setRegistrationLinkLoading] = useState(false);
+  const [registrationLinkError, setRegistrationLinkError] = useState('');
 
   useEffect(() => {
     if (scrollTarget === 'strategies' && strategyRef.current) {
@@ -120,6 +122,36 @@ export default function Profile({
       setProfileEditError(error.message || t.profile.profileEditFailed);
     } finally {
       setProfileEditSaving(false);
+    }
+  };
+
+  const openExternalLink = (url) => {
+    const tg = window.Telegram?.WebApp;
+    try {
+      if (tg?.openLink) {
+        tg.openLink(url);
+        return;
+      }
+    } catch {
+      // Fall through to the regular browser when Telegram cannot open the URL.
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const requestRegistrationLink = async () => {
+    if (registrationLinkLoading) return;
+    setRegistrationLinkLoading(true);
+    setRegistrationLinkError('');
+    try {
+      const result = await apiFetchJson('/api/user/registration-link', { method: 'POST' });
+      if (!result?.url) throw new Error(t.profile.registrationLinkFailed);
+      openExternalLink(result.url);
+    } catch (error) {
+      const message = error?.message || t.profile.registrationLinkFailed;
+      setRegistrationLinkError(message);
+      setToastMessage?.(message);
+    } finally {
+      setRegistrationLinkLoading(false);
     }
   };
 
@@ -319,6 +351,25 @@ export default function Profile({
             </div>
           </div>
         )}
+
+        {!isDemo && Number(user.pocket_registered || 0) !== 1 ? (
+          <section className="registration-link-card" aria-label={t.profile.registrationLinkTitle}>
+            <div className="registration-link-copy">
+              <span className="registration-link-kicker">Pocket Option</span>
+              <strong>{t.profile.registrationLinkTitle}</strong>
+              <p>{t.profile.registrationLinkHint}</p>
+            </div>
+            <button
+              type="button"
+              className="registration-link-button"
+              disabled={registrationLinkLoading}
+              onClick={requestRegistrationLink}
+            >
+              {registrationLinkLoading ? t.profile.registrationLinkLoading : t.profile.registrationLinkButton}
+            </button>
+            {registrationLinkError ? <div className="registration-link-error">{registrationLinkError}</div> : null}
+          </section>
+        ) : null}
 
         <div className="strategies-section" ref={strategyRef}>
           <button className="start-analysis-btn" onClick={onStartAnalysis}>

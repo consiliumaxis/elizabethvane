@@ -1,27 +1,48 @@
 import re
+from datetime import datetime, timezone
+from typing import Mapping, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-_PLACEHOLDER_RE = re.compile(r"\{[^{}]+\}")
+_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_]+)\}")
+_REQUIRED_TRACKING_KEYS = ("click_id", "sub_id2", "sub_id3")
 
 
-def build_registration_url(template: str, click_id: int) -> str:
-    """Build a registration URL while preserving fixed and duplicate query parameters."""
+def build_registration_url(
+    template: str,
+    click_id: int,
+    *,
+    aio_visit_uuid: object = "",
+    chatterfy_lead_id: object = "",
+    values: Optional[Mapping[str, object]] = None,
+) -> str:
+    """Build the same tracked URL as the main Elizabeth application."""
     parts = urlsplit(str(template or "").strip())
+    replacements = {
+        "click_id": str(click_id),
+        "sub_id2": str(aio_visit_uuid or "").strip(),
+        "sub_id3": str(chatterfy_lead_id or "").strip(),
+        "date_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    for key, value in (values or {}).items():
+        normalized_key = str(key or "").strip()
+        if normalized_key and normalized_key not in _REQUIRED_TRACKING_KEYS:
+            replacements[normalized_key] = str(value or "").strip()
+
     query = []
-    has_click_id = False
+    seen_required = set()
     for key, raw_value in parse_qsl(parts.query, keep_blank_values=True):
-        value = raw_value.replace("{click_id}", str(click_id))
-        value = _PLACEHOLDER_RE.sub("", value)
-        if key == "click_id":
-            value = str(click_id)
-            has_click_id = True
+        if key in _REQUIRED_TRACKING_KEYS:
+            if key in seen_required:
+                continue
+            value = replacements[key]
+            seen_required.add(key)
+        else:
+            value = _PLACEHOLDER_RE.sub(lambda match: replacements.get(match.group(1), ""), raw_value)
         if not value and any(existing_key == key and existing_value for existing_key, existing_value in query):
-            # Pocket tracking links may already contain a fixed campaign value
-            # (for example ac=elizabeth_vane_rev1) before an optional {ac} macro.
-            # Do not let an empty duplicate override that attribution.
             continue
         query.append((key, value))
-    if not has_click_id:
-        query.append(("click_id", str(click_id)))
+    for key in _REQUIRED_TRACKING_KEYS:
+        if key not in seen_required:
+            query.append((key, replacements[key]))
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))

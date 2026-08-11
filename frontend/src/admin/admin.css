@@ -1917,6 +1917,51 @@
   margin-bottom: 10px;
 }
 
+.admin-registration-template-input {
+  min-height: 122px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.admin-registration-template-help {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 8px;
+}
+
+.admin-registration-template-help > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(212, 175, 55, 0.08);
+}
+
+.admin-registration-template-help code {
+  color: var(--accent-strong);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.admin-registration-template-help span {
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+@media (max-width: 620px) {
+  .admin-registration-template-help {
+    grid-template-columns: 1fr;
+  }
+}
+
 .admin-label {
   display: block;
   margin-bottom: 6px;

@@ -1754,17 +1754,30 @@ export default function SettingsPage({ adminUser }) {
 
         <div className="admin-field">
           <label className="admin-label">{tr('Pocket Option registration URL', 'Ссылка регистрации на Pocket Option')}</label>
-          <input
-            className="admin-input"
-            type="url"
+          <textarea
+            className="admin-input admin-registration-template-input"
+            rows={5}
             value={systemRegistrationUrl}
             onChange={(e) => setSystemRegistrationUrl(e.target.value)}
-            placeholder="https://pocketoption.com/..."
+            placeholder="https://u3.shortink.io/register?...&click_id={click_id}&sub_id2={sub_id2}&sub_id3={sub_id3}"
+            spellCheck={false}
           />
           <div className="admin-muted">
-            {tr('One shared URL for account conversations and the main bot. The ', 'Одна общая ссылка для переписки от аккаунта и основного бота. Шаблон ')}
-            {'{click_id}'}
-            {tr(' placeholder is replaced with the user ID; other unknown parameters are sent empty.', ' заменяется ID пользователя, остальные неизвестные параметры передаются пустыми.')}
+            {tr(
+              'One template is used by the main bot, the mini app and manager command. Fixed UTM values are preserved.',
+              'Один шаблон используется основным ботом, мини-апкой и командой менеджера. Фиксированные UTM-значения сохраняются.'
+            )}
+          </div>
+          <div className="admin-registration-template-help">
+            <div><code>{'{click_id}'}</code><span>{tr('Telegram user ID', 'Telegram ID пользователя')}</span></div>
+            <div><code>{'{sub_id2}'}</code><span>{tr('AIO visit UUID', 'UUID визита AIO')}</span></div>
+            <div><code>{'{sub_id3}'}</code><span>{tr('Chatterfy lead ID', 'ID лида Chatterfy')}</span></div>
+          </div>
+          <div className="admin-muted">
+            {tr(
+              'If AIO or Chatterfy has not supplied an ID yet, its parameter remains empty. Other unknown placeholders are also sent empty.',
+              'Если AIO или Chatterfy ещё не передали ID, соответствующий параметр останется пустым. Остальные неизвестные плейсхолдеры также передаются пустыми.'
+            )}
           </div>
         </div>
 

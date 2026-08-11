@@ -61,7 +61,7 @@ const permissionGroups = (tr) => [
     items: [
       [PERMISSIONS.statisticsView, tr('Open Statistics and Studio mode', 'Открывать статистику и режим студии')],
       [PERMISSIONS.statisticsManage, tr('Add, edit and delete days', 'Добавлять, изменять и удалять дни')],
-      [PERMISSIONS.statisticsCommand, tr('Use /stats in the bot', 'Использовать /stats в боте')],
+      [PERMISSIONS.statisticsCommand, tr('Use /stats and /link in the bot', 'Использовать /stats и /link в боте')],
     ],
   },
   {
@@ -88,7 +88,7 @@ const permissionGroups = (tr) => [
     title: tr('Managers', 'Менеджеры'),
     description: tr('Protected administrators remain immutable.', 'Защищённые администраторы всегда остаются недоступны для изменений.'),
     items: [
-      [PERMISSIONS.staffView, tr('Open staff and /stats history', 'Открывать сотрудников и историю /stats')],
+      [PERMISSIONS.staffView, tr('Open staff and command history', 'Открывать сотрудников и историю команд')],
       [PERMISSIONS.staffAdd, tr('Add staff members', 'Добавлять сотрудников')],
       [PERMISSIONS.staffManage, tr('Manage staff access', 'Управлять доступами сотрудников')],
     ],
@@ -129,7 +129,7 @@ export default function ManagersPage({ adminUser }) {
     {
       value: 'manager',
       label: tr('Manager', 'Менеджер'),
-      hint: tr('Default template: only the /stats command.', 'Шаблон по умолчанию: только команда /stats.'),
+      hint: tr('Default template: /stats and /link commands.', 'Шаблон по умолчанию: команды /stats и /link.'),
     },
     {
       value: 'admin',
@@ -411,6 +411,7 @@ export default function ManagersPage({ adminUser }) {
           <strong>{tr('Quick client lookup', 'Быстрый поиск клиента')}</strong>
           <code>/stats @nickname</code>
           <code>/stats 123456789</code>
+          <code>/link chatterfy_lead_id</code>
         </div>
       </section>
 
@@ -583,11 +584,11 @@ export default function ManagersPage({ adminUser }) {
       <section className="admin-card admin-managers-audit">
         <div className="admin-row-between admin-managers-list-head">
           <div>
-            <h3 className="admin-section-title">{tr('/stats request history', 'История запросов /stats')}</h3>
+            <h3 className="admin-section-title">{tr('Manager command history', 'История команд менеджеров')}</h3>
             <div className="admin-muted">
               {tr(
-                'Who requested statistics, which client was searched for, and the result. Total',
-                'Кто запрашивал статистику, какого клиента искал и чем завершился запрос. Всего'
+                'Who used /stats or /link, which client was matched, and the result. Total',
+                'Кто использовал /stats или /link, какой клиент был найден и чем завершился запрос. Всего'
               )}: {auditTotal}
             </div>
           </div>
@@ -665,12 +666,14 @@ export default function ManagersPage({ adminUser }) {
                     </small>
                   </div>
                   <div>
-                    <span className="admin-audit-label">{tr('Searched for', 'Искали')}</span>
+                    <span className="admin-audit-label">{tr('Matched client', 'Найденный клиент')}</span>
                     <strong>{targetName}</strong>
                     <small>{item.target_user_id ? `ID ${item.target_user_id}` : tr('No match found', 'Совпадение не найдено')}</small>
                   </div>
                 </div>
-                <code className="admin-audit-query">{item.target_query || '/stats'}</code>
+                <code className="admin-audit-query">
+                  {item.target_query || `/${item.command_name || 'stats'}`}
+                </code>
               </article>
             );
           })}

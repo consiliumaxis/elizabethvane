@@ -100,6 +100,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     first_name VARCHAR(255) NULL,
                     avatar_url TEXT NULL,
                     aio_visit_uuid VARCHAR(64) NULL,
+                    chatterfy_lead_id VARCHAR(255) NULL,
                     trader_id VARCHAR(64) NULL,
                     profile_edit_allowed TINYINT(1) NOT NULL DEFAULT 0,
                     profile_name VARCHAR(80) NULL,
@@ -110,6 +111,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     pocket_cid VARCHAR(128) NULL,
                     pocket_sub_id1 VARCHAR(255) NULL,
                     pocket_sub_id2 VARCHAR(255) NULL,
+                    pocket_sub_id3 VARCHAR(255) NULL,
                     pocket_registered TINYINT(1) NOT NULL DEFAULT 0,
                     pocket_deposited TINYINT(1) NOT NULL DEFAULT 0,
                     pocket_registered_at VARCHAR(64) NULL,
@@ -255,6 +257,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 """
                 CREATE TABLE IF NOT EXISTS manager_stats_audit (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    command_name VARCHAR(16) NOT NULL DEFAULT 'stats',
                     requested_by BIGINT NOT NULL,
                     target_query VARCHAR(255) NOT NULL,
                     target_user_id BIGINT NULL,
@@ -462,6 +465,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     cid VARCHAR(128) NULL,
                     sub_id1 VARCHAR(255) NULL,
                     sub_id2 VARCHAR(255) NULL,
+                    sub_id3 VARCHAR(255) NULL,
                     provider_event_id VARCHAR(128) NULL,
                     payload_fingerprint CHAR(64) NULL,
                     raw_payload LONGTEXT NULL,
@@ -530,11 +534,13 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "users", "profile_trader_id", "ALTER TABLE users ADD COLUMN profile_trader_id VARCHAR(64) NULL AFTER profile_name")
         await _ensure_column(conn, db_name, "users", "profile_updated_at", "ALTER TABLE users ADD COLUMN profile_updated_at TIMESTAMP NULL DEFAULT NULL AFTER profile_trader_id")
         await _ensure_column(conn, db_name, "users", "aio_visit_uuid", "ALTER TABLE users ADD COLUMN aio_visit_uuid VARCHAR(64) NULL")
+        await _ensure_column(conn, db_name, "users", "chatterfy_lead_id", "ALTER TABLE users ADD COLUMN chatterfy_lead_id VARCHAR(255) NULL AFTER aio_visit_uuid")
         await _ensure_column(conn, db_name, "users", "pocket_click_id", "ALTER TABLE users ADD COLUMN pocket_click_id VARCHAR(64) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_site_id", "ALTER TABLE users ADD COLUMN pocket_site_id VARCHAR(128) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_cid", "ALTER TABLE users ADD COLUMN pocket_cid VARCHAR(128) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_sub_id1", "ALTER TABLE users ADD COLUMN pocket_sub_id1 VARCHAR(255) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_sub_id2", "ALTER TABLE users ADD COLUMN pocket_sub_id2 VARCHAR(255) NULL")
+        await _ensure_column(conn, db_name, "users", "pocket_sub_id3", "ALTER TABLE users ADD COLUMN pocket_sub_id3 VARCHAR(255) NULL AFTER pocket_sub_id2")
         await _ensure_column(conn, db_name, "users", "pocket_registered", "ALTER TABLE users ADD COLUMN pocket_registered TINYINT(1) NOT NULL DEFAULT 0")
         await _ensure_column(conn, db_name, "users", "pocket_deposited", "ALTER TABLE users ADD COLUMN pocket_deposited TINYINT(1) NOT NULL DEFAULT 0")
         await _ensure_column(conn, db_name, "users", "pocket_registered_at", "ALTER TABLE users ADD COLUMN pocket_registered_at VARCHAR(64) NULL")
@@ -857,10 +863,12 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_index(conn, db_name, "user_presets", "idx_user_presets_preset_id", "CREATE INDEX idx_user_presets_preset_id ON user_presets(preset_id)")
         await _ensure_index(conn, db_name, "user_mode_access", "idx_user_mode_access_mode", "CREATE INDEX idx_user_mode_access_mode ON user_mode_access(mode)")
         await _ensure_index(conn, db_name, "users", "idx_users_aio_visit_uuid", "CREATE INDEX idx_users_aio_visit_uuid ON users(aio_visit_uuid)")
+        await _ensure_index(conn, db_name, "users", "idx_users_chatterfy_lead_id", "CREATE INDEX idx_users_chatterfy_lead_id ON users(chatterfy_lead_id)")
         await _ensure_index(conn, db_name, "users", "idx_users_pocket_click_id", "CREATE INDEX idx_users_pocket_click_id ON users(pocket_click_id)")
         await _ensure_index(conn, db_name, "users", "idx_users_signal_gate", "CREATE INDEX idx_users_signal_gate ON users(pocket_registered, pocket_deposited)")
         await _ensure_column(conn, db_name, "pocket_postback_events", "sub_id2", "ALTER TABLE pocket_postback_events ADD COLUMN sub_id2 VARCHAR(255) NULL AFTER sub_id1")
-        await _ensure_column(conn, db_name, "pocket_postback_events", "provider_event_id", "ALTER TABLE pocket_postback_events ADD COLUMN provider_event_id VARCHAR(128) NULL AFTER sub_id2")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "sub_id3", "ALTER TABLE pocket_postback_events ADD COLUMN sub_id3 VARCHAR(255) NULL AFTER sub_id2")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "provider_event_id", "ALTER TABLE pocket_postback_events ADD COLUMN provider_event_id VARCHAR(128) NULL AFTER sub_id3")
         await _ensure_column(conn, db_name, "pocket_postback_events", "payload_fingerprint", "ALTER TABLE pocket_postback_events ADD COLUMN payload_fingerprint CHAR(64) NULL AFTER provider_event_id")
         await _ensure_column(conn, db_name, "pocket_postback_events", "deposit_amount", "ALTER TABLE pocket_postback_events ADD COLUMN deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00 AFTER trader_id")
         await _ensure_column(conn, db_name, "pocket_postback_events", "country", "ALTER TABLE pocket_postback_events ADD COLUMN country VARCHAR(32) NULL AFTER deposit_amount")
@@ -873,6 +881,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "pocket_postback_events", "aichatter_status", "ALTER TABLE pocket_postback_events ADD COLUMN aichatter_status VARCHAR(32) NULL AFTER chatterfy_sent_at")
         await _ensure_column(conn, db_name, "pocket_postback_events", "aichatter_error", "ALTER TABLE pocket_postback_events ADD COLUMN aichatter_error TEXT NULL AFTER aichatter_status")
         await _ensure_column(conn, db_name, "pocket_postback_events", "aichatter_synced_at", "ALTER TABLE pocket_postback_events ADD COLUMN aichatter_synced_at TIMESTAMP NULL DEFAULT NULL AFTER aichatter_error")
+        await _ensure_column(conn, db_name, "manager_stats_audit", "command_name", "ALTER TABLE manager_stats_audit ADD COLUMN command_name VARCHAR(16) NOT NULL DEFAULT 'stats' AFTER id")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "policy", "ALTER TABLE admin_system_access_settings ADD COLUMN policy VARCHAR(32) NOT NULL DEFAULT 'registration_deposit'")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "min_deposit_amount", "ALTER TABLE admin_system_access_settings ADD COLUMN min_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "registration_url", "ALTER TABLE admin_system_access_settings ADD COLUMN registration_url TEXT NULL AFTER min_deposit_amount")
