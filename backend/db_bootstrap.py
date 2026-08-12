@@ -106,6 +106,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     aio_vip_synced_value TINYINT(1) NULL,
                     aio_copy_synced_value TINYINT(1) NULL,
                     chatterfy_lead_id VARCHAR(255) NULL,
+                    chatterfy_bot_lead_id VARCHAR(255) NULL,
                     chatterfy_tracker_click_id VARCHAR(255) NULL,
                     trader_id VARCHAR(64) NULL,
                     profile_edit_allowed TINYINT(1) NOT NULL DEFAULT 0,
@@ -569,7 +570,8 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "users", "aio_vip_synced_value", "ALTER TABLE users ADD COLUMN aio_vip_synced_value TINYINT(1) NULL AFTER aio_dep_ok_synced_value")
         await _ensure_column(conn, db_name, "users", "aio_copy_synced_value", "ALTER TABLE users ADD COLUMN aio_copy_synced_value TINYINT(1) NULL AFTER aio_vip_synced_value")
         await _ensure_column(conn, db_name, "users", "chatterfy_lead_id", "ALTER TABLE users ADD COLUMN chatterfy_lead_id VARCHAR(255) NULL AFTER aio_visit_uuid")
-        await _ensure_column(conn, db_name, "users", "chatterfy_tracker_click_id", "ALTER TABLE users ADD COLUMN chatterfy_tracker_click_id VARCHAR(255) NULL AFTER chatterfy_lead_id")
+        await _ensure_column(conn, db_name, "users", "chatterfy_bot_lead_id", "ALTER TABLE users ADD COLUMN chatterfy_bot_lead_id VARCHAR(255) NULL AFTER chatterfy_lead_id")
+        await _ensure_column(conn, db_name, "users", "chatterfy_tracker_click_id", "ALTER TABLE users ADD COLUMN chatterfy_tracker_click_id VARCHAR(255) NULL AFTER chatterfy_bot_lead_id")
         await _ensure_column(conn, db_name, "users", "pocket_click_id", "ALTER TABLE users ADD COLUMN pocket_click_id VARCHAR(64) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_site_id", "ALTER TABLE users ADD COLUMN pocket_site_id VARCHAR(128) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_cid", "ALTER TABLE users ADD COLUMN pocket_cid VARCHAR(128) NULL")
@@ -900,6 +902,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_index(conn, db_name, "users", "idx_users_aio_visit_uuid", "CREATE INDEX idx_users_aio_visit_uuid ON users(aio_visit_uuid)")
         await _ensure_index(conn, db_name, "users", "idx_users_aio_country_code", "CREATE INDEX idx_users_aio_country_code ON users(aio_country_code)")
         await _ensure_index(conn, db_name, "users", "idx_users_chatterfy_lead_id", "CREATE INDEX idx_users_chatterfy_lead_id ON users(chatterfy_lead_id)")
+        await _ensure_index(conn, db_name, "users", "idx_users_chatterfy_bot_lead_id", "CREATE INDEX idx_users_chatterfy_bot_lead_id ON users(chatterfy_bot_lead_id)")
         await _ensure_index(conn, db_name, "users", "idx_users_pocket_click_id", "CREATE INDEX idx_users_pocket_click_id ON users(pocket_click_id)")
         await _ensure_index(conn, db_name, "users", "idx_users_signal_gate", "CREATE INDEX idx_users_signal_gate ON users(pocket_registered, pocket_deposited)")
         await _ensure_column(conn, db_name, "pocket_postback_events", "sub_id2", "ALTER TABLE pocket_postback_events ADD COLUMN sub_id2 VARCHAR(255) NULL AFTER sub_id1")

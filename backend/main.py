@@ -157,6 +157,7 @@ except ModuleNotFoundError:
     )
 try:
     from backend.bot_funnel import (
+        CHATTERFY_BOT_START_EVENT,
         CHATTERFY_START_EVENT,
         CHANNEL_SUBSCRIBE_EVENT,
         QUIZ_COMPLETE_EVENT,
@@ -178,6 +179,7 @@ try:
     )
 except ModuleNotFoundError:
     from bot_funnel import (
+        CHATTERFY_BOT_START_EVENT,
         CHATTERFY_START_EVENT,
         CHANNEL_SUBSCRIBE_EVENT,
         QUIZ_COMPLETE_EVENT,
@@ -201,6 +203,10 @@ try:
     from backend.chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
 except ModuleNotFoundError:
     from chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
+try:
+    from backend.chatterfy_tracking import normalize_chatterfy_event
+except ModuleNotFoundError:
+    from chatterfy_tracking import normalize_chatterfy_event
 try:
     from backend.registration_links import (
         DEFAULT_REGISTRATION_URL,
@@ -2860,26 +2866,49 @@ async def send_aio_postback_event(
     return {"status": final_status, "event_id": event_id, "response_status": response_status, "error": error_text}
 
 
-async def send_pending_chatterfy_start_event(user_id: int) -> Dict[str, Any]:
-    """Deliver Start Chatterfy once a preliminary profile also has an AIO visit UUID."""
+async def send_pending_chatterfy_start_event(
+    user_id: int,
+    event_slug: str = CHATTERFY_START_EVENT,
+) -> Dict[str, Any]:
+    """Deliver the source-specific Chatterfy start once an AIO visit UUID is known."""
+    normalized_event_slug = normalize_chatterfy_event(event_slug)
+    if normalized_event_slug not in {CHATTERFY_START_EVENT, CHATTERFY_BOT_START_EVENT}:
+        return {"status": "skipped", "reason": "unsupported_chatterfy_start_event"}
     if not db_pool:
         return {"status": "skipped", "reason": "db_unavailable"}
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
-                "SELECT chatterfy_lead_id, aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1",
+                """
+                SELECT chatterfy_lead_id, chatterfy_bot_lead_id, aio_visit_uuid
+                FROM users
+                WHERE user_id = %s
+                LIMIT 1
+                """,
                 (int(user_id),),
             )
             user_row = await cur.fetchone() or {}
-    if not normalize_chatterfy_lead_id(user_row.get("chatterfy_lead_id")):
+    lead_field = (
+        "chatterfy_bot_lead_id"
+        if normalized_event_slug == CHATTERFY_BOT_START_EVENT
+        else "chatterfy_lead_id"
+    )
+    if not normalize_chatterfy_lead_id(user_row.get(lead_field)):
         return {"status": "skipped", "reason": "missing_chatterfy_lead_id"}
     if not normalize_aio_visit_uuid(user_row.get("aio_visit_uuid")):
         return {"status": "pending", "reason": "missing_aio_visit_uuid"}
     return await send_aio_postback_event(
         int(user_id),
-        CHATTERFY_START_EVENT,
-        unique_key=f"{CHATTERFY_START_EVENT}:{int(user_id)}",
+        normalized_event_slug,
+        unique_key=f"{normalized_event_slug}:{int(user_id)}",
     )
+
+
+async def send_pending_chatterfy_start_events(user_id: int) -> Dict[str, Any]:
+    """Retry both independent Chatterfy starts when tracking arrives later."""
+    account_result = await send_pending_chatterfy_start_event(user_id, CHATTERFY_START_EVENT)
+    bot_result = await send_pending_chatterfy_start_event(user_id, CHATTERFY_BOT_START_EVENT)
+    return {"account": account_result, "bot": bot_result}
 
 
 async def send_pocket_aio_delivery(
@@ -2990,11 +3019,17 @@ async def bind_user_tracking_identity(
     tracker_click_id: str = "",
     first_name: str = "",
     username: str = "",
+    chatterfy_source: str = "account",
 ) -> Dict[str, str]:
     if not db_pool:
         raise HTTPException(status_code=503, detail="Database is unavailable")
     if int(user_id or 0) <= 0:
         raise HTTPException(status_code=400, detail="user_id must be positive")
+
+    normalized_source = str(chatterfy_source or "account").strip().lower()
+    if normalized_source not in {"account", "bot"}:
+        raise HTTPException(status_code=400, detail="Invalid chatterfy_source")
+    lead_column = "chatterfy_bot_lead_id" if normalized_source == "bot" else "chatterfy_lead_id"
 
     raw_lead_id = str(chatterfy_lead_id or "").strip()
     normalized_lead_id = normalize_chatterfy_lead_id(raw_lead_id)
@@ -3025,11 +3060,11 @@ async def bind_user_tracking_identity(
         async with conn.cursor(aiomysql.DictCursor) as cur:
             if normalized_lead_id:
                 await cur.execute(
-                    """
+                    f"""
                     SELECT user_id
                     FROM users
                     WHERE user_id <> %s
-                      AND (chatterfy_lead_id = %s OR pocket_sub_id3 = %s)
+                      AND ({lead_column} = %s OR pocket_sub_id3 = %s)
                     LIMIT 1
                     """,
                     (int(user_id), normalized_lead_id, normalized_lead_id),
@@ -3039,12 +3074,12 @@ async def bind_user_tracking_identity(
             await cur.execute(
                 """
                 INSERT INTO users (
-                    user_id, username, first_name, aio_visit_uuid, chatterfy_lead_id,
+                    user_id, username, first_name, aio_visit_uuid,
                     chatterfy_tracker_click_id, lang, mode
                 )
                 VALUES (
                     %s, NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''),
-                    NULLIF(%s, ''), NULLIF(%s, ''), 'ru', 'forex'
+                    NULLIF(%s, ''), 'ru', 'forex'
                 )
                 ON DUPLICATE KEY UPDATE
                     username = CASE
@@ -3063,10 +3098,6 @@ async def bind_user_tracking_identity(
                         WHEN VALUES(aio_visit_uuid) IS NOT NULL THEN VALUES(aio_visit_uuid)
                         ELSE aio_visit_uuid
                     END,
-                    chatterfy_lead_id = CASE
-                        WHEN VALUES(chatterfy_lead_id) IS NOT NULL THEN VALUES(chatterfy_lead_id)
-                        ELSE chatterfy_lead_id
-                    END,
                     chatterfy_tracker_click_id = CASE
                         WHEN VALUES(chatterfy_tracker_click_id) IS NOT NULL
                             THEN VALUES(chatterfy_tracker_click_id)
@@ -3078,10 +3109,14 @@ async def bind_user_tracking_identity(
                     normalized_username,
                     normalized_first_name,
                     normalized_aio_visit_uuid,
-                    normalized_lead_id,
                     normalized_tracker_click_id,
                 ),
             )
+            if normalized_lead_id:
+                await cur.execute(
+                    f"UPDATE users SET {lead_column} = %s WHERE user_id = %s",
+                    (normalized_lead_id, int(user_id)),
+                )
             await cur.executemany(
                 """
                 INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
@@ -3094,10 +3129,12 @@ async def bind_user_tracking_identity(
     asyncio.create_task(sync_aio_profile_status_fields(int(user_id)))
     return {
         "aio_visit_uuid": normalized_aio_visit_uuid,
-        "chatterfy_lead_id": normalized_lead_id,
+        "chatterfy_lead_id": normalized_lead_id if normalized_source == "account" else "",
+        "chatterfy_bot_lead_id": normalized_lead_id if normalized_source == "bot" else "",
         "tracker_click_id": normalized_tracker_click_id,
         "first_name": normalized_first_name,
         "username": normalized_username,
+        "source": normalized_source,
     }
 
 
@@ -3128,6 +3165,11 @@ async def receive_chatterfy_lead_postback(request: Request):
     ).strip()
     require_chatterfy_webhook_secret(supplied_secret)
 
+    event_slug = normalize_chatterfy_event(payload.get("event") or payload.get("event_slug"))
+    if event_slug not in {CHATTERFY_START_EVENT, CHATTERFY_BOT_START_EVENT}:
+        raise HTTPException(status_code=400, detail="Unsupported Chatterfy event")
+    chatterfy_source = "bot" if event_slug == CHATTERFY_BOT_START_EVENT else "account"
+
     raw_user_id = payload.get("tgid") or payload.get("tg_user_id") or payload.get("user_id")
     try:
         user_id = int(str(raw_user_id or "").strip())
@@ -3144,7 +3186,12 @@ async def receive_chatterfy_lead_postback(request: Request):
         or payload.get("chat_id")
         or ""
     )
-    raw_aio_visit_uuid = str(payload.get("aio_visit_uuid") or payload.get("visit_uuid") or "").strip()
+    raw_aio_visit_uuid = str(
+        payload.get("start0")
+        or payload.get("aio_visit_uuid")
+        or payload.get("visit_uuid")
+        or ""
+    ).strip()
     explicit_tracker_click_id = (
         payload.get("tracker_click_id")
         or payload.get("tracker.clickid")
@@ -3179,8 +3226,9 @@ async def receive_chatterfy_lead_postback(request: Request):
         tracker_click_id=str(tracker_click_id),
         first_name=str(first_name),
         username=str(username),
+        chatterfy_source=chatterfy_source,
     )
-    event_result = await send_pending_chatterfy_start_event(user_id)
+    event_result = await send_pending_chatterfy_start_event(user_id, event_slug)
     return {"status": "ok", "tracking": tracking, "event": event_result}
 
 
@@ -3738,7 +3786,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         total_deposit_amount=f"{total_deposit_amount:.2f}",
     )
     aio_status_fields_result = await sync_aio_profile_status_fields(int(telegram_id))
-    chatterfy_start_result = await send_pending_chatterfy_start_event(int(telegram_id))
+    chatterfy_start_result = await send_pending_chatterfy_start_events(int(telegram_id))
     try:
         aichatter_result = await sync_aichatter_pocket_event(
             user_id=int(telegram_id),
@@ -9759,7 +9807,7 @@ async def cmd_start(message: types.Message):
                 )
 
     asyncio.create_task(send_aio_postback_event(user_id, "bot_start"))
-    asyncio.create_task(send_pending_chatterfy_start_event(user_id))
+    asyncio.create_task(send_pending_chatterfy_start_events(user_id))
     asyncio.create_task(send_aio_user_fields(user_id, first_name=first_name, username=username))
     asyncio.create_task(sync_aio_profile_status_fields(user_id))
     asyncio.create_task(apply_pending_aio_geo_for_user(user_id))

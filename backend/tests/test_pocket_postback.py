@@ -68,7 +68,7 @@ class PocketPostbackSourceTest(unittest.TestCase):
         self.assertIn("INSERT INTO users (\n                            user_id, aio_visit_uuid, chatterfy_lead_id, lang, mode", source)
         self.assertNotIn('"user_not_found", telegram_id, source_ip', source)
         self.assertIn('"chatterfy_lead_conflict"', source)
-        self.assertIn("send_pending_chatterfy_start_event(int(telegram_id))", source)
+        self.assertIn("send_pending_chatterfy_start_events(int(telegram_id))", source)
 
 
 if __name__ == "__main__":

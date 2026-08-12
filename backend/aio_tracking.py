@@ -19,6 +19,10 @@ AIO_CHATTERFY_START_CONVERSION_TYPE_UUID = (
     os.getenv("AIO_CHATTERFY_START_CONVERSION_TYPE_UUID")
     or "a39ea9ab-20ec-4628-8f19-ee8dcd6d25b9"
 ).strip()
+AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID = (
+    os.getenv("AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID")
+    or "f84ed98b-0882-422a-b0ca-bd89c0b2561d"
+).strip()
 AIO_GEO_CONVERSION_TYPE_UUID = (
     os.getenv("AIO_GEO_CONVERSION_TYPE_UUID")
     or "0141c6c0-2772-484f-b808-9419b8c930e8"
@@ -113,6 +117,11 @@ def build_aio_postback_url(
         conversion_type_uuid = _configured_uuid(
             "AIO_CHATTERFY_START_CONVERSION_TYPE_UUID",
             AIO_CHATTERFY_START_CONVERSION_TYPE_UUID,
+        )
+    elif normalized_event_slug == "start_bot_chatterfy":
+        conversion_type_uuid = _configured_uuid(
+            "AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID",
+            AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID,
         )
 
     params = {

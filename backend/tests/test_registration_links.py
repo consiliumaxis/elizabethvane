@@ -89,7 +89,7 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertIn('first_name=str(first_name)', backend)
         self.assertIn('username=str(username)', backend)
         self.assertIn('chatterfy_tracker_click_id = CASE', backend)
-        self.assertIn('send_pending_chatterfy_start_event(user_id)', backend)
+        self.assertIn('send_pending_chatterfy_start_event(user_id, event_slug)', backend)
         self.assertIn("AND (username IS NULL OR TRIM(username) = '')", backend)
         self.assertIn('text="Registration link"', backend)
         self.assertIn('not registration_link.get("registered")', backend)

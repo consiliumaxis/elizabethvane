@@ -15,15 +15,25 @@ class PrecontactProfileTest(unittest.TestCase):
         self.assertIn("AND (first_name IS NULL OR TRIM(first_name) = '')", source)
         self.assertIn("AND (username IS NULL OR TRIM(username) = '')", source)
 
+    def test_bot_chatterfy_identity_uses_start0_and_separate_lead_field(self):
+        main_source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+        schema_source = (PROJECT_ROOT / "backend/db_bootstrap.py").read_text(encoding="utf-8")
+
+        self.assertIn('payload.get("start0")', main_source)
+        self.assertIn('lead_column = "chatterfy_bot_lead_id"', main_source)
+        self.assertIn('chatterfy_source = "bot"', main_source)
+        self.assertIn('send_pending_chatterfy_start_event(user_id, event_slug)', main_source)
+        self.assertIn("chatterfy_bot_lead_id VARCHAR(255) NULL", schema_source)
+
     def test_late_aio_identity_retries_start_chatterfy_idempotently(self):
         source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
 
         self.assertIn("async def send_pending_chatterfy_start_event", source)
         self.assertIn('{"status": "pending", "reason": "missing_aio_visit_uuid"}', source)
-        self.assertIn('unique_key=f"{CHATTERFY_START_EVENT}:{int(user_id)}"', source)
+        self.assertIn('unique_key=f"{normalized_event_slug}:{int(user_id)}"', source)
         self.assertIn('"previous_status": existing_event.get("status")', source)
-        self.assertIn("asyncio.create_task(send_pending_chatterfy_start_event(user_id))", source)
-        self.assertIn("chatterfy_start_result = await send_pending_chatterfy_start_event", source)
+        self.assertIn("asyncio.create_task(send_pending_chatterfy_start_events(user_id))", source)
+        self.assertIn("chatterfy_start_result = await send_pending_chatterfy_start_events", source)
 
     def test_precontact_profiles_are_not_broadcast_targets(self):
         source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
