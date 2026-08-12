@@ -100,6 +100,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     first_name VARCHAR(255) NULL,
                     avatar_url TEXT NULL,
                     aio_visit_uuid VARCHAR(64) NULL,
+                    aio_country_code CHAR(2) NULL,
                     chatterfy_lead_id VARCHAR(255) NULL,
                     chatterfy_tracker_click_id VARCHAR(255) NULL,
                     trader_id VARCHAR(64) NULL,
@@ -453,6 +454,27 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS aio_inbound_postbacks (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    aio_visit_uuid VARCHAR(64) CHARACTER SET ascii NOT NULL,
+                    conversion_type_uuid VARCHAR(64) CHARACTER SET ascii NOT NULL,
+                    country_code CHAR(2) CHARACTER SET ascii NOT NULL,
+                    user_id BIGINT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                    raw_payload LONGTEXT NULL,
+                    source_ip VARCHAR(64) NULL,
+                    received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    applied_at TIMESTAMP NULL DEFAULT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_aio_inbound_visit_conversion (aio_visit_uuid, conversion_type_uuid),
+                    KEY idx_aio_inbound_user_received (user_id, received_at),
+                    KEY idx_aio_inbound_status_received (status, received_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS pocket_postback_events (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     event_slug VARCHAR(64) NOT NULL,
@@ -535,6 +557,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "users", "profile_trader_id", "ALTER TABLE users ADD COLUMN profile_trader_id VARCHAR(64) NULL AFTER profile_name")
         await _ensure_column(conn, db_name, "users", "profile_updated_at", "ALTER TABLE users ADD COLUMN profile_updated_at TIMESTAMP NULL DEFAULT NULL AFTER profile_trader_id")
         await _ensure_column(conn, db_name, "users", "aio_visit_uuid", "ALTER TABLE users ADD COLUMN aio_visit_uuid VARCHAR(64) NULL")
+        await _ensure_column(conn, db_name, "users", "aio_country_code", "ALTER TABLE users ADD COLUMN aio_country_code CHAR(2) NULL AFTER aio_visit_uuid")
         await _ensure_column(conn, db_name, "users", "chatterfy_lead_id", "ALTER TABLE users ADD COLUMN chatterfy_lead_id VARCHAR(255) NULL AFTER aio_visit_uuid")
         await _ensure_column(conn, db_name, "users", "chatterfy_tracker_click_id", "ALTER TABLE users ADD COLUMN chatterfy_tracker_click_id VARCHAR(255) NULL AFTER chatterfy_lead_id")
         await _ensure_column(conn, db_name, "users", "pocket_click_id", "ALTER TABLE users ADD COLUMN pocket_click_id VARCHAR(64) NULL")
@@ -865,6 +888,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_index(conn, db_name, "user_presets", "idx_user_presets_preset_id", "CREATE INDEX idx_user_presets_preset_id ON user_presets(preset_id)")
         await _ensure_index(conn, db_name, "user_mode_access", "idx_user_mode_access_mode", "CREATE INDEX idx_user_mode_access_mode ON user_mode_access(mode)")
         await _ensure_index(conn, db_name, "users", "idx_users_aio_visit_uuid", "CREATE INDEX idx_users_aio_visit_uuid ON users(aio_visit_uuid)")
+        await _ensure_index(conn, db_name, "users", "idx_users_aio_country_code", "CREATE INDEX idx_users_aio_country_code ON users(aio_country_code)")
         await _ensure_index(conn, db_name, "users", "idx_users_chatterfy_lead_id", "CREATE INDEX idx_users_chatterfy_lead_id ON users(chatterfy_lead_id)")
         await _ensure_index(conn, db_name, "users", "idx_users_pocket_click_id", "CREATE INDEX idx_users_pocket_click_id ON users(pocket_click_id)")
         await _ensure_index(conn, db_name, "users", "idx_users_signal_gate", "CREATE INDEX idx_users_signal_gate ON users(pocket_registered, pocket_deposited)")

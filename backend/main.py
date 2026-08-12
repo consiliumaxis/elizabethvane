@@ -127,6 +127,7 @@ except ModuleNotFoundError:
     )
 try:
     from backend.aio_tracking import (
+        AIO_GEO_CONVERSION_TYPE_UUID,
         build_aio_field_trigger_url,
         build_aio_pocket_deposit_conversion_url,
         build_aio_pocket_ftd_conversion_url,
@@ -134,11 +135,13 @@ try:
         build_aio_postback_url,
         extract_aio_visit_uuid_from_start_text,
         normalize_aio_event_slug,
+        normalize_aio_country_code,
         normalize_aio_revenue,
         normalize_aio_visit_uuid,
     )
 except ModuleNotFoundError:
     from aio_tracking import (
+        AIO_GEO_CONVERSION_TYPE_UUID,
         build_aio_field_trigger_url,
         build_aio_pocket_deposit_conversion_url,
         build_aio_pocket_ftd_conversion_url,
@@ -146,6 +149,7 @@ except ModuleNotFoundError:
         build_aio_postback_url,
         extract_aio_visit_uuid_from_start_text,
         normalize_aio_event_slug,
+        normalize_aio_country_code,
         normalize_aio_revenue,
         normalize_aio_visit_uuid,
     )
@@ -410,6 +414,7 @@ AI_CHATTER_GATEWAY_URL = (
 ).strip()
 AI_CHATTER_GATEWAY_SECRET = (os.getenv("AI_CHATTER_GATEWAY_SECRET") or "").strip()
 CHATTERFY_WEBHOOK_SECRET = (os.getenv("CHATTERFY_WEBHOOK_SECRET") or "").strip()
+AIO_GEO_POSTBACK_SECRET = (os.getenv("AIO_GEO_POSTBACK_SECRET") or "").strip()
 BOT_AI_MANAGER_ENABLED = (
     (os.getenv("BOT_AI_MANAGER_ENABLED") or "1").strip().lower()
     not in {"0", "false", "no", "off"}
@@ -2329,6 +2334,240 @@ def get_pocket_postback_secret() -> str:
     return (os.getenv("POCKET_POSTBACK_SECRET") or POCKET_POSTBACK_SECRET or "").strip()
 
 
+def get_aio_geo_postback_secret() -> str:
+    return (os.getenv("AIO_GEO_POSTBACK_SECRET") or AIO_GEO_POSTBACK_SECRET or "").strip()
+
+
+def require_aio_geo_postback_secret(supplied_secret: str) -> None:
+    expected_secret = get_aio_geo_postback_secret()
+    if not expected_secret:
+        raise HTTPException(status_code=503, detail="AIO geo postback is not configured")
+    if not supplied_secret or not secrets.compare_digest(str(supplied_secret), expected_secret):
+        raise HTTPException(status_code=401, detail="Invalid AIO postback secret")
+
+
+async def apply_pending_aio_geo_for_visit(
+    aio_visit_uuid: str,
+    conversion_type_uuid: str = "",
+) -> Dict[str, Any]:
+    """Apply stored AIO geo data once a visit is linked to exactly one user."""
+    normalized_visit_uuid = normalize_aio_visit_uuid(aio_visit_uuid)
+    normalized_conversion_uuid = normalize_aio_visit_uuid(conversion_type_uuid) or ""
+    if not normalized_visit_uuid:
+        return {"status": "skipped", "reason": "invalid_aio_visit_uuid"}
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+
+    async with db_pool.acquire() as conn:
+        await conn.begin()
+        try:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT id, conversion_type_uuid, country_code, received_at
+                    FROM aio_inbound_postbacks
+                    WHERE aio_visit_uuid = %s
+                      AND (%s = '' OR conversion_type_uuid = %s)
+                    ORDER BY received_at DESC, id DESC
+                    FOR UPDATE
+                    """,
+                    (
+                        normalized_visit_uuid,
+                        normalized_conversion_uuid,
+                        normalized_conversion_uuid,
+                    ),
+                )
+                inbound_rows = list(await cur.fetchall() or [])
+                if not inbound_rows:
+                    await conn.commit()
+                    return {"status": "pending", "reason": "postback_not_received"}
+
+                await cur.execute(
+                    """
+                    SELECT user_id
+                    FROM users
+                    WHERE aio_visit_uuid = %s
+                    ORDER BY user_id ASC
+                    LIMIT 2
+                    FOR UPDATE
+                    """,
+                    (normalized_visit_uuid,),
+                )
+                user_rows = list(await cur.fetchall() or [])
+                inbound_ids = [int(row["id"]) for row in inbound_rows]
+
+                if not user_rows:
+                    await cur.executemany(
+                        """
+                        UPDATE aio_inbound_postbacks
+                        SET user_id = NULL, status = 'pending', applied_at = NULL
+                        WHERE id = %s
+                        """,
+                        [(row_id,) for row_id in inbound_ids],
+                    )
+                    await conn.commit()
+                    return {
+                        "status": "pending",
+                        "reason": "user_not_linked",
+                        "aio_visit_uuid": normalized_visit_uuid,
+                    }
+
+                if len(user_rows) > 1:
+                    await cur.executemany(
+                        """
+                        UPDATE aio_inbound_postbacks
+                        SET user_id = NULL, status = 'conflict', applied_at = NULL
+                        WHERE id = %s
+                        """,
+                        [(row_id,) for row_id in inbound_ids],
+                    )
+                    await conn.commit()
+                    return {
+                        "status": "conflict",
+                        "reason": "aio_visit_uuid_is_not_unique",
+                        "aio_visit_uuid": normalized_visit_uuid,
+                    }
+
+                user_id = int(user_rows[0]["user_id"])
+                latest_row = inbound_rows[0]
+                country_code = normalize_aio_country_code(latest_row.get("country_code"))
+                if not country_code:
+                    await conn.rollback()
+                    return {"status": "skipped", "reason": "invalid_stored_geo"}
+
+                await cur.execute(
+                    """
+                    UPDATE users
+                    SET aio_country_code = %s,
+                        country = CASE
+                            WHEN country IS NULL OR TRIM(country) = '' THEN %s
+                            ELSE country
+                        END
+                    WHERE user_id = %s
+                    """,
+                    (country_code, country_code, user_id),
+                )
+                await cur.executemany(
+                    """
+                    UPDATE aio_inbound_postbacks
+                    SET user_id = %s, status = 'applied', applied_at = NOW()
+                    WHERE id = %s
+                    """,
+                    [(user_id, row_id) for row_id in inbound_ids],
+                )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+
+    return {
+        "status": "applied",
+        "user_id": user_id,
+        "aio_visit_uuid": normalized_visit_uuid,
+        "conversion_type_uuid": str(latest_row.get("conversion_type_uuid") or ""),
+        "geo": country_code,
+    }
+
+
+async def apply_pending_aio_geo_for_user(user_id: int) -> Dict[str, Any]:
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1",
+                (int(user_id),),
+            )
+            user_row = await cur.fetchone() or {}
+    aio_visit_uuid = normalize_aio_visit_uuid(user_row.get("aio_visit_uuid"))
+    if not aio_visit_uuid:
+        return {"status": "pending", "reason": "missing_aio_visit_uuid"}
+    return await apply_pending_aio_geo_for_visit(aio_visit_uuid)
+
+
+@app.api_route("/api/v1/trigger/conversion-request", methods=["GET", "POST"])
+@app.api_route("/api/integrations/aio/geo", methods=["GET", "POST"])
+async def receive_aio_geo_postback(request: Request):
+    """Receive an AIO country conversion and retain it until the user is linked."""
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database is unavailable")
+
+    payload = await read_postback_payload(request)
+    supplied_secret = str(
+        payload.get("secret") or request.headers.get("X-AIO-Geo-Secret") or ""
+    ).strip()
+    require_aio_geo_postback_secret(supplied_secret)
+
+    raw_visit_uuid = (
+        payload.get("click_id")
+        or payload.get("visit_uuid")
+        or payload.get("aio_visit_uuid")
+        or ""
+    )
+    raw_conversion_uuid = (
+        payload.get("conversion_type_uuid")
+        or payload.get("conversion_uuid")
+        or payload.get("conversion_type")
+        or payload.get("conversion")
+        or ""
+    )
+    raw_country_code = payload.get("geo") or payload.get("country_code") or payload.get("country") or ""
+    aio_visit_uuid = normalize_aio_visit_uuid(raw_visit_uuid)
+    conversion_type_uuid = normalize_aio_visit_uuid(raw_conversion_uuid)
+    country_code = normalize_aio_country_code(raw_country_code)
+
+    if not aio_visit_uuid:
+        raise HTTPException(status_code=400, detail="Valid click_id is required")
+    if not conversion_type_uuid:
+        raise HTTPException(status_code=400, detail="Valid conversion_type_uuid is required")
+    if conversion_type_uuid != AIO_GEO_CONVERSION_TYPE_UUID:
+        raise HTTPException(status_code=400, detail="Unsupported AIO conversion type")
+    if not country_code:
+        raise HTTPException(status_code=400, detail="Valid ISO 3166-1 alpha-2 geo is required")
+
+    safe_payload = {
+        key: ("***" if str(key).lower() in {"secret", "token", "signature"} else value)
+        for key, value in payload.items()
+    }
+    source_ip = request.client.host if request.client else ""
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO aio_inbound_postbacks (
+                    aio_visit_uuid, conversion_type_uuid, country_code, user_id,
+                    status, raw_payload, source_ip, received_at, applied_at
+                )
+                VALUES (%s, %s, %s, NULL, 'pending', %s, %s, NOW(), NULL)
+                ON DUPLICATE KEY UPDATE
+                    country_code = VALUES(country_code),
+                    user_id = NULL,
+                    status = 'pending',
+                    raw_payload = VALUES(raw_payload),
+                    source_ip = VALUES(source_ip),
+                    received_at = NOW(),
+                    applied_at = NULL
+                """,
+                (
+                    aio_visit_uuid,
+                    conversion_type_uuid,
+                    country_code,
+                    json.dumps(safe_payload, ensure_ascii=False, default=str),
+                    source_ip,
+                ),
+            )
+
+    result = await apply_pending_aio_geo_for_visit(aio_visit_uuid, conversion_type_uuid)
+    return {
+        "status": result.get("status"),
+        "click_id": aio_visit_uuid,
+        "conversion_type_uuid": conversion_type_uuid,
+        "geo": country_code,
+        "user_id": result.get("user_id"),
+        "reason": result.get("reason"),
+    }
+
+
 def normalize_deposit_amount(value: Any) -> float:
     try:
         amount = float(str(value or "0").replace(",", "."))
@@ -2817,6 +3056,8 @@ async def bind_user_tracking_identity(
                 """,
                 [(int(user_id), "forex"), (int(user_id), "binary")],
             )
+    if normalized_aio_visit_uuid:
+        await apply_pending_aio_geo_for_user(int(user_id))
     return {
         "aio_visit_uuid": normalized_aio_visit_uuid,
         "chatterfy_lead_id": normalized_lead_id,
@@ -3311,6 +3552,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         except Exception:
             await conn.rollback()
             raise
+    aio_geo_result = await apply_pending_aio_geo_for_user(int(telegram_id))
     signal_access_status = await get_signal_access_status(int(telegram_id), "forex")
     access_granted = truthy_db(signal_access_status.get("access")) == 1
     total_deposit_amount = normalize_deposit_amount((updated_user_row or {}).get("pocket_deposit_amount"))
@@ -3367,6 +3609,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         "access_granted": access_granted,
         "access_policy": signal_access_status.get("policy"),
         "aio": aio_result,
+        "aio_geo": aio_geo_result,
         "chatterfy_start": chatterfy_start_result,
         "aichatter": aichatter_result,
         "chatterfy": chatterfy_result,
@@ -3461,6 +3704,10 @@ async def snapshot_main_user_data(user_id: int) -> Dict[str, list]:
                 (
                     "aio_postback_events",
                     "SELECT * FROM aio_postback_events WHERE user_id = %s ORDER BY id ASC",
+                ),
+                (
+                    "aio_inbound_postbacks",
+                    "SELECT * FROM aio_inbound_postbacks WHERE user_id = %s ORDER BY id ASC",
                 ),
                 (
                     "pocket_postback_events",
@@ -3593,6 +3840,7 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                     ("user_onboarding", "DELETE FROM user_onboarding WHERE user_id = %s"),
                     ("user_mode_access", "DELETE FROM user_mode_access WHERE user_id = %s"),
                     ("aio_postback_events", "DELETE FROM aio_postback_events WHERE user_id = %s"),
+                    ("aio_inbound_postbacks", "DELETE FROM aio_inbound_postbacks WHERE user_id = %s"),
                     ("pocket_postback_events", "DELETE FROM pocket_postback_events WHERE user_id = %s"),
                     ("user_presets", "DELETE FROM user_presets WHERE user_id = %s"),
                 )
@@ -3618,6 +3866,7 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
 
                 reset_parts = [
                     "aio_visit_uuid = NULL",
+                    "aio_country_code = NULL",
                     "chatterfy_lead_id = NULL",
                     "chatterfy_tracker_click_id = NULL",
                     "trader_id = NULL",
@@ -4367,7 +4616,7 @@ async def admin_user_pocket_details(
                        COALESCE(pocket_deposited, 0) AS pocket_deposited,
                        pocket_registered_at,
                        COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
-                       country, pocket_checked_at, aio_visit_uuid, chatterfy_lead_id,
+                       country, pocket_checked_at, aio_visit_uuid, aio_country_code, chatterfy_lead_id,
                        chatterfy_tracker_click_id
                 FROM users
                 WHERE user_id = %s
@@ -4394,10 +4643,40 @@ async def admin_user_pocket_details(
             )
             postbacks = list(await cur.fetchall() or [])
 
+            aio_visit_uuid = normalize_aio_visit_uuid(pocket_row.get("aio_visit_uuid")) or ""
+            await cur.execute(
+                """
+                SELECT id, aio_visit_uuid, conversion_type_uuid, country_code,
+                       status, received_at, applied_at, updated_at
+                FROM aio_inbound_postbacks
+                WHERE user_id = %s
+                   OR (%s <> '' AND aio_visit_uuid = %s)
+                ORDER BY received_at DESC, id DESC
+                LIMIT 50
+                """,
+                (target_user_id, aio_visit_uuid, aio_visit_uuid),
+            )
+            aio_inbound_postbacks = list(await cur.fetchall() or [])
+
+            await cur.execute(
+                """
+                SELECT id, aio_visit_uuid, event_slug, unique_key, revenue, currency,
+                       status, response_status, error, sent_at, created_at
+                FROM aio_postback_events
+                WHERE user_id = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT 50
+                """,
+                (target_user_id,),
+            )
+            aio_outbound_events = list(await cur.fetchall() or [])
+
     return {
         "status": "success",
         "pocket": pocket_row,
         "postbacks": postbacks,
+        "aio_inbound_postbacks": aio_inbound_postbacks,
+        "aio_outbound_events": aio_outbound_events,
     }
 
 
@@ -9126,6 +9405,7 @@ async def cmd_start(message: types.Message):
     asyncio.create_task(send_aio_postback_event(user_id, "bot_start"))
     asyncio.create_task(send_pending_chatterfy_start_event(user_id))
     asyncio.create_task(send_aio_user_fields(user_id, first_name=first_name, username=username))
+    asyncio.create_task(apply_pending_aio_geo_for_user(user_id))
     ai_chat_ready = await route_user_after_start(
         message,
         user_id,

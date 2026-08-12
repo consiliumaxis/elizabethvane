@@ -8,6 +8,7 @@ from aio_tracking import (
     build_aio_pocket_ftd_conversion_url,
     build_aio_pocket_registration_conversion_url,
     extract_aio_visit_uuid_from_start_text,
+    normalize_aio_country_code,
     normalize_aio_revenue,
     normalize_aio_visit_uuid,
 )
@@ -46,6 +47,13 @@ class AioTrackingTest(unittest.TestCase):
     def test_normalizes_revenue(self):
         self.assertEqual(normalize_aio_revenue("12.345"), "12.35")
         self.assertEqual(normalize_aio_revenue(None), "0.00")
+
+    def test_normalizes_iso_country_code(self):
+        self.assertEqual(normalize_aio_country_code(" ua "), "UA")
+        self.assertEqual(normalize_aio_country_code("IN"), "IN")
+        self.assertIsNone(normalize_aio_country_code("Ukraine"))
+        self.assertIsNone(normalize_aio_country_code("U1"))
+        self.assertIsNone(normalize_aio_country_code(""))
 
     def test_builds_start_chatterfy_conversion_url_with_configured_uuid(self):
         url = build_aio_postback_url(

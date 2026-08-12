@@ -48,6 +48,7 @@ const ARCHIVE_TABLE_LABELS = {
   ai_chats: ['AI chats', 'Диалоги с AI'],
   ai_messages: ['AI chat messages', 'Сообщения в диалогах AI'],
   aio_postback_events: ['AIO events', 'События AIO'],
+  aio_inbound_postbacks: ['Inbound AIO conversions', 'Входящие конверсии AIO'],
   pocket_postback_events: ['Pocket events', 'События Pocket'],
   preserved_staff_access: ['Staff access (preserved)', 'Доступ сотрудника (сохранён)'],
   preserved_manager_audit: ['Manager action log (preserved)', 'Журнал действий менеджеров (сохранён)'],
@@ -96,6 +97,9 @@ const ARCHIVE_FIELD_LABELS = {
   pocket_checked_at: ['Pocket check date', 'Дата проверки Pocket'],
   pocket_trader_id: ['Pocket Trader ID', 'Trader ID от Pocket'],
   aio_visit_uuid: ['AIO visit ID', 'ID визита AIO'],
+  aio_country_code: ['AIO country code', 'Код страны AIO'],
+  conversion_type_uuid: ['Conversion type UUID', 'UUID типа конверсии'],
+  country_code: ['Country code', 'Код страны'],
   chatterfy_lead_id: ['Chatterfy lead ID', 'ID лида Chatterfy'],
   chatterfy_tracker_click_id: ['Chatterfy tracker click ID', 'Tracker Click ID Chatterfy'],
   event_slug: ['Event type', 'Тип события'],
@@ -171,6 +175,8 @@ const ARCHIVE_FIELD_LABELS = {
   media_key: ['Media key', 'Ключ материала'],
   delivery_scope: ['Delivery profile', 'Профиль отправки'],
   sent_at: ['Sent date', 'Дата отправки'],
+  received_at: ['Received date', 'Дата получения'],
+  applied_at: ['Applied date', 'Дата применения'],
   registration_status: ['Registration status', 'Статус регистрации'],
   deposit_status: ['Deposit status', 'Статус депозита'],
   registered_at: ['Registration date', 'Дата регистрации'],
@@ -374,6 +380,8 @@ export default function UsersPage({ adminUser }) {
       setPocketDetails({
         pocket: res.pocket || {},
         postbacks: res.postbacks || [],
+        aioInboundPostbacks: res.aio_inbound_postbacks || [],
+        aioOutboundEvents: res.aio_outbound_events || [],
       });
     } catch (e) {
       setPocketDetails(null);
@@ -667,6 +675,12 @@ export default function UsersPage({ adminUser }) {
     const archiveProfile = getArchiveProfile(archiveSnapshot);
     const pocket = pocketDetails?.pocket || {};
     const pocketPostbacks = pocketDetails?.postbacks || [];
+    const aioInboundPostbacks = pocketDetails?.aioInboundPostbacks || [];
+    const aioOutboundEvents = pocketDetails?.aioOutboundEvents || [];
+    const latestAioInbound = aioInboundPostbacks[0] || null;
+    const latestAioOutbound = aioOutboundEvents[0] || null;
+    const aioLinked = Boolean(pocket.aio_visit_uuid);
+    const aioGeoReceived = Boolean(pocket.aio_country_code || latestAioInbound?.country_code);
     const latestPocketPostback = pocketPostbacks[0] || null;
     const telegramChatId = pocket.user_id || selectedUser.user_id || '';
     const chatterfyChatId = pocket.chatterfy_lead_id || '';
@@ -828,6 +842,121 @@ export default function UsersPage({ adminUser }) {
                   ) : (
                     <div className="admin-user-pocket-message">
                       {tr('No Pocket postbacks have been received yet.', 'Postback-события Pocket ещё не получены.')}
+                    </div>
+                  )}
+                </details>
+              </>
+            ) : null}
+          </section>
+
+          <section className={`admin-user-chatterfy-panel admin-user-aio-panel ${aioGeoReceived ? 'has-data' : ''}`}>
+            <div className="admin-user-chatterfy-head">
+              <div>
+                <span className="admin-user-profile-permission-kicker">Conversion identity</span>
+                <strong>AIO</strong>
+                <p>
+                  {tr(
+                    'The AIO visit, country and received conversion type are stored independently from Pocket and Chatterfy.',
+                    'Визит AIO, гео и полученный тип конверсии хранятся отдельно от данных Pocket и Chatterfy.'
+                  )}
+                </p>
+              </div>
+              <span className={`admin-user-chatterfy-state ${aioGeoReceived ? 'is-success' : 'is-pending'}`}>
+                {aioGeoReceived
+                  ? tr('Geo applied', 'Гео применено')
+                  : (aioLinked ? tr('Waiting for conversion', 'Ожидается конверсия') : tr('Visit not linked', 'Визит не привязан'))}
+              </span>
+            </div>
+
+            {pocketLoading ? (
+              <div className="admin-user-pocket-message">{tr('Loading AIO data…', 'Загружаем данные AIO…')}</div>
+            ) : null}
+            {pocketError ? <div className="admin-error">{pocketError}</div> : null}
+
+            {!pocketLoading && !pocketError ? (
+              <>
+                <div className="admin-user-chatterfy-grid">
+                  <div>
+                    <span>AIO Visit UUID <code>click_id</code></span>
+                    <strong>{formatPocketValue(pocket.aio_visit_uuid)}</strong>
+                    <small>visit</small>
+                  </div>
+                  <div>
+                    <span>{tr('AIO geo', 'Гео AIO')} <code>geo</code></span>
+                    <strong>{formatPocketValue(pocket.aio_country_code || latestAioInbound?.country_code)}</strong>
+                    <small>ISO alpha-2</small>
+                  </div>
+                  <div>
+                    <span>{tr('Conversion type', 'Тип конверсии')}</span>
+                    <strong>{formatPocketValue(latestAioInbound?.conversion_type_uuid)}</strong>
+                    <small>conversion_type_uuid</small>
+                  </div>
+                  <div>
+                    <span>{tr('Inbound status', 'Статус входящего события')}</span>
+                    <strong>{formatPocketValue(latestAioInbound?.status)}</strong>
+                    <small>{latestAioInbound ? formatArchiveDate(latestAioInbound.received_at) : '—'}</small>
+                  </div>
+                  <div>
+                    <span>{tr('Applied to profile', 'Применено к профилю')}</span>
+                    <strong>{latestAioInbound?.applied_at ? tr('Yes', 'Да') : tr('No', 'Нет')}</strong>
+                    <small>{formatArchiveDate(latestAioInbound?.applied_at)}</small>
+                  </div>
+                  <div>
+                    <span>{tr('Last outbound event', 'Последнее исходящее событие')}</span>
+                    <strong>{formatPocketValue(latestAioOutbound?.event_slug)}</strong>
+                    <small>{latestAioOutbound ? formatArchiveDate(latestAioOutbound.created_at) : '—'}</small>
+                  </div>
+                </div>
+
+                <details className="admin-user-pocket-details">
+                  <summary>
+                    {tr('Inbound AIO conversion history', 'История входящих конверсий AIO')} · {aioInboundPostbacks.length}
+                  </summary>
+                  {aioInboundPostbacks.length ? (
+                    <div className="admin-user-pocket-events">
+                      {aioInboundPostbacks.map((event) => (
+                        <article key={event.id} className="admin-user-pocket-event">
+                          <div>
+                            <strong>{event.country_code || '—'} · {event.status || '—'}</strong>
+                            <span>{formatArchiveDate(event.received_at)}</span>
+                          </div>
+                          <div className="admin-user-pocket-event-meta">
+                            <span>Conversion UUID: <b>{formatPocketValue(event.conversion_type_uuid)}</b></span>
+                            <span>{tr('Applied', 'Применено')}: <b>{formatArchiveDate(event.applied_at)}</b></span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="admin-user-pocket-message">
+                      {tr('No inbound AIO conversions have been received yet.', 'Входящие конверсии AIO ещё не получены.')}
+                    </div>
+                  )}
+                </details>
+
+                <details className="admin-user-pocket-details">
+                  <summary>
+                    {tr('Outbound AIO event history', 'История исходящих событий AIO')} · {aioOutboundEvents.length}
+                  </summary>
+                  {aioOutboundEvents.length ? (
+                    <div className="admin-user-pocket-events">
+                      {aioOutboundEvents.map((event) => (
+                        <article key={event.id} className="admin-user-pocket-event">
+                          <div>
+                            <strong>{formatPocketValue(event.event_slug)}</strong>
+                            <span>{formatArchiveDate(event.created_at)}</span>
+                          </div>
+                          <div className="admin-user-pocket-event-meta">
+                            <span>{tr('Status', 'Статус')}: <b>{formatPocketValue(event.status)}</b></span>
+                            <span>HTTP: <b>{formatPocketValue(event.response_status)}</b></span>
+                          </div>
+                          {event.error ? <p>{event.error}</p> : null}
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="admin-user-pocket-message">
+                      {tr('No outbound AIO events have been sent yet.', 'Исходящие события AIO ещё не отправлялись.')}
                     </div>
                   )}
                 </details>

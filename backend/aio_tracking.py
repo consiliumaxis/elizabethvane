@@ -19,6 +19,10 @@ AIO_CHATTERFY_START_CONVERSION_TYPE_UUID = (
     os.getenv("AIO_CHATTERFY_START_CONVERSION_TYPE_UUID")
     or "a39ea9ab-20ec-4628-8f19-ee8dcd6d25b9"
 ).strip()
+AIO_GEO_CONVERSION_TYPE_UUID = (
+    os.getenv("AIO_GEO_CONVERSION_TYPE_UUID")
+    or "0141c6c0-2772-484f-b808-9419b8c930e8"
+).strip().lower()
 AIO_USER_FIELD_NAMES = frozenset(
     {
         "tg_first_name",
@@ -39,6 +43,13 @@ def normalize_aio_visit_uuid(value: Optional[str]) -> Optional[str]:
     if not AIO_VISIT_UUID_RE.fullmatch(raw):
         return None
     return raw.lower()
+
+
+def normalize_aio_country_code(value: Optional[object]) -> Optional[str]:
+    raw = str(value or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{2}", raw):
+        return None
+    return raw
 
 
 def extract_aio_visit_uuid_from_start_text(text: Optional[str]) -> Optional[str]:

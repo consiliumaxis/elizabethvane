@@ -658,6 +658,33 @@
     rgba(247, 252, 246, 0.88);
 }
 
+.admin-user-aio-panel {
+  border-color: rgba(52, 105, 164, 0.24);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(52, 105, 164, 0.12), transparent 44%),
+    rgba(255, 250, 242, 0.84);
+}
+
+.admin-user-aio-panel.has-data {
+  border-color: rgba(55, 137, 76, 0.3);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(65, 148, 85, 0.11), transparent 44%),
+    rgba(247, 252, 246, 0.88);
+}
+
+.admin-user-aio-panel .admin-user-chatterfy-grid > div {
+  border-color: rgba(52, 105, 164, 0.14);
+}
+
+.admin-user-aio-panel .admin-user-chatterfy-grid span code,
+.admin-user-aio-panel .admin-user-chatterfy-grid small {
+  color: #315f91;
+}
+
+.admin-user-aio-panel .admin-user-chatterfy-grid small {
+  background: rgba(52, 105, 164, 0.09);
+}
+
 .admin-user-chatterfy-head {
   display: flex;
   align-items: flex-start;
