@@ -24,6 +24,7 @@ class UserCacheAdminTest(unittest.TestCase):
 
         self.assertIn("UPDATE users SET", block)
         self.assertIn("trader_id = NULL", block)
+        self.assertIn("chatterfy_bot_lead_id = NULL", block)
         self.assertIn("DELETE FROM user_onboarding", block)
         self.assertIn("DELETE FROM pocket_postback_events", block)
         self.assertNotIn("DELETE FROM users", block)

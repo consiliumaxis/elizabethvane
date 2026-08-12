@@ -4096,6 +4096,7 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                     "aio_vip_synced_value = NULL",
                     "aio_copy_synced_value = NULL",
                     "chatterfy_lead_id = NULL",
+                    "chatterfy_bot_lead_id = NULL",
                     "chatterfy_tracker_click_id = NULL",
                     "trader_id = NULL",
                     "profile_name = NULL",
