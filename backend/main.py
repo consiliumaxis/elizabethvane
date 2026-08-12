@@ -127,6 +127,7 @@ except ModuleNotFoundError:
     )
 try:
     from backend.aio_tracking import (
+        AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID,
         AIO_GEO_CONVERSION_TYPE_UUID,
         build_aio_field_trigger_url,
         build_aio_fields_trigger_url,
@@ -142,6 +143,7 @@ try:
     )
 except ModuleNotFoundError:
     from aio_tracking import (
+        AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID,
         AIO_GEO_CONVERSION_TYPE_UUID,
         build_aio_field_trigger_url,
         build_aio_fields_trigger_url,
@@ -2385,6 +2387,18 @@ def require_aio_geo_postback_secret(supplied_secret: str) -> None:
         raise HTTPException(status_code=401, detail="Invalid AIO postback secret")
 
 
+def get_aio_geo_postback_conversion_type_uuids() -> set[str]:
+    """Return trusted AIO conversions that may enrich a profile with geo."""
+    return {
+        conversion_uuid
+        for conversion_uuid in (
+            normalize_aio_visit_uuid(AIO_GEO_CONVERSION_TYPE_UUID),
+            normalize_aio_visit_uuid(AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID),
+        )
+        if conversion_uuid
+    }
+
+
 async def apply_pending_aio_geo_for_visit(
     aio_visit_uuid: str,
     conversion_type_uuid: str = "",
@@ -2559,7 +2573,7 @@ async def receive_aio_geo_postback(request: Request):
         raise HTTPException(status_code=400, detail="Valid click_id is required")
     if not conversion_type_uuid:
         raise HTTPException(status_code=400, detail="Valid conversion_type_uuid is required")
-    if conversion_type_uuid != AIO_GEO_CONVERSION_TYPE_UUID:
+    if conversion_type_uuid not in get_aio_geo_postback_conversion_type_uuids():
         raise HTTPException(status_code=400, detail="Unsupported AIO conversion type")
     if not country_code:
         raise HTTPException(status_code=400, detail="Valid ISO 3166-1 alpha-2 geo is required")
