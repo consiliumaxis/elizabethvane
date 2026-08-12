@@ -24,6 +24,12 @@ class PrecontactProfileTest(unittest.TestCase):
         self.assertIn("asyncio.create_task(send_pending_chatterfy_start_event(user_id))", source)
         self.assertIn("chatterfy_start_result = await send_pending_chatterfy_start_event", source)
 
+    def test_precontact_profiles_are_not_broadcast_targets(self):
+        source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+
+        self.assertIn("SELECT 1 FROM user_onboarding onboarding", source)
+        self.assertIn("SELECT 1 FROM ai_chats chat", source)
+
 
 if __name__ == "__main__":
     unittest.main()

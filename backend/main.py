@@ -3183,18 +3183,18 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                             chatterfy_lead_id_from_postback,
                         ),
                     )
-                    await cur.executemany(
-                        """
-                        INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
-                        VALUES (%s, %s, 0, NULL)
-                        """,
-                        [(int(telegram_id), "forex"), (int(telegram_id), "binary")],
-                    )
                     user_row = {
                         "user_id": int(telegram_id),
                         "aio_visit_uuid": aio_visit_uuid_from_postback,
                         "chatterfy_lead_id": chatterfy_lead_id_from_postback,
                     }
+                await cur.executemany(
+                    """
+                    INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
+                    VALUES (%s, %s, 0, NULL)
+                    """,
+                    [(int(telegram_id), "forex"), (int(telegram_id), "binary")],
+                )
 
                 if event_slug == POCKET_DEPOSIT_EVENT and not normalized.get("provider_event_id"):
                     await cur.execute(
@@ -5138,7 +5138,21 @@ async def admin_broadcast(
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT user_id FROM users ORDER BY user_id ASC")
+            await cur.execute(
+                """
+                SELECT user_id
+                FROM users
+                WHERE EXISTS (
+                    SELECT 1 FROM user_onboarding onboarding
+                    WHERE onboarding.user_id = users.user_id
+                )
+                   OR EXISTS (
+                    SELECT 1 FROM ai_chats chat
+                    WHERE chat.user_id = users.user_id
+                )
+                ORDER BY user_id ASC
+                """
+            )
             users_rows = await cur.fetchall()
 
     sent = 0
