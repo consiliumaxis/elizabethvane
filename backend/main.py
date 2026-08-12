@@ -129,6 +129,7 @@ try:
     from backend.aio_tracking import (
         AIO_GEO_CONVERSION_TYPE_UUID,
         build_aio_field_trigger_url,
+        build_aio_fields_trigger_url,
         build_aio_pocket_deposit_conversion_url,
         build_aio_pocket_ftd_conversion_url,
         build_aio_pocket_registration_conversion_url,
@@ -143,6 +144,7 @@ except ModuleNotFoundError:
     from aio_tracking import (
         AIO_GEO_CONVERSION_TYPE_UUID,
         build_aio_field_trigger_url,
+        build_aio_fields_trigger_url,
         build_aio_pocket_deposit_conversion_url,
         build_aio_pocket_ftd_conversion_url,
         build_aio_pocket_registration_conversion_url,
@@ -2289,6 +2291,7 @@ async def sync_pocket_balance_for_user(user_row: Dict[str, Any], pocket_settings
                         user_id,
                     ),
                 )
+        await sync_aio_profile_status_fields(user_id)
         return True
     except Exception as e:
         async with db_pool.acquire() as conn:
@@ -3088,6 +3091,7 @@ async def bind_user_tracking_identity(
             )
     if normalized_aio_visit_uuid:
         await apply_pending_aio_geo_for_user(int(user_id))
+    asyncio.create_task(sync_aio_profile_status_fields(int(user_id)))
     return {
         "aio_visit_uuid": normalized_aio_visit_uuid,
         "chatterfy_lead_id": normalized_lead_id,
@@ -3236,6 +3240,145 @@ async def send_aio_field_value(user_id: int, field_name: str, field_value: objec
         }
     except Exception as exc:
         return {"status": "failed", "error": str(exc)[:4000]}
+
+
+AIO_PROFILE_STATUS_FIELD_COLUMNS = {
+    "tg_dep_ok": "aio_dep_ok_synced_value",
+    "tg_vip": "aio_vip_synced_value",
+    "tg_copy": "aio_copy_synced_value",
+}
+
+
+async def sync_aio_profile_status_fields(user_id: int) -> Dict[str, Any]:
+    """Synchronize stable 0/1 customer status fields with the linked AIO visit."""
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT aio_visit_uuid, aio_status_fields_visit_uuid,
+                       aio_dep_ok_synced_value, aio_vip_synced_value,
+                       aio_copy_synced_value,
+                       COALESCE(pocket_deposited, 0) AS pocket_deposited
+                FROM users
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (int(user_id),),
+            )
+            user_row = await cur.fetchone() or {}
+
+    aio_visit_uuid = normalize_aio_visit_uuid(user_row.get("aio_visit_uuid"))
+    if not aio_visit_uuid:
+        return {"status": "skipped", "reason": "missing_aio_visit_uuid"}
+
+    # Deposit is authoritative in Pocket. VIP and Copy do not yet have a
+    # corresponding access entity in Elizabeth, so they start at a truthful 0.
+    desired_values = {
+        "tg_dep_ok": 1 if truthy_db(user_row.get("pocket_deposited")) == 1 else 0,
+        "tg_vip": 0,
+        "tg_copy": 0,
+    }
+    synced_visit_uuid = normalize_aio_visit_uuid(
+        user_row.get("aio_status_fields_visit_uuid")
+    )
+    visit_changed = synced_visit_uuid != aio_visit_uuid
+    fields_to_send = {
+        field_name: desired_value
+        for field_name, desired_value in desired_values.items()
+        if visit_changed
+        or user_row.get(AIO_PROFILE_STATUS_FIELD_COLUMNS[field_name]) is None
+        or truthy_db(user_row.get(AIO_PROFILE_STATUS_FIELD_COLUMNS[field_name])) != desired_value
+    }
+    if not fields_to_send:
+        return {"status": "skipped", "reason": "up_to_date"}
+
+    try:
+        request_url = build_aio_fields_trigger_url(aio_visit_uuid, fields_to_send)
+    except ValueError as exc:
+        return {"status": "skipped", "reason": str(exc)}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(request_url)
+        if response.status_code >= 400:
+            return {
+                "status": "failed",
+                "response_status": response.status_code,
+                "response_body": response.text[:4000],
+            }
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)[:4000]}
+
+    assignments = ["aio_status_fields_visit_uuid = %s"]
+    update_values: List[object] = [aio_visit_uuid]
+    for field_name, field_value in fields_to_send.items():
+        assignments.append(f"{AIO_PROFILE_STATUS_FIELD_COLUMNS[field_name]} = %s")
+        update_values.append(field_value)
+    update_values.extend((int(user_id), aio_visit_uuid))
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"""
+                UPDATE users
+                SET {', '.join(assignments)}
+                WHERE user_id = %s AND aio_visit_uuid = %s
+                """,
+                tuple(update_values),
+            )
+            updated = cur.rowcount > 0
+    if not updated:
+        return {"status": "skipped", "reason": "aio_visit_uuid_changed"}
+    return {
+        "status": "sent",
+        "response_status": response.status_code,
+        "fields": fields_to_send,
+    }
+
+
+async def aio_profile_status_backfill_worker() -> None:
+    """Initialize unsent AIO status flags for profiles created before this feature."""
+    await asyncio.sleep(3)
+    if not db_pool:
+        return
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT user_id
+                    FROM users
+                    WHERE NULLIF(TRIM(aio_visit_uuid), '') IS NOT NULL
+                      AND (
+                          COALESCE(aio_status_fields_visit_uuid, '') <> LOWER(TRIM(aio_visit_uuid))
+                          OR aio_dep_ok_synced_value IS NULL
+                          OR aio_vip_synced_value IS NULL
+                          OR aio_copy_synced_value IS NULL
+                          OR aio_dep_ok_synced_value <> CASE WHEN COALESCE(pocket_deposited, 0) = 1 THEN 1 ELSE 0 END
+                          OR aio_vip_synced_value <> 0
+                          OR aio_copy_synced_value <> 0
+                      )
+                    ORDER BY user_id ASC
+                    LIMIT 5000
+                    """
+                )
+                user_ids = [int(row["user_id"]) for row in (await cur.fetchall() or [])]
+        for offset in range(0, len(user_ids), 10):
+            batch = user_ids[offset : offset + 10]
+            results = await asyncio.gather(
+                *(sync_aio_profile_status_fields(user_id) for user_id in batch),
+                return_exceptions=True,
+            )
+            for user_id, result in zip(batch, results):
+                if isinstance(result, Exception):
+                    print(f"[AIO] Status-field backfill failed for user {user_id}: {result}")
+                elif result.get("status") == "failed":
+                    print(f"[AIO] Status-field backfill was rejected for user {user_id}: {result}")
+            await asyncio.sleep(0.1)
+    except Exception as exc:
+        print(f"[AIO] Status-field backfill worker failed: {exc}")
 
 
 async def send_aio_pocket_conversion(
@@ -3594,6 +3737,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         deposit_amount=f"{deposit_amount:.2f}",
         total_deposit_amount=f"{total_deposit_amount:.2f}",
     )
+    aio_status_fields_result = await sync_aio_profile_status_fields(int(telegram_id))
     chatterfy_start_result = await send_pending_chatterfy_start_event(int(telegram_id))
     try:
         aichatter_result = await sync_aichatter_pocket_event(
@@ -3639,6 +3783,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         "access_granted": access_granted,
         "access_policy": signal_access_status.get("policy"),
         "aio": aio_result,
+        "aio_status_fields": aio_status_fields_result,
         "aio_geo": aio_geo_result,
         "chatterfy_start": chatterfy_start_result,
         "aichatter": aichatter_result,
@@ -3681,6 +3826,7 @@ async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
                u.profile_updated_at,
                COALESCE(u.balance, 0) AS balance,
                COALESCE(u.pocket_registered, 0) AS pocket_registered,
+               COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
                COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                u.balance_synced_at, u.balance_sync_error,
                COALESCE(fx.is_enabled, 0) AS forex_access,
@@ -3897,6 +4043,10 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                 reset_parts = [
                     "aio_visit_uuid = NULL",
                     "aio_country_code = NULL",
+                    "aio_status_fields_visit_uuid = NULL",
+                    "aio_dep_ok_synced_value = NULL",
+                    "aio_vip_synced_value = NULL",
+                    "aio_copy_synced_value = NULL",
                     "chatterfy_lead_id = NULL",
                     "chatterfy_tracker_click_id = NULL",
                     "trader_id = NULL",
@@ -4553,6 +4703,8 @@ async def admin_users(
                            COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
                            u.profile_updated_at,
                            COALESCE(u.balance, 0) AS balance,
+                           COALESCE(u.pocket_registered, 0) AS pocket_registered,
+                           COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
                            COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                            u.balance_synced_at, u.balance_sync_error,
                            COALESCE(fx.is_enabled, 0) AS forex_access,
@@ -4589,6 +4741,7 @@ async def admin_users(
                            NULL AS pocket_trader_id, NULL AS trader_id, NULL AS profile_trader_id,
                            0 AS trader_id_is_manual, 0 AS profile_edit_allowed, NULL AS profile_updated_at,
                            0 AS balance,
+                           0 AS pocket_registered, 0 AS pocket_deposited,
                            0 AS balance_sync_enabled, NULL AS balance_synced_at, NULL AS balance_sync_error,
                            0 AS forex_access, 0 AS binary_access,
                            0 AS is_blocked, NULL AS blocked_at, NULL AS blocked_by, NULL AS created_at,
@@ -7646,6 +7799,7 @@ async def sync_user(user=Depends(get_telegram_user)):
                 """,
                 [(user_id, "forex"), (user_id, "binary")],
             )
+    asyncio.create_task(sync_aio_profile_status_fields(int(user_id)))
     return {"status": "success"}
     
 @app.post("/api/user/mode")
@@ -9581,6 +9735,7 @@ async def cmd_start(message: types.Message):
     asyncio.create_task(send_aio_postback_event(user_id, "bot_start"))
     asyncio.create_task(send_pending_chatterfy_start_event(user_id))
     asyncio.create_task(send_aio_user_fields(user_id, first_name=first_name, username=username))
+    asyncio.create_task(sync_aio_profile_status_fields(user_id))
     asyncio.create_task(apply_pending_aio_geo_for_user(user_id))
     ai_chat_ready = await route_user_after_start(
         message,
@@ -9902,7 +10057,8 @@ async def main():
         start_api(),
         analysis_producer(),
         analysis_consumer(),
-        pocket_balance_sync_worker()
+        pocket_balance_sync_worker(),
+        aio_profile_status_backfill_worker(),
     )
 
 if __name__ == "__main__":

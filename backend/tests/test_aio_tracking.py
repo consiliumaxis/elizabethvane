@@ -3,6 +3,7 @@ import unittest
 
 from aio_tracking import (
     build_aio_field_trigger_url,
+    build_aio_fields_trigger_url,
     build_aio_postback_url,
     build_aio_pocket_deposit_conversion_url,
     build_aio_pocket_ftd_conversion_url,
@@ -117,6 +118,25 @@ class AioTrackingTest(unittest.TestCase):
             "https://app.aio.tech/api/v1/trigger/field/10ac5afb-cbce-4465-95dc-d22a2f735574/"
             "?tg_first_name=Dev+Sbite",
         )
+
+    def test_builds_multiple_status_fields_in_one_request(self):
+        url = build_aio_fields_trigger_url(
+            "10ac5afb-cbce-4465-95dc-d22a2f735574",
+            {"tg_dep_ok": 0, "tg_vip": 0, "tg_copy": 0},
+        )
+
+        self.assertEqual(
+            url,
+            "https://app.aio.tech/api/v1/trigger/field/10ac5afb-cbce-4465-95dc-d22a2f735574/"
+            "?tg_dep_ok=0&tg_vip=0&tg_copy=0",
+        )
+
+    def test_rejects_unknown_batch_field(self):
+        with self.assertRaisesRegex(ValueError, "AIO field name is invalid"):
+            build_aio_fields_trigger_url(
+                "10ac5afb-cbce-4465-95dc-d22a2f735574",
+                {"unknown_field": 0},
+            )
 
 
 if __name__ == "__main__":

@@ -1040,6 +1040,52 @@
   font-weight: 850;
 }
 
+.admin-user-list-statuses {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.admin-user-milestone {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  border: 1px solid rgba(55, 137, 76, 0.28);
+  border-radius: 999px;
+  background: rgba(229, 247, 233, 0.9);
+  color: #28673a;
+  padding: 3px 7px;
+  font-size: 0.59rem;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.admin-user-milestone > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 13px;
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+.admin-user-milestone.is-deposit {
+  border-color: rgba(155, 112, 24, 0.3);
+  background: rgba(251, 240, 211, 0.92);
+  color: #765514;
+}
+
+.admin-user-milestone.compact {
+  width: 25px;
+  height: 25px;
+  justify-content: center;
+  padding: 0;
+}
+
 .admin-user-list-status.is-blocked {
   border-color: rgba(174, 67, 51, 0.25);
   background: rgba(255, 235, 230, 0.86);
@@ -1189,6 +1235,20 @@
   min-width: 0;
   display: grid;
   gap: 3px;
+}
+
+.admin-user-profile-titleline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 9px;
+}
+
+.admin-user-profile-milestones {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
 .admin-user-profile-eyebrow {

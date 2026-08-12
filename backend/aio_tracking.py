@@ -1,7 +1,7 @@
 import os
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Optional
+from typing import Mapping, Optional
 from urllib.parse import urlencode
 
 
@@ -31,6 +31,9 @@ AIO_USER_FIELD_NAMES = frozenset(
         "tg_trader_id",
         "tg_first_dep",
         "tg_sum_dep",
+        "tg_dep_ok",
+        "tg_vip",
+        "tg_copy",
     }
     | {f"tg_question{index}" for index in range(1, 11)}
 )
@@ -190,15 +193,33 @@ def build_aio_pocket_deposit_conversion_url(aio_visit_uuid: str, revenue: object
     )
 
 
-def build_aio_field_trigger_url(aio_visit_uuid: str, field_name: str, field_value: object) -> str:
+def build_aio_fields_trigger_url(
+    aio_visit_uuid: str,
+    fields: Mapping[str, object],
+) -> str:
     visit_uuid = normalize_aio_visit_uuid(aio_visit_uuid)
-    normalized_field_name = str(field_name or "").strip()
     if not visit_uuid:
         raise ValueError("AIO visit UUID is invalid")
-    if normalized_field_name not in AIO_USER_FIELD_NAMES:
-        raise ValueError("AIO field name is invalid")
+
+    normalized_fields = {}
+    for field_name, field_value in dict(fields or {}).items():
+        normalized_field_name = str(field_name or "").strip()
+        if normalized_field_name not in AIO_USER_FIELD_NAMES:
+            raise ValueError("AIO field name is invalid")
+        normalized_fields[normalized_field_name] = str(
+            field_value if field_value is not None else ""
+        )
+    if not normalized_fields:
+        raise ValueError("At least one AIO field is required")
 
     return (
         f"{AIO_FIELD_TRIGGER_BASE_URL}/{visit_uuid}/"
-        f"?{urlencode({normalized_field_name: str(field_value if field_value is not None else '')})}"
+        f"?{urlencode(normalized_fields)}"
+    )
+
+
+def build_aio_field_trigger_url(aio_visit_uuid: str, field_name: str, field_value: object) -> str:
+    return build_aio_fields_trigger_url(
+        aio_visit_uuid,
+        {field_name: field_value},
     )

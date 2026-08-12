@@ -119,6 +119,10 @@ const ARCHIVE_FIELD_LABELS = {
   pocket_trader_id: ['Pocket Trader ID', 'Trader ID от Pocket'],
   aio_visit_uuid: ['AIO visit ID', 'ID визита AIO'],
   aio_country_code: ['AIO country code', 'Код страны AIO'],
+  aio_status_fields_visit_uuid: ['AIO status visit ID', 'ID визита для статусов AIO'],
+  aio_dep_ok_synced_value: ['AIO deposit flag', 'Переданный флаг депозита AIO'],
+  aio_vip_synced_value: ['AIO VIP flag', 'Переданный флаг VIP AIO'],
+  aio_copy_synced_value: ['AIO Copy flag', 'Переданный флаг Copy AIO'],
   conversion_type_uuid: ['Conversion type UUID', 'UUID типа конверсии'],
   country_code: ['Country code', 'Код страны'],
   chatterfy_lead_id: ['Chatterfy lead ID', 'ID лида Chatterfy'],
@@ -252,7 +256,8 @@ const formatArchiveValue = (fieldName, value, tr) => {
     [
       'access', 'is_enabled', 'is_blocked', 'is_business', 'profile_edit_allowed',
       'balance_sync_enabled', 'pocket_registered', 'pocket_deposited', 'bot_active',
-      'elizabeth_bot_active',
+      'elizabeth_bot_active', 'aio_dep_ok_synced_value', 'aio_vip_synced_value',
+      'aio_copy_synced_value',
     ].includes(fieldName)
     && (Number(value) === 0 || Number(value) === 1)
   ) {
@@ -716,6 +721,12 @@ export default function UsersPage({ adminUser }) {
     const aioLinked = Boolean(pocket.aio_visit_uuid);
     const aioGeoReceived = Boolean(pocket.aio_country_code || latestAioInbound?.country_code);
     const latestPocketPostback = pocketPostbacks[0] || null;
+    const registrationConfirmed = Number(
+      pocket.pocket_registered ?? selectedUser.pocket_registered ?? 0
+    ) === 1;
+    const depositConfirmed = Number(
+      pocket.pocket_deposited ?? selectedUser.pocket_deposited ?? 0
+    ) === 1;
     const telegramChatId = pocket.user_id || selectedUser.user_id || '';
     const chatterfyChatId = pocket.chatterfy_lead_id || '';
     const trackerClickId = pocket.chatterfy_tracker_click_id || '';
@@ -747,7 +758,23 @@ export default function UsersPage({ adminUser }) {
               ) : null}
             </div>
             <div className="admin-user-profile-heading">
-              <span className="admin-user-profile-eyebrow">{tr('Customer profile', 'Профиль клиента')} · #{selectedUser.user_id}</span>
+              <div className="admin-user-profile-titleline">
+                <span className="admin-user-profile-eyebrow">{tr('Customer profile', 'Профиль клиента')} · #{selectedUser.user_id}</span>
+                <div className="admin-user-profile-milestones" aria-label={tr('Pocket statuses', 'Статусы Pocket')}>
+                  {registrationConfirmed ? (
+                    <span className="admin-user-milestone is-registration" title={tr('Pocket registration confirmed', 'Регистрация в Pocket подтверждена')}>
+                      <span aria-hidden="true">✅</span>
+                      {tr('Registered', 'Регистрация')}
+                    </span>
+                  ) : null}
+                  {depositConfirmed ? (
+                    <span className="admin-user-milestone is-deposit" title={tr('Pocket deposit confirmed', 'Депозит в Pocket подтверждён')}>
+                      <span aria-hidden="true">💵</span>
+                      {tr('Deposit', 'Депозит')}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
               <h2>{getDisplayName(selectedUser)}</h2>
               <div className="admin-user-profile-handle">
                 {selectedUser.username
@@ -759,7 +786,6 @@ export default function UsersPage({ adminUser }) {
                   {isBlocked ? tr('Blocked', 'Заблокирован') : tr('Active', 'Активен')}
                 </span>
                 {Number(selectedUser.is_admin) === 1 ? <span className="is-role">{tr('Staff', 'Сотрудник')}</span> : null}
-                {Number(pocket.pocket_registered) === 1 ? <span className="is-service">Pocket</span> : null}
                 {chatterfyLinked ? <span className="is-service">Chatterfy</span> : null}
                 {manualTraderId ? <span className="is-warning">{tr('Manual Trader ID', 'Ручной Trader ID')}</span> : null}
               </div>
@@ -1839,6 +1865,8 @@ export default function UsersPage({ adminUser }) {
       <div className="admin-entity-list">
         {users.map((user) => {
           const blocked = Number(user.is_blocked) === 1;
+          const registrationConfirmed = Number(user.pocket_registered || 0) === 1;
+          const depositConfirmed = Number(user.pocket_deposited || 0) === 1;
           const avatarUrl = getAvatarUrl(user);
           return (
             <button
@@ -1860,9 +1888,29 @@ export default function UsersPage({ adminUser }) {
                     <small>{user.username ? `@${String(user.username).replace(/^@/, '')}` : `ID ${user.user_id}`}</small>
                   </div>
                 </div>
-                <span className={`admin-user-list-status ${blocked ? 'is-blocked' : 'is-active'}`}>
-                  {blocked ? tr('Blocked', 'Заблокирован') : tr('Active', 'Активен')}
-                </span>
+                <div className="admin-user-list-statuses">
+                  <span className={`admin-user-list-status ${blocked ? 'is-blocked' : 'is-active'}`}>
+                    {blocked ? tr('Blocked', 'Заблокирован') : tr('Active', 'Активен')}
+                  </span>
+                  {registrationConfirmed ? (
+                    <span
+                      className="admin-user-milestone is-registration compact"
+                      title={tr('Pocket registration confirmed', 'Регистрация в Pocket подтверждена')}
+                      aria-label={tr('Pocket registration confirmed', 'Регистрация в Pocket подтверждена')}
+                    >
+                      <span aria-hidden="true">✅</span>
+                    </span>
+                  ) : null}
+                  {depositConfirmed ? (
+                    <span
+                      className="admin-user-milestone is-deposit compact"
+                      title={tr('Pocket deposit confirmed', 'Депозит в Pocket подтверждён')}
+                      aria-label={tr('Pocket deposit confirmed', 'Депозит в Pocket подтверждён')}
+                    >
+                      <span aria-hidden="true">💵</span>
+                    </span>
+                  ) : null}
+                </div>
               </div>
               <div className="admin-user-list-facts">
                 <div><span>Telegram ID</span><strong>{user.user_id}</strong></div>

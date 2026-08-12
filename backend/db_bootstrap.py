@@ -101,6 +101,10 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     avatar_url TEXT NULL,
                     aio_visit_uuid VARCHAR(64) NULL,
                     aio_country_code CHAR(2) NULL,
+                    aio_status_fields_visit_uuid VARCHAR(64) NULL,
+                    aio_dep_ok_synced_value TINYINT(1) NULL,
+                    aio_vip_synced_value TINYINT(1) NULL,
+                    aio_copy_synced_value TINYINT(1) NULL,
                     chatterfy_lead_id VARCHAR(255) NULL,
                     chatterfy_tracker_click_id VARCHAR(255) NULL,
                     trader_id VARCHAR(64) NULL,
@@ -560,6 +564,10 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "users", "profile_updated_at", "ALTER TABLE users ADD COLUMN profile_updated_at TIMESTAMP NULL DEFAULT NULL AFTER profile_trader_id")
         await _ensure_column(conn, db_name, "users", "aio_visit_uuid", "ALTER TABLE users ADD COLUMN aio_visit_uuid VARCHAR(64) NULL")
         await _ensure_column(conn, db_name, "users", "aio_country_code", "ALTER TABLE users ADD COLUMN aio_country_code CHAR(2) NULL AFTER aio_visit_uuid")
+        await _ensure_column(conn, db_name, "users", "aio_status_fields_visit_uuid", "ALTER TABLE users ADD COLUMN aio_status_fields_visit_uuid VARCHAR(64) NULL AFTER aio_country_code")
+        await _ensure_column(conn, db_name, "users", "aio_dep_ok_synced_value", "ALTER TABLE users ADD COLUMN aio_dep_ok_synced_value TINYINT(1) NULL AFTER aio_status_fields_visit_uuid")
+        await _ensure_column(conn, db_name, "users", "aio_vip_synced_value", "ALTER TABLE users ADD COLUMN aio_vip_synced_value TINYINT(1) NULL AFTER aio_dep_ok_synced_value")
+        await _ensure_column(conn, db_name, "users", "aio_copy_synced_value", "ALTER TABLE users ADD COLUMN aio_copy_synced_value TINYINT(1) NULL AFTER aio_vip_synced_value")
         await _ensure_column(conn, db_name, "users", "chatterfy_lead_id", "ALTER TABLE users ADD COLUMN chatterfy_lead_id VARCHAR(255) NULL AFTER aio_visit_uuid")
         await _ensure_column(conn, db_name, "users", "chatterfy_tracker_click_id", "ALTER TABLE users ADD COLUMN chatterfy_tracker_click_id VARCHAR(255) NULL AFTER chatterfy_lead_id")
         await _ensure_column(conn, db_name, "users", "pocket_click_id", "ALTER TABLE users ADD COLUMN pocket_click_id VARCHAR(64) NULL")
