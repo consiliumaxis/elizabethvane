@@ -2544,14 +2544,13 @@ async def send_aio_postback_event(
                     (aio_visit_uuid, normalized_event_slug, normalized_unique_key),
                 )
                 existing_event = await cur.fetchone() or {}
-                if existing_event.get("status") != "failed":
-                    return {"status": "skipped", "reason": "duplicate", "event_id": existing_event.get("id")}
-                event_id = int(existing_event["id"])
-                request_url = existing_event.get("request_url") or request_url
-                await cur.execute(
-                    "UPDATE aio_postback_events SET status = 'pending', error = NULL WHERE id = %s",
-                    (event_id,),
-                )
+                if existing_event:
+                    return {
+                        "status": "skipped",
+                        "reason": "duplicate",
+                        "event_id": existing_event.get("id"),
+                        "previous_status": existing_event.get("status"),
+                    }
             else:
                 event_id = cur.lastrowid
 

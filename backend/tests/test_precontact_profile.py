@@ -21,6 +21,7 @@ class PrecontactProfileTest(unittest.TestCase):
         self.assertIn("async def send_pending_chatterfy_start_event", source)
         self.assertIn('{"status": "pending", "reason": "missing_aio_visit_uuid"}', source)
         self.assertIn('unique_key=f"{CHATTERFY_START_EVENT}:{int(user_id)}"', source)
+        self.assertIn('"previous_status": existing_event.get("status")', source)
         self.assertIn("asyncio.create_task(send_pending_chatterfy_start_event(user_id))", source)
         self.assertIn("chatterfy_start_result = await send_pending_chatterfy_start_event", source)
 
