@@ -246,6 +246,74 @@ async def _get_pool():
     return _pool
 
 
+async def get_aichatter_user_summary(telegram_id: int) -> Dict[str, Any]:
+    """Return a compact, read-only AI Chatter profile for the shared admin card.
+
+    The main application and AI Chatter use separate databases.  Keeping this
+    adapter here prevents the main admin endpoint from knowing the Chatter
+    schema and makes an unavailable Chatter database a local, non-fatal state.
+    """
+    telegram_id = int(telegram_id)
+    pool = await _get_pool()
+    await _ensure_ai_settings_schema(pool)
+
+    async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
+        await cur.execute(
+            """
+            SELECT u.tg_user_id, u.first_name, u.username, u.country, u.trader_id,
+                   COALESCE(u.registration_status, 0) AS registration_status,
+                   COALESCE(u.deposit_status, 0) AS deposit_status,
+                   COALESCE(u.bot_active, 1) AS bot_active,
+                   COALESCE(u.elizabeth_bot_active, 1) AS elizabeth_bot_active,
+                   u.bot_blocked_at, u.bot_block_reason, u.registered_at,
+                   u.created_at, u.last_message_at,
+                   s.stage, s.notes, s.updated_at AS stage_updated_at,
+                   (SELECT COUNT(*) FROM messages m WHERE m.tg_user_id = u.tg_user_id) AS messages_count,
+                   (SELECT COUNT(*) FROM messages m WHERE m.tg_user_id = u.tg_user_id AND m.direction = 'in') AS inbound_messages,
+                   (SELECT COUNT(*) FROM messages m WHERE m.tg_user_id = u.tg_user_id AND m.direction = 'out') AS outbound_messages
+            FROM users u
+            LEFT JOIN user_state s ON s.tg_user_id = u.tg_user_id
+            WHERE u.tg_user_id = %s
+            LIMIT 1
+            """,
+            (telegram_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return {"available": True, "exists": False, "tg_user_id": telegram_id}
+
+        funnel_media_sent = 0
+        try:
+            await cur.execute(
+                "SELECT COUNT(*) AS cnt FROM funnel_media_sent WHERE tg_user_id = %s",
+                (telegram_id,),
+            )
+            funnel_media_sent = int((await cur.fetchone() or {}).get("cnt") or 0)
+        except Exception:
+            # Older installations may not have this optional table yet.
+            funnel_media_sent = 0
+
+        await cur.execute(
+            """
+            SELECT direction, is_business, text, created_at
+            FROM messages
+            WHERE tg_user_id = %s
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (telegram_id,),
+        )
+        latest_message = await cur.fetchone()
+
+    return {
+        "available": True,
+        "exists": True,
+        **row,
+        "funnel_media_sent": funnel_media_sent,
+        "latest_message": latest_message,
+    }
+
+
 async def snapshot_aichatter_user_data(telegram_id: int) -> Dict[str, list]:
     telegram_id = int(telegram_id)
     pool = await _get_pool()

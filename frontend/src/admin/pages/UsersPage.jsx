@@ -15,12 +15,12 @@ const formatBalance = (value) => {
 };
 const hasAccess = (value) => Number(value) === 1;
 const isManualTraderId = (user) => Number(user?.trader_id_is_manual || 0) === 1;
-const formatArchiveDate = (value) => {
+const formatArchiveDate = (value, locale = 'ru-RU') => {
   if (!value) return '—';
   const normalized = String(value).includes('T') ? String(value) : String(value).replace(' ', 'T');
   const parsed = new Date(normalized);
   if (Number.isNaN(parsed.getTime())) return String(value);
-  return new Intl.DateTimeFormat('ru-RU', {
+  return new Intl.DateTimeFormat(locale, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -31,6 +31,27 @@ const formatArchiveDate = (value) => {
 const formatPocketValue = (value) => (
   value === null || value === undefined || String(value).trim() === '' ? '—' : String(value)
 );
+const formatPercent = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? `${parsed.toFixed(1)}%` : '—';
+};
+const formatCount = (value) => new Intl.NumberFormat('ru-RU').format(Number(value || 0));
+const getOnboardingProgress = (onboarding) => {
+  if (!onboarding) return 0;
+  if (onboarding.channel_gate_completed_at) return 100;
+  if (onboarding.channel_subscribed_at) return 80;
+  if (onboarding.quiz_completed_at) return 60;
+  if (onboarding.current_step) return 25;
+  return 0;
+};
+const getAnalysisStatusLabel = (status, tr) => {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'success') return tr('Win', 'Успешно');
+  if (normalized === 'fail') return tr('Loss', 'Убыток');
+  if (normalized === 'active') return tr('Active', 'Активен');
+  if (normalized === 'skipped') return tr('Skipped', 'Пропущен');
+  return status || '—';
+};
 const getPocketEventLabel = (eventSlug, tr) => {
   const normalized = String(eventSlug || '').trim().toLowerCase();
   if (normalized === 'registration') return tr('Registration', 'Регистрация');
@@ -302,7 +323,8 @@ const formatArchiveMoney = (value) => {
 };
 
 export default function UsersPage({ adminUser }) {
-  const { tr } = useAdminLocale();
+  const { locale, tr } = useAdminLocale();
+  const formatAdminDate = (value) => formatArchiveDate(value, locale);
   const canProfileEdit = hasPermission(adminUser, PERMISSIONS.usersProfileEdit);
   const canArchiveClear = hasPermission(adminUser, PERMISSIONS.usersArchiveClear);
   const canEditAccess = hasPermission(adminUser, PERMISSIONS.usersAccess);
@@ -325,9 +347,10 @@ export default function UsersPage({ adminUser }) {
   const [archivesLoading, setArchivesLoading] = useState(false);
   const [archiveDetail, setArchiveDetail] = useState(null);
   const [archiveDetailLoading, setArchiveDetailLoading] = useState(false);
-  const [pocketDetails, setPocketDetails] = useState(null);
-  const [pocketLoading, setPocketLoading] = useState(false);
-  const [pocketError, setPocketError] = useState('');
+  const [profileDetails, setProfileDetails] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [profileTab, setProfileTab] = useState('overview');
   const [confirmationPhrase, setConfirmationPhrase] = useState('');
   const [confirmationValue, setConfirmationValue] = useState('');
   const [accessForm, setAccessForm] = useState({ forex: true, binary: true });
@@ -369,25 +392,34 @@ export default function UsersPage({ adminUser }) {
     }
   }, [tr]);
 
-  const loadPocketDetails = useCallback(async (userId) => {
+  const loadProfileDetails = useCallback(async (userId) => {
     if (!userId) return;
-    setPocketLoading(true);
-    setPocketError('');
+    setProfileLoading(true);
+    setProfileError('');
     try {
       const res = await apiAdminFetchJson(
-        `/api/admin/users/${encodeURIComponent(userId)}/pocket`
+        `/api/admin/users/${encodeURIComponent(userId)}/profile`
       );
-      setPocketDetails({
+      setProfileDetails({
+        user: res.user || null,
+        onboarding: res.onboarding || null,
+        activity: res.activity || {},
+        aiChatter: res.ai_chatter || { available: false, exists: false },
         pocket: res.pocket || {},
         postbacks: res.postbacks || [],
         aioInboundPostbacks: res.aio_inbound_postbacks || [],
         aioOutboundEvents: res.aio_outbound_events || [],
       });
+      if (res.user?.user_id) {
+        setUsers((prev) => prev.map((item) => (
+          String(item.user_id) === String(res.user.user_id) ? { ...item, ...res.user } : item
+        )));
+      }
     } catch (e) {
-      setPocketDetails(null);
-      setPocketError(e.message || tr('Could not load Pocket data', 'Не удалось загрузить данные Pocket'));
+      setProfileDetails(null);
+      setProfileError(e.message || tr('Could not load the user profile', 'Не удалось загрузить профиль пользователя'));
     } finally {
-      setPocketLoading(false);
+      setProfileLoading(false);
     }
   }, [tr]);
 
@@ -404,9 +436,9 @@ export default function UsersPage({ adminUser }) {
 
   useEffect(() => {
     if (!selectedUserId) return undefined;
-    const timer = window.setTimeout(() => loadPocketDetails(selectedUserId), 0);
+    const timer = window.setTimeout(() => loadProfileDetails(selectedUserId), 0);
     return () => window.clearTimeout(timer);
-  }, [loadPocketDetails, selectedUserId]);
+  }, [loadProfileDetails, selectedUserId]);
 
   const selectedUser = useMemo(
     () => users.find((user) => String(user.user_id) === String(selectedUserId)) || null,
@@ -427,8 +459,9 @@ export default function UsersPage({ adminUser }) {
     setArchiveDetail(null);
     setArchives([]);
     setConfirmationPhrase('');
-    setPocketDetails(null);
-    setPocketError('');
+    setProfileDetails(null);
+    setProfileError('');
+    setProfileTab('overview');
   };
 
   const closeUserCard = () => {
@@ -441,8 +474,9 @@ export default function UsersPage({ adminUser }) {
     setConfirmationValue('');
     setArchives([]);
     setConfirmationPhrase('');
-    setPocketDetails(null);
-    setPocketError('');
+    setProfileDetails(null);
+    setProfileError('');
+    setProfileTab('overview');
     setStatus('');
   };
 
@@ -594,7 +628,7 @@ export default function UsersPage({ adminUser }) {
         `Данные пользователя помещены в архив, кэш очищен. Архив №${res.archive_id}.`
       ));
       await loadArchives(selectedUser.user_id);
-      await loadPocketDetails(selectedUser.user_id);
+      await loadProfileDetails(selectedUser.user_id);
     } catch (e) {
       setError(e.message || tr('Could not clear user cache', 'Не удалось очистить кэш пользователя'));
     } finally {
@@ -673,10 +707,10 @@ export default function UsersPage({ adminUser }) {
     const confirmationMatches = confirmationValue.trim() === requiredConfirmation;
     const archiveSnapshot = archiveDetail?.snapshot || {};
     const archiveProfile = getArchiveProfile(archiveSnapshot);
-    const pocket = pocketDetails?.pocket || {};
-    const pocketPostbacks = pocketDetails?.postbacks || [];
-    const aioInboundPostbacks = pocketDetails?.aioInboundPostbacks || [];
-    const aioOutboundEvents = pocketDetails?.aioOutboundEvents || [];
+    const pocket = profileDetails?.pocket || {};
+    const pocketPostbacks = profileDetails?.postbacks || [];
+    const aioInboundPostbacks = profileDetails?.aioInboundPostbacks || [];
+    const aioOutboundEvents = profileDetails?.aioOutboundEvents || [];
     const latestAioInbound = aioInboundPostbacks[0] || null;
     const latestAioOutbound = aioOutboundEvents[0] || null;
     const aioLinked = Boolean(pocket.aio_visit_uuid);
@@ -686,59 +720,212 @@ export default function UsersPage({ adminUser }) {
     const chatterfyChatId = pocket.chatterfy_lead_id || '';
     const trackerClickId = pocket.chatterfy_tracker_click_id || '';
     const chatterfyLinked = Boolean(chatterfyChatId);
+    const onboarding = profileDetails?.onboarding || null;
+    const activity = profileDetails?.activity || {};
+    const aiChatter = profileDetails?.aiChatter || { available: true, exists: false };
+    const onboardingProgress = getOnboardingProgress(onboarding);
+    const completedDeals = Number(activity.completed_deals || 0);
+    const profileTabs = [
+      { id: 'overview', label: tr('Overview', 'Обзор') },
+      { id: 'integrations', label: tr('Integrations', 'Интеграции') },
+      { id: 'management', label: tr('Management', 'Управление') },
+      { id: 'data', label: tr('Data & history', 'Данные и история') },
+    ];
     return (
-      <div className="admin-card">
-        <div className="admin-row-between">
-          <h3 className="admin-section-title">{tr('User profile', 'Карточка пользователя')}</h3>
-          <button className="admin-btn-outline" onClick={closeUserCard}>
-            {tr('← Back to list', '← К списку')}
-          </button>
+      <div className="admin-card admin-user-profile-card">
+        <button className="admin-user-profile-back" onClick={closeUserCard}>
+          <span aria-hidden="true">←</span>
+          {tr('All users', 'Все пользователи')}
+        </button>
+
+        <header className="admin-user-profile-hero">
+          <div className="admin-user-profile-identity">
+            <div className="admin-user-avatar profile">
+              <span>{getInitials(selectedUser)}</span>
+              {selectedAvatarUrl ? (
+                <img src={selectedAvatarUrl} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+              ) : null}
+            </div>
+            <div className="admin-user-profile-heading">
+              <span className="admin-user-profile-eyebrow">{tr('Customer profile', 'Профиль клиента')} · #{selectedUser.user_id}</span>
+              <h2>{getDisplayName(selectedUser)}</h2>
+              <div className="admin-user-profile-handle">
+                {selectedUser.username
+                  ? `@${String(selectedUser.username).replace(/^@/, '')}`
+                  : tr('Telegram username is not specified', 'Username Telegram не указан')}
+              </div>
+              <div className="admin-user-profile-badges">
+                <span className={isBlocked ? 'is-danger' : 'is-success'}>
+                  {isBlocked ? tr('Blocked', 'Заблокирован') : tr('Active', 'Активен')}
+                </span>
+                {Number(selectedUser.is_admin) === 1 ? <span className="is-role">{tr('Staff', 'Сотрудник')}</span> : null}
+                {Number(pocket.pocket_registered) === 1 ? <span className="is-service">Pocket</span> : null}
+                {chatterfyLinked ? <span className="is-service">Chatterfy</span> : null}
+                {manualTraderId ? <span className="is-warning">{tr('Manual Trader ID', 'Ручной Trader ID')}</span> : null}
+              </div>
+            </div>
+          </div>
+          <div className="admin-user-profile-quick-actions">
+            {canEditAccess ? (
+              <button className="admin-btn-outline" onClick={openAccessModal} disabled={actionLoading}>
+                {tr('Access', 'Доступ')}
+              </button>
+            ) : null}
+            {canEditBalance ? (
+              <button className="admin-btn" onClick={openBalanceModal} disabled={actionLoading}>
+                {tr('Balance', 'Баланс')}
+              </button>
+            ) : null}
+          </div>
+        </header>
+
+        <div className="admin-user-profile-metrics" aria-label={tr('Key indicators', 'Ключевые показатели')}>
+          <div>
+            <span>{tr('Balance', 'Баланс')}</span>
+            <strong>{formatBalance(selectedUser.balance)}</strong>
+            <small>{Number(selectedUser.balance_sync_enabled) === 1 ? tr('Pocket sync enabled', 'Синхронизация включена') : tr('Manual value', 'Ручное значение')}</small>
+          </div>
+          <div>
+            <span>{tr('Deposits', 'Депозиты')}</span>
+            <strong>{formatBalance(pocket.pocket_deposit_amount)}</strong>
+            <small>{Number(pocket.pocket_deposited) === 1 ? tr('Confirmed', 'Подтверждены') : tr('Not received', 'Не получены')}</small>
+          </div>
+          <div>
+            <span>{tr('Completed deals', 'Завершено сделок')}</span>
+            <strong>{formatCount(completedDeals)}</strong>
+            <small>{formatCount(activity.deals_7d)} {tr('in 7 days', 'за 7 дней')}</small>
+          </div>
+          <div>
+            <span>{tr('Winrate', 'Винрейт')}</span>
+            <strong>{formatPercent(activity.winrate)}</strong>
+            <small>{tr('7 days', '7 дней')}: {formatPercent(activity.winrate_7d)}</small>
+          </div>
         </div>
 
-        <div className="admin-user-detail">
-          <div className="admin-user-detail-head">
-            <div className="admin-user-title-row">
-              <div className="admin-user-avatar large">
-                <span>{getInitials(selectedUser)}</span>
-                {selectedAvatarUrl ? (
-                  <img src={selectedAvatarUrl} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                ) : null}
-              </div>
-              <div>
-                <span className="admin-user-state">
-                  {isBlocked ? tr('⛔ Blocked', '⛔ Заблокирован') : tr('✅ Active', '✅ Активен')}
-                </span>
-                <strong>{getDisplayName(selectedUser)}</strong>
-              </div>
-            </div>
-          </div>
+        <nav className="admin-user-profile-tabs" aria-label={tr('User profile sections', 'Разделы профиля пользователя')}>
+          {profileTabs.map((tab) => (
+            <button
+              type="button"
+              key={tab.id}
+              className={profileTab === tab.id ? 'active' : ''}
+              onClick={() => setProfileTab(tab.id)}
+              aria-current={profileTab === tab.id ? 'page' : undefined}
+            >
+              {tab.label}
+              {tab.id === 'integrations' ? <b>{[aioLinked, chatterfyLinked, Number(pocket.pocket_registered) === 1, aiChatter.exists].filter(Boolean).length}</b> : null}
+              {tab.id === 'data' && archives.length ? <b>{archives.length}</b> : null}
+            </button>
+          ))}
+        </nav>
 
-          <div className="admin-user-grid">
-            <div><span>ID:</span> {selectedUser.user_id}</div>
-            <div>
-              <span>Trader ID:</span>
-              {selectedUser.trader_id || tr('Not set', 'Не указан')}
-              {manualTraderId ? <b className="admin-user-manual-badge">{tr('Manual', 'Ручной')}</b> : null}
-            </div>
-            <div><span>{tr('Balance', 'Баланс')}:</span> {formatBalance(selectedUser.balance)}</div>
-            <div><span>{tr('Forex access', 'Доступ Forex')}:</span> {hasAccess(selectedUser.forex_access) ? tr('Enabled', 'Есть') : tr('Disabled', 'Нету')}</div>
-            <div><span>{tr('Binary access', 'Доступ Binary')}:</span> {hasAccess(selectedUser.binary_access) ? tr('Enabled', 'Есть') : tr('Disabled', 'Нету')}</div>
-            <div><span>Username:</span> {selectedUser.username || '-'}</div>
-            <div><span>{tr('Displayed name', 'Отображаемое имя')}:</span> {selectedUser.first_name || '-'}</div>
-            <div><span>{tr('Telegram name', 'Имя в Telegram')}:</span> {selectedUser.telegram_first_name || '-'}</div>
-            <div><span>{tr('Mode', 'Режим')}:</span> {selectedUser.mode || '-'}</div>
-            <div><span>{tr('Strategy', 'Стратегия')}:</span> {selectedUser.strategy_name || selectedUser.strategy_id || '-'}</div>
-            <div><span>{tr('Language', 'Язык')}:</span> {selectedUser.lang || '-'}</div>
-            <div><span>{tr('Admin', 'Админ')}:</span> {Number(selectedUser.is_admin) === 1 ? tr('Yes', 'Да') : tr('No', 'Нет')}</div>
-            <div>
-              <span>{tr('Balance sync', 'Синхронизация баланса')}:</span>
-              {manualTraderId
-                ? tr('Unavailable for manual Trader ID', 'Недоступна для ручного Trader ID')
-                : (Number(selectedUser.balance_sync_enabled) === 1 ? tr('Enabled', 'Включена') : tr('Disabled', 'Выключена'))}
-            </div>
-            <div><span>{tr('Blocked', 'Блокировка')}:</span> {isBlocked ? `${tr('Yes', 'Да')}${selectedUser.blocked_at ? `, ${selectedUser.blocked_at}` : ''}` : tr('No', 'Нет')}</div>
-            <div><span>{tr('Created', 'Создан')}:</span> {selectedUser.created_at || '-'}</div>
+        {profileLoading ? (
+          <div className="admin-user-profile-loading">
+            <span />
+            {tr('Collecting data from connected services…', 'Собираем данные из подключённых сервисов…')}
           </div>
+        ) : null}
+        {profileError ? <div className="admin-error">{profileError}</div> : null}
+
+        <div className="admin-user-detail">
+          {profileTab === 'overview' ? (
+            <div className="admin-user-overview">
+              <section className="admin-user-profile-section">
+                <div className="admin-user-profile-section-head">
+                  <div>
+                    <span>{tr('Identity', 'Идентификация')}</span>
+                    <h3>{tr('Contact and profile', 'Контакты и профиль')}</h3>
+                  </div>
+                  <small>{tr('Data from Telegram and the app', 'Данные Telegram и приложения')}</small>
+                </div>
+                <div className="admin-user-profile-fields">
+                  <div><span>Telegram ID</span><strong>{selectedUser.user_id}</strong></div>
+                  <div><span>Username</span><strong>{selectedUser.username ? `@${String(selectedUser.username).replace(/^@/, '')}` : '—'}</strong></div>
+                  <div><span>{tr('Displayed name', 'Отображаемое имя')}</span><strong>{selectedUser.first_name || '—'}</strong></div>
+                  <div><span>{tr('Telegram name', 'Имя в Telegram')}</span><strong>{selectedUser.telegram_first_name || '—'}</strong></div>
+                  <div><span>{tr('Interface language', 'Язык интерфейса')}</span><strong>{String(selectedUser.lang || '—').toUpperCase()}</strong></div>
+                  <div><span>{tr('Created', 'Создан')}</span><strong>{formatAdminDate(selectedUser.created_at)}</strong></div>
+                </div>
+              </section>
+
+              <section className="admin-user-profile-section">
+                <div className="admin-user-profile-section-head">
+                  <div>
+                    <span>{tr('Trading profile', 'Торговый профиль')}</span>
+                    <h3>{tr('Access and preferences', 'Доступ и предпочтения')}</h3>
+                  </div>
+                </div>
+                <div className="admin-user-profile-fields">
+                  <div>
+                    <span>Trader ID</span>
+                    <strong>{selectedUser.trader_id || tr('Not set', 'Не указан')}</strong>
+                    {manualTraderId ? <small>{tr('Entered by the user; Pocket verification is disabled', 'Введён пользователем; проверка Pocket отключена')}</small> : null}
+                  </div>
+                  <div><span>{tr('Mode', 'Режим')}</span><strong>{selectedUser.mode || '—'}</strong></div>
+                  <div><span>{tr('Strategy', 'Стратегия')}</span><strong>{selectedUser.strategy_name || selectedUser.strategy_id || '—'}</strong></div>
+                  <div><span>Forex</span><strong className={hasAccess(selectedUser.forex_access) ? 'is-positive' : ''}>{hasAccess(selectedUser.forex_access) ? tr('Access granted', 'Доступ есть') : tr('No access', 'Нет доступа')}</strong></div>
+                  <div><span>Binary</span><strong className={hasAccess(selectedUser.binary_access) ? 'is-positive' : ''}>{hasAccess(selectedUser.binary_access) ? tr('Access granted', 'Доступ есть') : tr('No access', 'Нет доступа')}</strong></div>
+                  <div><span>{tr('Balance sync', 'Синхронизация баланса')}</span><strong>{manualTraderId ? tr('Unavailable', 'Недоступна') : (Number(selectedUser.balance_sync_enabled) === 1 ? tr('Enabled', 'Включена') : tr('Disabled', 'Выключена'))}</strong></div>
+                </div>
+              </section>
+
+              <section className="admin-user-profile-section admin-user-journey-section">
+                <div className="admin-user-profile-section-head">
+                  <div>
+                    <span>{tr('Customer journey', 'Путь клиента')}</span>
+                    <h3>{tr('Questionnaire and funnel', 'Опросник и воронка')}</h3>
+                  </div>
+                  <b>{onboardingProgress}%</b>
+                </div>
+                <div className="admin-user-journey-progress" aria-label={`${onboardingProgress}%`}>
+                  <span style={{ width: `${onboardingProgress}%` }} />
+                </div>
+                {onboarding ? (
+                  <>
+                    <div className="admin-user-journey-steps">
+                      <span className={onboarding.current_step ? 'done' : ''}>{tr('Started', 'Начат')}</span>
+                      <span className={onboarding.quiz_completed_at ? 'done' : ''}>{tr('Questionnaire', 'Опросник')}</span>
+                      <span className={onboarding.channel_subscribed_at ? 'done' : ''}>{tr('Channel', 'Канал')}</span>
+                      <span className={onboarding.channel_gate_completed_at ? 'done' : ''}>{tr('Trading', 'Трейдинг')}</span>
+                    </div>
+                    <div className="admin-user-profile-fields compact">
+                      <div><span>{tr('Experience', 'Опыт')}</span><strong>{onboarding.quiz_experience || '—'}</strong></div>
+                      <div><span>{tr('Broker experience', 'Опыт с брокером')}</span><strong>{onboarding.quiz_broker_experience || '—'}</strong></div>
+                      <div><span>{tr('Capital', 'Капитал')}</span><strong>{onboarding.quiz_capital || '—'}</strong></div>
+                      <div><span>{tr('Current step', 'Текущий этап')}</span><strong>{onboarding.current_step || '—'}</strong></div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="admin-user-empty-state">
+                    <strong>{tr('The funnel has not started', 'Воронка ещё не начата')}</strong>
+                    <span>{tr('The profile may have been created by an integration before the user opened the bot.', 'Профиль мог быть создан интеграцией до первого открытия бота.')}</span>
+                  </div>
+                )}
+              </section>
+
+              <section className="admin-user-profile-section">
+                <div className="admin-user-profile-section-head">
+                  <div>
+                    <span>{tr('Usage', 'Активность')}</span>
+                    <h3>{tr('Application activity', 'Активность в приложении')}</h3>
+                  </div>
+                </div>
+                <div className="admin-user-activity-grid">
+                  <div><strong>{formatCount(activity.analyses_total)}</strong><span>{tr('analyses', 'анализов')}</span></div>
+                  <div><strong>{formatCount(activity.analyses_active)}</strong><span>{tr('active', 'активных')}</span></div>
+                  <div><strong>{formatCount(activity.chats_count)}</strong><span>{tr('AI chats', 'AI-диалогов')}</span></div>
+                  <div><strong>{formatCount(activity.messages_count)}</strong><span>{tr('AI messages', 'AI-сообщений')}</span></div>
+                  <div><strong>{formatCount(activity.strategies_count)}</strong><span>{tr('custom strategies', 'своих стратегий')}</span></div>
+                </div>
+                <div className="admin-user-activity-foot">
+                  <span>{tr('Last analysis', 'Последний анализ')}</span>
+                  <strong>{formatAdminDate(activity.last_analysis_at)}</strong>
+                </div>
+              </section>
+            </div>
+          ) : null}
+
+          {profileTab === 'integrations' ? (
+          <>
 
           <section className="admin-user-pocket-panel">
             <div className="admin-user-pocket-head">
@@ -752,7 +939,7 @@ export default function UsersPage({ adminUser }) {
                   )}
                 </p>
               </div>
-              {!pocketLoading && !pocketError ? (
+              {!profileLoading && !profileError ? (
                 <div className="admin-user-pocket-statuses">
                   <span className={Number(pocket.pocket_registered) === 1 ? 'is-success' : 'is-muted'}>
                     {Number(pocket.pocket_registered) === 1
@@ -768,12 +955,10 @@ export default function UsersPage({ adminUser }) {
               ) : null}
             </div>
 
-            {pocketLoading ? (
+            {profileLoading ? (
               <div className="admin-user-pocket-message">{tr('Loading Pocket data…', 'Загружаем данные Pocket…')}</div>
             ) : null}
-            {pocketError ? <div className="admin-error">{pocketError}</div> : null}
-
-            {!pocketLoading && !pocketError ? (
+            {!profileLoading && !profileError ? (
               <>
                 <div className="admin-user-pocket-summary">
                   <div>
@@ -786,7 +971,7 @@ export default function UsersPage({ adminUser }) {
                   </div>
                   <div>
                     <span>{tr('Registration date', 'Дата регистрации')}</span>
-                    <strong>{formatArchiveDate(pocket.pocket_registered_at)}</strong>
+                    <strong>{formatAdminDate(pocket.pocket_registered_at)}</strong>
                   </div>
                   <div>
                     <span>{tr('Country', 'Страна')}</span>
@@ -798,7 +983,7 @@ export default function UsersPage({ adminUser }) {
                   </div>
                   <div>
                     <span>{tr('Event received', 'Событие получено')}</span>
-                    <strong>{latestPocketPostback ? formatArchiveDate(latestPocketPostback.created_at) : '—'}</strong>
+                    <strong>{latestPocketPostback ? formatAdminDate(latestPocketPostback.created_at) : '—'}</strong>
                   </div>
                 </div>
 
@@ -811,7 +996,7 @@ export default function UsersPage({ adminUser }) {
                     <div><span>Sub ID 1</span><code>{formatPocketValue(pocket.pocket_sub_id1)}</code></div>
                     <div><span>Sub ID 2 · AIO visit</span><code>{formatPocketValue(pocket.pocket_sub_id2)}</code></div>
                     <div><span>Sub ID 3 · Chatterfy</span><code>{formatPocketValue(pocket.pocket_sub_id3)}</code></div>
-                    <div><span>{tr('Last Pocket check', 'Последняя проверка Pocket')}</span><code>{formatArchiveDate(pocket.pocket_checked_at)}</code></div>
+                    <div><span>{tr('Last Pocket check', 'Последняя проверка Pocket')}</span><code>{formatAdminDate(pocket.pocket_checked_at)}</code></div>
                   </div>
                 </details>
 
@@ -825,7 +1010,7 @@ export default function UsersPage({ adminUser }) {
                         <article key={event.id} className="admin-user-pocket-event">
                           <div>
                             <strong>{getPocketEventLabel(event.event_slug, tr)}</strong>
-                            <span>{formatArchiveDate(event.created_at)}</span>
+                            <span>{formatAdminDate(event.created_at)}</span>
                           </div>
                           <div className="admin-user-pocket-event-meta">
                             <span>{tr('Pocket status', 'Статус Pocket')}: <b>{formatPocketValue(event.status)}</b></span>
@@ -868,12 +1053,10 @@ export default function UsersPage({ adminUser }) {
               </span>
             </div>
 
-            {pocketLoading ? (
+            {profileLoading ? (
               <div className="admin-user-pocket-message">{tr('Loading AIO data…', 'Загружаем данные AIO…')}</div>
             ) : null}
-            {pocketError ? <div className="admin-error">{pocketError}</div> : null}
-
-            {!pocketLoading && !pocketError ? (
+            {!profileLoading && !profileError ? (
               <>
                 <div className="admin-user-chatterfy-grid">
                   <div>
@@ -894,17 +1077,17 @@ export default function UsersPage({ adminUser }) {
                   <div>
                     <span>{tr('Inbound status', 'Статус входящего события')}</span>
                     <strong>{formatPocketValue(latestAioInbound?.status)}</strong>
-                    <small>{latestAioInbound ? formatArchiveDate(latestAioInbound.received_at) : '—'}</small>
+                    <small>{latestAioInbound ? formatAdminDate(latestAioInbound.received_at) : '—'}</small>
                   </div>
                   <div>
                     <span>{tr('Applied to profile', 'Применено к профилю')}</span>
                     <strong>{latestAioInbound?.applied_at ? tr('Yes', 'Да') : tr('No', 'Нет')}</strong>
-                    <small>{formatArchiveDate(latestAioInbound?.applied_at)}</small>
+                    <small>{formatAdminDate(latestAioInbound?.applied_at)}</small>
                   </div>
                   <div>
                     <span>{tr('Last outbound event', 'Последнее исходящее событие')}</span>
                     <strong>{formatPocketValue(latestAioOutbound?.event_slug)}</strong>
-                    <small>{latestAioOutbound ? formatArchiveDate(latestAioOutbound.created_at) : '—'}</small>
+                    <small>{latestAioOutbound ? formatAdminDate(latestAioOutbound.created_at) : '—'}</small>
                   </div>
                 </div>
 
@@ -918,11 +1101,11 @@ export default function UsersPage({ adminUser }) {
                         <article key={event.id} className="admin-user-pocket-event">
                           <div>
                             <strong>{event.country_code || '—'} · {event.status || '—'}</strong>
-                            <span>{formatArchiveDate(event.received_at)}</span>
+                            <span>{formatAdminDate(event.received_at)}</span>
                           </div>
                           <div className="admin-user-pocket-event-meta">
                             <span>Conversion UUID: <b>{formatPocketValue(event.conversion_type_uuid)}</b></span>
-                            <span>{tr('Applied', 'Применено')}: <b>{formatArchiveDate(event.applied_at)}</b></span>
+                            <span>{tr('Applied', 'Применено')}: <b>{formatAdminDate(event.applied_at)}</b></span>
                           </div>
                         </article>
                       ))}
@@ -944,7 +1127,7 @@ export default function UsersPage({ adminUser }) {
                         <article key={event.id} className="admin-user-pocket-event">
                           <div>
                             <strong>{formatPocketValue(event.event_slug)}</strong>
-                            <span>{formatArchiveDate(event.created_at)}</span>
+                            <span>{formatAdminDate(event.created_at)}</span>
                           </div>
                           <div className="admin-user-pocket-event-meta">
                             <span>{tr('Status', 'Статус')}: <b>{formatPocketValue(event.status)}</b></span>
@@ -983,12 +1166,10 @@ export default function UsersPage({ adminUser }) {
               </span>
             </div>
 
-            {pocketLoading ? (
+            {profileLoading ? (
               <div className="admin-user-pocket-message">{tr('Loading Chatterfy data…', 'Загружаем данные Chatterfy…')}</div>
             ) : null}
-            {pocketError ? <div className="admin-error">{pocketError}</div> : null}
-
-            {!pocketLoading && !pocketError ? (
+            {!profileLoading && !profileError ? (
               <>
                 <div className="admin-user-chatterfy-grid">
                   <div>
@@ -1027,7 +1208,83 @@ export default function UsersPage({ adminUser }) {
             ) : null}
           </section>
 
-          {canProfileEdit ? (
+          <section className={`admin-user-service-panel is-aichatter ${aiChatter.exists ? 'is-linked' : ''}`}>
+            <div className="admin-user-service-head">
+              <div>
+                <span className="admin-user-profile-permission-kicker">Account messaging</span>
+                <strong>AI Chatter</strong>
+                <p>
+                  {tr(
+                    'A separate messaging service connected to the Telegram account. Its status does not control the main bot.',
+                    'Отдельный сервис переписки, подключённый к Telegram-аккаунту. Его статус не управляет основным ботом.'
+                  )}
+                </p>
+              </div>
+              <span className={`admin-user-chatterfy-state ${aiChatter.available && aiChatter.exists ? 'is-success' : 'is-pending'}`}>
+                {!aiChatter.available
+                  ? tr('Service unavailable', 'Сервис недоступен')
+                  : (aiChatter.exists ? tr('Profile linked', 'Профиль связан') : tr('No profile', 'Профиля нет'))}
+              </span>
+            </div>
+
+            {!aiChatter.available ? (
+              <div className="admin-user-service-empty">
+                <strong>{tr('AI Chatter did not respond', 'AI Chatter не ответил')}</strong>
+                <span>{aiChatter.error || tr('The main user profile remains available.', 'Основной профиль пользователя продолжает работать.')}</span>
+              </div>
+            ) : null}
+
+            {aiChatter.available && !aiChatter.exists ? (
+              <div className="admin-user-service-empty">
+                <strong>{tr('There has been no conversation in AI Chatter yet', 'Диалога в AI Chatter ещё не было')}</strong>
+                <span>{tr('The Chatter profile will be linked automatically after the first contact or Pocket synchronization.', 'Профиль Chatter свяжется автоматически после первого контакта или синхронизации Pocket.')}</span>
+              </div>
+            ) : null}
+
+            {aiChatter.available && aiChatter.exists ? (
+              <>
+                <div className="admin-user-chatterfy-grid admin-user-aichatter-grid">
+                  <div><span>{tr('Funnel stage', 'Этап воронки')}</span><strong>{formatPocketValue(aiChatter.stage)}</strong><small>{formatAdminDate(aiChatter.stage_updated_at)}</small></div>
+                  <div><span>{tr('Messages', 'Сообщения')}</span><strong>{formatCount(aiChatter.messages_count)}</strong><small>{formatCount(aiChatter.inbound_messages)} in · {formatCount(aiChatter.outbound_messages)} out</small></div>
+                  <div><span>{tr('Media sent', 'Отправлено медиа')}</span><strong>{formatCount(aiChatter.funnel_media_sent)}</strong><small>{tr('funnel items', 'элементов воронки')}</small></div>
+                  <div><span>{tr('AI Chatter replies', 'Ответы AI Chatter')}</span><strong>{Number(aiChatter.bot_active) === 1 ? tr('Enabled', 'Включены') : tr('Disabled', 'Выключены')}</strong><small>{formatPocketValue(aiChatter.bot_block_reason)}</small></div>
+                  <div><span>{tr('Main bot AI', 'AI основного бота')}</span><strong>{Number(aiChatter.elizabeth_bot_active) === 1 ? tr('Enabled', 'Включён') : tr('Disabled', 'Выключен')}</strong><small>{tr('Separate profile', 'Отдельный профиль')}</small></div>
+                  <div><span>{tr('Last message', 'Последнее сообщение')}</span><strong>{formatAdminDate(aiChatter.last_message_at)}</strong><small>{aiChatter.latest_message?.direction || '—'}</small></div>
+                </div>
+                {aiChatter.latest_message?.text ? (
+                  <div className="admin-user-last-message">
+                    <span>{tr('Latest message preview', 'Последнее сообщение')}</span>
+                    <p>{aiChatter.latest_message.text}</p>
+                    <small>{formatAdminDate(aiChatter.latest_message.created_at)}</small>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </section>
+          </>
+          ) : null}
+
+          {profileTab === 'management' ? (
+          <section className="admin-user-profile-section admin-user-management-summary">
+            <div className="admin-user-profile-section-head">
+              <div>
+                <span>{tr('Control center', 'Центр управления')}</span>
+                <h3>{tr('Current restrictions and access', 'Текущие ограничения и доступы')}</h3>
+              </div>
+              <small>{tr('Changes apply immediately', 'Изменения применяются сразу')}</small>
+            </div>
+            <div className="admin-user-profile-fields">
+              <div><span>{tr('Application status', 'Статус приложения')}</span><strong className={!isBlocked ? 'is-positive' : ''}>{isBlocked ? tr('Blocked', 'Заблокировано') : tr('Access allowed', 'Доступ разрешён')}</strong></div>
+              <div><span>{tr('Profile editing', 'Редактирование профиля')}</span><strong>{profileEditingAllowed ? tr('Allowed', 'Разрешено') : tr('Forbidden', 'Запрещено')}</strong></div>
+              <div><span>Forex</span><strong className={hasAccess(selectedUser.forex_access) ? 'is-positive' : ''}>{hasAccess(selectedUser.forex_access) ? tr('Enabled', 'Включён') : tr('Disabled', 'Выключен')}</strong></div>
+              <div><span>Binary</span><strong className={hasAccess(selectedUser.binary_access) ? 'is-positive' : ''}>{hasAccess(selectedUser.binary_access) ? tr('Enabled', 'Включён') : tr('Disabled', 'Выключен')}</strong></div>
+              <div><span>{tr('Balance source', 'Источник баланса')}</span><strong>{Number(selectedUser.balance_sync_enabled) === 1 ? 'Pocket API' : tr('Administrator', 'Администратор')}</strong></div>
+              <div><span>{tr('Staff profile', 'Профиль сотрудника')}</span><strong>{Number(selectedUser.is_admin) === 1 ? tr('Yes — protected by staff rules', 'Да — защищён правилами сотрудников') : tr('No', 'Нет')}</strong></div>
+            </div>
+          </section>
+          ) : null}
+
+          {profileTab === 'management' && canProfileEdit ? (
           <div className={`admin-user-profile-permission ${profileEditingAllowed ? 'is-enabled' : ''}`}>
             <div className="admin-user-profile-permission-copy">
               <span className="admin-user-profile-permission-kicker">{tr('Personal permission', 'Персональное разрешение')}</span>
@@ -1062,6 +1319,40 @@ export default function UsersPage({ adminUser }) {
             </div>
           </div>
           ) : null}
+
+          {profileTab === 'data' ? (
+          <>
+          <section className="admin-user-profile-section admin-user-history-section">
+            <div className="admin-user-profile-section-head">
+              <div>
+                <span>{tr('Trading history', 'Торговая история')}</span>
+                <h3>{tr('Recent analyses', 'Последние анализы')}</h3>
+              </div>
+              <small>{formatCount(activity.recent_analyses?.length)} {tr('shown', 'показано')}</small>
+            </div>
+            {activity.recent_analyses?.length ? (
+              <div className="admin-user-history-list">
+                {activity.recent_analyses.map((analysis) => (
+                  <article key={analysis.id}>
+                    <span className={`is-${String(analysis.status || '').toLowerCase()}`} />
+                    <div>
+                      <strong>{analysis.pair || '—'} · {analysis.timeframe || '—'}</strong>
+                      <small>{analysis.strategy_name || analysis.analysis_type || '—'}</small>
+                    </div>
+                    <div>
+                      <b>{getAnalysisStatusLabel(analysis.status, tr)}</b>
+                      <small>{formatAdminDate(analysis.closed_at || analysis.created_at)}</small>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="admin-user-empty-state">
+                <strong>{tr('No analyses yet', 'Анализов пока нет')}</strong>
+                <span>{tr('Trading activity will appear here after the first analysis.', 'Торговая активность появится после первого анализа.')}</span>
+              </div>
+            )}
+          </section>
 
           {canArchiveClear ? (
           <div className="admin-user-cache-panel">
@@ -1103,8 +1394,10 @@ export default function UsersPage({ adminUser }) {
             </div>
           </div>
           ) : null}
+          </>
+          ) : null}
 
-          {(canEditAccess || canEditBalance || canBlock || canDelete) ? (
+          {profileTab === 'management' && (canEditAccess || canEditBalance || canBlock || canDelete) ? (
           <div className="admin-user-actions">
             <div className="admin-row-actions">
               {canEditAccess ? <button className="admin-btn-outline" onClick={openAccessModal} disabled={actionLoading}>
@@ -1356,7 +1649,7 @@ export default function UsersPage({ adminUser }) {
                   <div className="admin-archive-summary-grid">
                     <div>
                       <span>{tr('Created', 'Создан')}</span>
-                      <strong>{formatArchiveDate(archiveDetail.archived_at)}</strong>
+                      <strong>{formatAdminDate(archiveDetail.archived_at)}</strong>
                     </div>
                     <div>
                       <span>{tr('Records', 'Записей')}</span>
@@ -1491,7 +1784,7 @@ export default function UsersPage({ adminUser }) {
                       disabled={archiveDetailLoading}
                     >
                       <span className="admin-archive-row-date">
-                        <strong>{formatArchiveDate(archive.archived_at)}</strong>
+                        <strong>{formatAdminDate(archive.archived_at)}</strong>
                         <small>
                           {tr('Administrator', 'Администратор')}: {archive.archived_by_name || archive.archived_by}
                         </small>
@@ -1550,33 +1843,39 @@ export default function UsersPage({ adminUser }) {
           return (
             <button
               key={user.user_id}
-              className={`admin-entity-card ${blocked ? 'blocked' : ''}`}
+              className={`admin-entity-card admin-user-list-card ${blocked ? 'blocked' : ''}`}
               type="button"
               onClick={() => openUserCard(user.user_id)}
             >
-              <div className="admin-entity-head">
-                <div className="admin-entity-title">
+              <div className="admin-user-list-head">
+                <div className="admin-user-list-identity">
                   <div className="admin-user-avatar">
                     <span>{getInitials(user)}</span>
                     {avatarUrl ? (
                       <img src={avatarUrl} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                     ) : null}
                   </div>
-                  <span>{getDisplayName(user)}</span>
-                  <span className="admin-state-icon">{blocked ? '⛔' : '✅'}</span>
+                  <div>
+                    <strong>{getDisplayName(user)}</strong>
+                    <small>{user.username ? `@${String(user.username).replace(/^@/, '')}` : `ID ${user.user_id}`}</small>
+                  </div>
                 </div>
-                <span
-                  className="admin-entity-gear"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openUserCard(user.user_id);
-                  }}
-                >
-                  ⚙️
+                <span className={`admin-user-list-status ${blocked ? 'is-blocked' : 'is-active'}`}>
+                  {blocked ? tr('Blocked', 'Заблокирован') : tr('Active', 'Активен')}
                 </span>
               </div>
-              <div className="admin-entity-meta">
-                ID: {user.user_id} | Trader: {user.trader_id || '-'}{isManualTraderId(user) ? ` (${tr('manual', 'ручной')})` : ''} | {formatBalance(user.balance)} | Forex {hasAccess(user.forex_access) ? tr('enabled', 'есть') : tr('disabled', 'нет')} | Binary {hasAccess(user.binary_access) ? tr('enabled', 'есть') : tr('disabled', 'нет')} | {blocked ? 'blocked' : (user.mode || '-')}
+              <div className="admin-user-list-facts">
+                <div><span>Telegram ID</span><strong>{user.user_id}</strong></div>
+                <div><span>Trader ID</span><strong>{user.trader_id || '—'}{isManualTraderId(user) ? ' · M' : ''}</strong></div>
+                <div><span>{tr('Balance', 'Баланс')}</span><strong>{formatBalance(user.balance)}</strong></div>
+              </div>
+              <div className="admin-user-list-foot">
+                <div>
+                  <span className={hasAccess(user.forex_access) ? 'on' : ''}>Forex</span>
+                  <span className={hasAccess(user.binary_access) ? 'on' : ''}>Binary</span>
+                  <span>{user.mode || '—'}</span>
+                </div>
+                <b aria-hidden="true">→</b>
               </div>
             </button>
           );

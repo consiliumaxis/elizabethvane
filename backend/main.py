@@ -257,6 +257,7 @@ try:
     from backend.aichatter_admin import (
         clear_aichatter_user_data,
         create_aichatter_admin_router,
+        get_aichatter_user_summary,
         snapshot_aichatter_user_data,
         sync_aichatter_pocket_event,
         sync_shared_ai_access_settings,
@@ -265,6 +266,7 @@ except ModuleNotFoundError:
     from aichatter_admin import (
         clear_aichatter_user_data,
         create_aichatter_admin_router,
+        get_aichatter_user_summary,
         snapshot_aichatter_user_data,
         sync_aichatter_pocket_event,
         sync_shared_ai_access_settings,
@@ -4597,8 +4599,9 @@ async def admin_users(
     return {"status": "success", "users": users_rows or [], "total": total, "limit": limit, "offset": offset}
 
 
+@app.get("/api/admin/users/{target_user_id}/profile")
 @app.get("/api/admin/users/{target_user_id}/pocket")
-async def admin_user_pocket_details(
+async def admin_user_profile_details(
     target_user_id: int,
     admin=Depends(require_permission(PERM_USERS_VIEW)),
 ):
@@ -4627,6 +4630,82 @@ async def admin_user_pocket_details(
             pocket_row = await cur.fetchone()
             if not pocket_row:
                 raise HTTPException(status_code=404, detail="User not found")
+
+            user_row = await fetch_admin_user_row(cur, target_user_id)
+
+            await cur.execute(
+                """
+                SELECT quiz_name, quiz_age, quiz_experience, quiz_broker_experience,
+                       quiz_capital, current_step, quiz_completed_at,
+                       channel_subscribed_at, channel_gate_completed_at,
+                       created_at, updated_at
+                FROM user_onboarding
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (target_user_id,),
+            )
+            onboarding = await cur.fetchone()
+
+            await cur.execute(
+                """
+                SELECT COUNT(*) AS analyses_total,
+                       COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS analyses_active,
+                       COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS deals_won,
+                       COALESCE(SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END), 0) AS deals_lost,
+                       COALESCE(SUM(CASE WHEN status IN ('success', 'fail')
+                                         AND COALESCE(closed_at, updated_at, created_at) >= NOW() - INTERVAL 7 DAY
+                                        THEN 1 ELSE 0 END), 0) AS deals_7d,
+                       COALESCE(SUM(CASE WHEN status = 'success'
+                                         AND COALESCE(closed_at, updated_at, created_at) >= NOW() - INTERVAL 7 DAY
+                                        THEN 1 ELSE 0 END), 0) AS wins_7d,
+                       MAX(created_at) AS last_analysis_at
+                FROM user_analyses
+                WHERE user_id = %s
+                """,
+                (target_user_id,),
+            )
+            analysis_summary = await cur.fetchone() or {}
+
+            await cur.execute(
+                """
+                SELECT ua.id, ua.pair, ua.timeframe, ua.analysis_type, ua.market_kind,
+                       ua.status, ua.created_at, ua.closed_at,
+                       COALESCE(p.name, CAST(ua.strategy_id AS CHAR)) AS strategy_name
+                FROM user_analyses ua
+                LEFT JOIN presets p ON p.id = ua.strategy_id
+                WHERE ua.user_id = %s
+                ORDER BY ua.created_at DESC, ua.id DESC
+                LIMIT 8
+                """,
+                (target_user_id,),
+            )
+            recent_analyses = list(await cur.fetchall() or [])
+
+            await cur.execute(
+                """
+                SELECT COUNT(DISTINCT c.id) AS chats_count,
+                       COUNT(m.id) AS messages_count,
+                       MAX(m.created_at) AS last_ai_message_at
+                FROM ai_chats c
+                LEFT JOIN ai_messages m ON m.chat_id = c.id
+                WHERE c.user_id = %s
+                """,
+                (target_user_id,),
+            )
+            ai_app_summary = await cur.fetchone() or {}
+
+            await cur.execute(
+                "SELECT COUNT(*) AS cnt FROM user_presets WHERE user_id = %s",
+                (target_user_id,),
+            )
+            strategies_count = int((await cur.fetchone() or {}).get("cnt") or 0)
+
+            await cur.execute(
+                "SELECT COUNT(*) AS cnt FROM user_data_archives WHERE user_id = %s",
+                (target_user_id,),
+            )
+            archives_count = int((await cur.fetchone() or {}).get("cnt") or 0)
 
             await cur.execute(
                 """
@@ -4671,8 +4750,43 @@ async def admin_user_pocket_details(
             )
             aio_outbound_events = list(await cur.fetchall() or [])
 
+    deals_won = int(analysis_summary.get("deals_won") or 0)
+    deals_lost = int(analysis_summary.get("deals_lost") or 0)
+    completed_deals = deals_won + deals_lost
+    wins_7d = int(analysis_summary.get("wins_7d") or 0)
+    deals_7d = int(analysis_summary.get("deals_7d") or 0)
+    activity = {
+        **analysis_summary,
+        **ai_app_summary,
+        "completed_deals": completed_deals,
+        "winrate": round((deals_won / completed_deals) * 100, 1) if completed_deals else None,
+        "winrate_7d": round((wins_7d / deals_7d) * 100, 1) if deals_7d else None,
+        "strategies_count": strategies_count,
+        "archives_count": archives_count,
+        "recent_analyses": recent_analyses,
+    }
+
+    try:
+        ai_chatter = await get_aichatter_user_summary(target_user_id)
+    except HTTPException as exc:
+        ai_chatter = {
+            "available": False,
+            "exists": False,
+            "error": str(exc.detail or "AI Chatter is unavailable"),
+        }
+    except Exception:
+        ai_chatter = {
+            "available": False,
+            "exists": False,
+            "error": "AI Chatter is unavailable",
+        }
+
     return {
         "status": "success",
+        "user": user_row,
+        "onboarding": onboarding,
+        "activity": activity,
+        "ai_chatter": ai_chatter,
         "pocket": pocket_row,
         "postbacks": postbacks,
         "aio_inbound_postbacks": aio_inbound_postbacks,

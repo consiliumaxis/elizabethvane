@@ -96,7 +96,7 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertIn('Number(user.pocket_registered || 0) !== 1', profile)
         self.assertIn("'/api/user/registration-link'", profile)
         self.assertIn("{'{sub_id3}'}", settings)
-        self.assertIn('/api/admin/users/${encodeURIComponent(userId)}/pocket', users)
+        self.assertIn('/api/admin/users/${encodeURIComponent(userId)}/profile', users)
         self.assertIn("Pocket postback history", users)
         self.assertIn("Chatterfy Chat ID", users)
         self.assertIn("tracker.clickid", users)
