@@ -50,19 +50,6 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertEqual(query["sub_id2"], "")
         self.assertEqual(query["sub_id3"], "")
 
-    def test_chatterfy_tracker_click_id_does_not_need_to_be_a_uuid(self):
-        result = build_registration_url(
-            "https://u3.shortink.io/register",
-            click_id=7097261848,
-            tracker_click_id="2EOMxTrGEL",
-            chatterfy_lead_id="019ff2ff-aa55-7ee1-b141-279987e11101",
-        )
-        query = dict(parse_qsl(urlsplit(result).query, keep_blank_values=True))
-
-        self.assertEqual(query["click_id"], "7097261848")
-        self.assertEqual(query["sub_id2"], "2EOMxTrGEL")
-        self.assertEqual(query["sub_id3"], "019ff2ff-aa55-7ee1-b141-279987e11101")
-
     def test_fixed_campaign_value_is_not_overwritten_by_empty_duplicate(self):
         result = build_registration_url(
             "https://u3.shortink.io/register?cid=962430&cid={cid}&ac=elizabeth_vane_rev1&ac={ac}",
@@ -87,7 +74,7 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertIn('CHATTERFY_WEBHOOK_SECRET =', backend)
         self.assertIn('require_chatterfy_webhook_secret(supplied_secret)', backend)
         self.assertIn('tracker_click_id=str(tracker_click_id)', backend)
-        self.assertIn('pocket_sub_id2 = CASE', backend)
+        self.assertIn('chatterfy_tracker_click_id = CASE', backend)
         self.assertIn('text="Registration link"', backend)
         self.assertIn('not registration_link.get("registered")', backend)
         self.assertIn('Number(user.pocket_registered || 0) !== 1', profile)
@@ -97,6 +84,7 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertIn("Pocket postback history", users)
         self.assertIn("Chatterfy Chat ID", users)
         self.assertIn("tracker.clickid", users)
+        self.assertIn("pocket.chatterfy_tracker_click_id", users)
         self.assertIn("sub_id3 ←", users)
         self.assertIn("/link @username", managers)
         self.assertIn("get_registration_link_by_target(target_kind, target_value)", backend)

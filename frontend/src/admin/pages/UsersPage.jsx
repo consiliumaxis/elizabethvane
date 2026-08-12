@@ -97,6 +97,7 @@ const ARCHIVE_FIELD_LABELS = {
   pocket_trader_id: ['Pocket Trader ID', 'Trader ID от Pocket'],
   aio_visit_uuid: ['AIO visit ID', 'ID визита AIO'],
   chatterfy_lead_id: ['Chatterfy lead ID', 'ID лида Chatterfy'],
+  chatterfy_tracker_click_id: ['Chatterfy tracker click ID', 'Tracker Click ID Chatterfy'],
   event_slug: ['Event type', 'Тип события'],
   event_code: ['Event code', 'Код события'],
   unique_key: ['Unique event key', 'Уникальный ключ события'],
@@ -669,7 +670,7 @@ export default function UsersPage({ adminUser }) {
     const latestPocketPostback = pocketPostbacks[0] || null;
     const telegramChatId = pocket.user_id || selectedUser.user_id || '';
     const chatterfyChatId = pocket.chatterfy_lead_id || pocket.pocket_sub_id3 || '';
-    const trackerClickId = pocket.pocket_sub_id2 || pocket.aio_visit_uuid || '';
+    const trackerClickId = pocket.chatterfy_tracker_click_id || '';
     const chatterfyLinked = Boolean(chatterfyChatId);
     return (
       <div className="admin-card">
@@ -794,7 +795,7 @@ export default function UsersPage({ adminUser }) {
                     <div><span>Site ID</span><code>{formatPocketValue(pocket.pocket_site_id)}</code></div>
                     <div><span>CID</span><code>{formatPocketValue(pocket.pocket_cid)}</code></div>
                     <div><span>Sub ID 1</span><code>{formatPocketValue(pocket.pocket_sub_id1)}</code></div>
-                    <div><span>Sub ID 2 · Chatterfy tracker</span><code>{formatPocketValue(pocket.pocket_sub_id2 || pocket.aio_visit_uuid)}</code></div>
+                    <div><span>Sub ID 2 · AIO visit</span><code>{formatPocketValue(pocket.pocket_sub_id2 || pocket.aio_visit_uuid)}</code></div>
                     <div><span>Sub ID 3 · Chatterfy</span><code>{formatPocketValue(pocket.pocket_sub_id3 || pocket.chatterfy_lead_id)}</code></div>
                     <div><span>AIO visit UUID</span><code>{formatPocketValue(pocket.aio_visit_uuid)}</code></div>
                     <div><span>Chatterfy lead ID</span><code>{formatPocketValue(pocket.chatterfy_lead_id)}</code></div>
@@ -843,8 +844,8 @@ export default function UsersPage({ adminUser }) {
                 <strong>Chatterfy</strong>
                 <p>
                   {tr(
-                    'Identifiers received from the Chatterfy flow and used to build the personal registration URL.',
-                    'Идентификаторы из воронки Chatterfy, которые используются при сборке персональной ссылки регистрации.'
+                    'Chatterfy chat identifiers are linked to the Telegram user. The tracker click ID is stored separately from the AIO visit UUID.',
+                    'Идентификаторы чата Chatterfy связаны с Telegram-пользователем. Tracker Click ID хранится отдельно от UUID визита AIO.'
                   )}
                 </p>
               </div>
@@ -876,14 +877,14 @@ export default function UsersPage({ adminUser }) {
                   <div>
                     <span>Tracker Click ID <code>{'{tracker.clickid}'}</code></span>
                     <strong>{formatPocketValue(trackerClickId)}</strong>
-                    <small>sub_id2</small>
+                    <small>{tr('Stored separately', 'Хранится отдельно')}</small>
                   </div>
                 </div>
 
                 <div className="admin-user-chatterfy-map">
                   <span>{tr('Registration link mapping', 'Подстановка в ссылку регистрации')}</span>
                   <code>click_id ← {'{chatId}'}</code>
-                  <code>sub_id2 ← {'{tracker.clickid}'}</code>
+                  <code>sub_id2 ← AIO visit UUID</code>
                   <code>sub_id3 ← {'{id}'}</code>
                 </div>
 

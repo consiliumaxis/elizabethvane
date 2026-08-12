@@ -44,17 +44,15 @@ def build_registration_url(
     *,
     click_id: object,
     aio_visit_uuid: object = "",
-    tracker_click_id: object = None,
     chatterfy_lead_id: object = "",
     values: Optional[Mapping[str, object]] = None,
 ) -> str:
     """Build one Pocket registration URL without exposing data outside the URL.
 
-    The three tracking fields are always present. ``tracker_click_id`` is the
-    Chatterfy tracker value written to ``sub_id2``; the older
-    ``aio_visit_uuid`` argument remains as a backwards-compatible fallback.
-    Missing tracker or Chatterfy values intentionally stay empty so a single
-    admin template works for every client.
+    The three tracking fields are always present. ``aio_visit_uuid`` is written
+    to ``sub_id2`` and the Chatterfy chat ID is written to ``sub_id3``. Missing
+    AIO or Chatterfy values intentionally stay empty so a single admin template
+    works for every client.
     Fixed campaign values already present in the template take precedence over an
     empty duplicate placeholder (for example ``ac=fixed&ac={ac}``).
     """
@@ -66,10 +64,7 @@ def build_registration_url(
 
     replacements = {
         "click_id": _clean(click_id, 64),
-        "sub_id2": _clean(
-            tracker_click_id if tracker_click_id is not None else aio_visit_uuid,
-            255,
-        ),
+        "sub_id2": _clean(aio_visit_uuid, 255),
         "sub_id3": _clean(chatterfy_lead_id, 255),
         "date_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }

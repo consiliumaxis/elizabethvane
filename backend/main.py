@@ -2046,8 +2046,8 @@ def normalize_chatterfy_lead_id(value: object) -> str:
     return normalized
 
 
-def normalize_tracking_sub_id(value: object) -> str:
-    """Normalize an opaque tracker click ID without treating it as a UUID."""
+def normalize_chatterfy_tracker_click_id(value: object) -> str:
+    """Normalize the opaque Chatterfy tracker click ID."""
     normalized = str(value or "").strip()
     if not normalized or len(normalized) > 255:
         return ""
@@ -2080,16 +2080,16 @@ async def get_personal_registration_link(user_id: int) -> Optional[Dict[str, Any
         return None
 
     access_settings = await get_system_access_settings_row()
-    tracker_click_id = normalize_tracking_sub_id(user_row.get("pocket_sub_id2"))
-    if not tracker_click_id:
-        tracker_click_id = normalize_aio_visit_uuid(user_row.get("aio_visit_uuid")) or ""
+    aio_visit_uuid = normalize_aio_visit_uuid(user_row.get("aio_visit_uuid"))
+    if not aio_visit_uuid:
+        aio_visit_uuid = normalize_aio_visit_uuid(user_row.get("pocket_sub_id2")) or ""
     chatterfy_lead_id = normalize_chatterfy_lead_id(
         user_row.get("chatterfy_lead_id") or user_row.get("pocket_sub_id3")
     )
     registration_url = build_registration_url(
         access_settings.get("registration_url") or DEFAULT_REGISTRATION_URL,
         click_id=int(user_row["user_id"]),
-        tracker_click_id=tracker_click_id,
+        aio_visit_uuid=aio_visit_uuid,
         chatterfy_lead_id=chatterfy_lead_id,
         values={
             "site_id": user_row.get("pocket_site_id") or "",
@@ -2708,7 +2708,7 @@ async def bind_user_tracking_identity(
     if raw_aio_visit_uuid and not normalized_aio_visit_uuid:
         raise HTTPException(status_code=400, detail="Invalid aio_visit_uuid")
     raw_tracker_click_id = str(tracker_click_id or "").strip()
-    normalized_tracker_click_id = normalize_tracking_sub_id(raw_tracker_click_id)
+    normalized_tracker_click_id = normalize_chatterfy_tracker_click_id(raw_tracker_click_id)
     if raw_tracker_click_id and not normalized_tracker_click_id:
         raise HTTPException(status_code=400, detail="Invalid tracker_click_id")
     if not normalized_lead_id and not normalized_aio_visit_uuid and not normalized_tracker_click_id:
@@ -2733,11 +2733,11 @@ async def bind_user_tracking_identity(
                 """
                 INSERT INTO users (
                     user_id, aio_visit_uuid, chatterfy_lead_id,
-                    pocket_sub_id2, pocket_sub_id3, lang, mode
+                    chatterfy_tracker_click_id, lang, mode
                 )
                 VALUES (
                     %s, NULLIF(%s, ''), NULLIF(%s, ''),
-                    NULLIF(%s, ''), NULLIF(%s, ''), 'ru', 'forex'
+                    NULLIF(%s, ''), 'ru', 'forex'
                 )
                 ON DUPLICATE KEY UPDATE
                     aio_visit_uuid = CASE
@@ -2748,13 +2748,10 @@ async def bind_user_tracking_identity(
                         WHEN VALUES(chatterfy_lead_id) IS NOT NULL THEN VALUES(chatterfy_lead_id)
                         ELSE chatterfy_lead_id
                     END,
-                    pocket_sub_id2 = CASE
-                        WHEN VALUES(pocket_sub_id2) IS NOT NULL THEN VALUES(pocket_sub_id2)
-                        ELSE pocket_sub_id2
-                    END,
-                    pocket_sub_id3 = CASE
-                        WHEN VALUES(pocket_sub_id3) IS NOT NULL THEN VALUES(pocket_sub_id3)
-                        ELSE pocket_sub_id3
+                    chatterfy_tracker_click_id = CASE
+                        WHEN VALUES(chatterfy_tracker_click_id) IS NOT NULL
+                            THEN VALUES(chatterfy_tracker_click_id)
+                        ELSE chatterfy_tracker_click_id
                     END
                 """,
                 (
@@ -2762,7 +2759,6 @@ async def bind_user_tracking_identity(
                     normalized_aio_visit_uuid,
                     normalized_lead_id,
                     normalized_tracker_click_id,
-                    normalized_lead_id,
                 ),
             )
     return {
@@ -2814,15 +2810,19 @@ async def receive_chatterfy_lead_postback(request: Request):
         or ""
     )
     raw_aio_visit_uuid = str(payload.get("aio_visit_uuid") or payload.get("visit_uuid") or "").strip()
-    tracker_click_id = (
+    explicit_tracker_click_id = (
         payload.get("tracker_click_id")
         or payload.get("tracker.clickid")
         or payload.get("tracker_clickid")
         or payload.get("clickid")
-        or raw_aio_visit_uuid
         or ""
     )
     aio_visit_uuid = normalize_aio_visit_uuid(raw_aio_visit_uuid) or ""
+    tracker_click_id = explicit_tracker_click_id
+    if not tracker_click_id and raw_aio_visit_uuid and not aio_visit_uuid:
+        # Compatibility with the original URL where tracker.clickid was sent
+        # under the aio_visit_uuid query key.
+        tracker_click_id = raw_aio_visit_uuid
     tracking = await bind_user_tracking_identity(
         user_id,
         chatterfy_lead_id=str(lead_id),
@@ -3477,6 +3477,7 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                 reset_parts = [
                     "aio_visit_uuid = NULL",
                     "chatterfy_lead_id = NULL",
+                    "chatterfy_tracker_click_id = NULL",
                     "trader_id = NULL",
                     "profile_name = NULL",
                     "profile_trader_id = NULL",
@@ -4224,7 +4225,8 @@ async def admin_user_pocket_details(
                        COALESCE(pocket_deposited, 0) AS pocket_deposited,
                        pocket_registered_at,
                        COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
-                       country, pocket_checked_at, aio_visit_uuid, chatterfy_lead_id
+                       country, pocket_checked_at, aio_visit_uuid, chatterfy_lead_id,
+                       chatterfy_tracker_click_id
                 FROM users
                 WHERE user_id = %s
                 LIMIT 1
