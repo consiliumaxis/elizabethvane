@@ -4680,18 +4680,34 @@ async def admin_users(
     limit: int = 50,
     offset: int = 0,
     search: str = "",
+    pocket_status: str = "all",
     admin=Depends(require_permission(PERM_USERS_VIEW)),
 ):
     limit = max(1, min(int(limit), 300))
     offset = max(0, int(offset))
     search = (search or "").strip()
     like = f"%{search}%"
+    pocket_status = str(pocket_status or "all").strip().lower()
+    pocket_filter_sql = {
+        "all": "1 = 1",
+        "not_registered": (
+            "COALESCE(u.pocket_registered, 0) = 0 "
+            "AND COALESCE(u.pocket_deposited, 0) = 0"
+        ),
+        "registered": (
+            "COALESCE(u.pocket_registered, 0) = 1 "
+            "AND COALESCE(u.pocket_deposited, 0) = 0"
+        ),
+        "deposited": "COALESCE(u.pocket_deposited, 0) = 1",
+    }.get(pocket_status)
+    if not pocket_filter_sql:
+        raise HTTPException(status_code=400, detail="Unknown Pocket status filter")
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             try:
                 await cur.execute(
-                    """
+                    f"""
                     SELECT u.user_id, u.username,
                            u.first_name AS telegram_first_name,
                            COALESCE(NULLIF(TRIM(u.profile_name), ''), u.first_name) AS first_name,
@@ -4718,7 +4734,8 @@ async def admin_users(
                     LEFT JOIN admin_users a ON a.user_id = u.user_id AND a.role = 'admin'
                     LEFT JOIN user_mode_access fx ON fx.user_id = u.user_id AND fx.mode = 'forex'
                     LEFT JOIN user_mode_access bin ON bin.user_id = u.user_id AND bin.mode = 'binary'
-                    WHERE (
+                    WHERE {pocket_filter_sql}
+                      AND (
                         %s = ''
                         OR CAST(u.user_id AS CHAR) LIKE %s
                         OR COALESCE(u.username, '') LIKE %s
@@ -4735,7 +4752,7 @@ async def admin_users(
                 users_rows = await cur.fetchall()
             except Exception:
                 await cur.execute(
-                    """
+                    f"""
                     SELECT u.user_id, u.username, u.first_name AS telegram_first_name,
                            u.first_name, NULL AS profile_name, u.avatar_url, u.mode, u.lang, u.strategy_id,
                            NULL AS pocket_trader_id, NULL AS trader_id, NULL AS profile_trader_id,
@@ -4751,7 +4768,8 @@ async def admin_users(
                     FROM users u
                     LEFT JOIN presets p ON p.id = u.strategy_id
                     LEFT JOIN admin_users a ON a.user_id = u.user_id AND a.role = 'admin'
-                    WHERE (%s = '' OR CAST(u.user_id AS CHAR) LIKE %s OR COALESCE(u.username, '') LIKE %s OR COALESCE(u.first_name, '') LIKE %s)
+                    WHERE {pocket_filter_sql}
+                      AND (%s = '' OR CAST(u.user_id AS CHAR) LIKE %s OR COALESCE(u.username, '') LIKE %s OR COALESCE(u.first_name, '') LIKE %s)
                     ORDER BY u.user_id DESC
                     LIMIT %s OFFSET %s
                     """,
@@ -4760,10 +4778,11 @@ async def admin_users(
                 users_rows = await cur.fetchall()
 
             await cur.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS cnt
                 FROM users u
-                WHERE (
+                WHERE {pocket_filter_sql}
+                  AND (
                     %s = ''
                     OR CAST(u.user_id AS CHAR) LIKE %s
                     OR COALESCE(u.username, '') LIKE %s
@@ -4777,7 +4796,14 @@ async def admin_users(
             )
             total = int((await cur.fetchone() or {}).get("cnt") or 0)
 
-    return {"status": "success", "users": users_rows or [], "total": total, "limit": limit, "offset": offset}
+    return {
+        "status": "success",
+        "users": users_rows or [],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "pocket_status": pocket_status,
+    }
 
 
 @app.get("/api/admin/users/{target_user_id}/profile")

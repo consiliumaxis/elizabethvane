@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiAdminFetchJson } from '../../lib/api';
 import { useAdminLocale } from '../useAdminLocale';
 import { PERMISSIONS, hasPermission } from '../permissions';
@@ -337,6 +337,7 @@ export default function UsersPage({ adminUser }) {
   const canBlock = hasPermission(adminUser, PERMISSIONS.usersBlock);
   const canDelete = hasPermission(adminUser, PERMISSIONS.usersDelete);
   const [search, setSearch] = useState('');
+  const [pocketStatus, setPocketStatus] = useState('all');
   const [users, setUsers] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -360,8 +361,9 @@ export default function UsersPage({ adminUser }) {
   const [confirmationValue, setConfirmationValue] = useState('');
   const [accessForm, setAccessForm] = useState({ forex: true, binary: true });
   const [balanceForm, setBalanceForm] = useState({ balance: '0.00', sync: false });
+  const initialLoadStarted = useRef(false);
 
-  const loadUsers = useCallback(async (currentSearch = '') => {
+  const loadUsers = useCallback(async (currentSearch = '', currentPocketStatus = 'all') => {
     setLoading(true);
     setError('');
     try {
@@ -369,6 +371,7 @@ export default function UsersPage({ adminUser }) {
         limit: '100',
         offset: '0',
         search: currentSearch.trim(),
+        pocket_status: currentPocketStatus,
       });
       const res = await apiAdminFetchJson(`/api/admin/users?${query.toString()}`);
       const rows = res.users || [];
@@ -429,7 +432,9 @@ export default function UsersPage({ adminUser }) {
   }, [tr]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => loadUsers(''), 0);
+    if (initialLoadStarted.current) return undefined;
+    initialLoadStarted.current = true;
+    const timer = window.setTimeout(() => loadUsers('', 'all'), 0);
     return () => window.clearTimeout(timer);
   }, [loadUsers]);
 
@@ -454,7 +459,13 @@ export default function UsersPage({ adminUser }) {
 
   const onSubmit = (e) => {
     e.preventDefault();
-    loadUsers(search);
+    loadUsers(search, pocketStatus);
+  };
+
+  const applyPocketStatus = (nextStatus) => {
+    if (nextStatus === pocketStatus || loading) return;
+    setPocketStatus(nextStatus);
+    loadUsers(search, nextStatus);
   };
 
   const openUserCard = (userId) => {
@@ -1858,6 +1869,27 @@ export default function UsersPage({ adminUser }) {
         />
         <button className="admin-btn" type="submit">{tr('Search', 'Найти')}</button>
       </form>
+
+      <div className="admin-user-pocket-filters" role="group" aria-label={tr('Filter users by Pocket status', 'Фильтр пользователей по статусу Pocket')}>
+        {[
+          { value: 'all', icon: '●', en: 'All', ru: 'Все' },
+          { value: 'not_registered', icon: '○', en: 'No registration', ru: 'Без регистрации' },
+          { value: 'registered', icon: '✅', en: 'Registered', ru: 'Регистрация' },
+          { value: 'deposited', icon: '💵', en: 'Deposited', ru: 'С депозитом' },
+        ].map((filter) => (
+          <button
+            key={filter.value}
+            className={pocketStatus === filter.value ? 'active' : ''}
+            type="button"
+            aria-pressed={pocketStatus === filter.value}
+            onClick={() => applyPocketStatus(filter.value)}
+            disabled={loading}
+          >
+            <span aria-hidden="true">{filter.icon}</span>
+            {tr(filter.en, filter.ru)}
+          </button>
+        ))}
+      </div>
 
       {error ? <div className="admin-error">{error}</div> : null}
       {loading ? <div className="admin-muted">{tr('Loading…', 'Загрузка...')}</div> : null}

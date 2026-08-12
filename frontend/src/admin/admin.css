@@ -1040,6 +1040,55 @@
   font-weight: 850;
 }
 
+.admin-user-pocket-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: -2px 0 12px;
+}
+
+.admin-user-pocket-filters button {
+  min-width: 0;
+  min-height: 37px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid rgba(143, 106, 46, 0.2);
+  border-radius: 11px;
+  background: rgba(255, 250, 242, 0.82);
+  color: var(--text-secondary);
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.15;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.admin-user-pocket-filters button:hover:not(:disabled) {
+  border-color: rgba(143, 106, 46, 0.42);
+  background: rgba(255, 252, 246, 0.98);
+}
+
+.admin-user-pocket-filters button.active {
+  border-color: rgba(143, 106, 46, 0.62);
+  background: linear-gradient(135deg, #9a7128, #765218);
+  color: #fffaf0;
+  box-shadow: 0 5px 12px rgba(100, 68, 20, 0.18);
+}
+
+.admin-user-pocket-filters button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.admin-user-pocket-filters button > span {
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
 .admin-user-list-statuses {
   flex: 0 0 auto;
   display: flex;
@@ -1764,6 +1813,10 @@
 }
 
 @media (max-width: 560px) {
+  .admin-user-pocket-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .admin-user-list-facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
