@@ -669,7 +669,7 @@ export default function UsersPage({ adminUser }) {
     const pocketPostbacks = pocketDetails?.postbacks || [];
     const latestPocketPostback = pocketPostbacks[0] || null;
     const telegramChatId = pocket.user_id || selectedUser.user_id || '';
-    const chatterfyChatId = pocket.chatterfy_lead_id || pocket.pocket_sub_id3 || '';
+    const chatterfyChatId = pocket.chatterfy_lead_id || '';
     const trackerClickId = pocket.chatterfy_tracker_click_id || '';
     const chatterfyLinked = Boolean(chatterfyChatId);
     return (
@@ -795,8 +795,8 @@ export default function UsersPage({ adminUser }) {
                     <div><span>Site ID</span><code>{formatPocketValue(pocket.pocket_site_id)}</code></div>
                     <div><span>CID</span><code>{formatPocketValue(pocket.pocket_cid)}</code></div>
                     <div><span>Sub ID 1</span><code>{formatPocketValue(pocket.pocket_sub_id1)}</code></div>
-                    <div><span>Sub ID 2 · AIO visit</span><code>{formatPocketValue(pocket.pocket_sub_id2 || pocket.aio_visit_uuid)}</code></div>
-                    <div><span>Sub ID 3 · Chatterfy</span><code>{formatPocketValue(pocket.pocket_sub_id3 || pocket.chatterfy_lead_id)}</code></div>
+                    <div><span>Sub ID 2 · AIO visit</span><code>{formatPocketValue(pocket.pocket_sub_id2)}</code></div>
+                    <div><span>Sub ID 3 · Chatterfy</span><code>{formatPocketValue(pocket.pocket_sub_id3)}</code></div>
                     <div><span>{tr('Last Pocket check', 'Последняя проверка Pocket')}</span><code>{formatArchiveDate(pocket.pocket_checked_at)}</code></div>
                   </div>
                 </details>
