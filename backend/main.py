@@ -2589,6 +2589,28 @@ async def send_aio_postback_event(
     return {"status": final_status, "event_id": event_id, "response_status": response_status, "error": error_text}
 
 
+async def send_pending_chatterfy_start_event(user_id: int) -> Dict[str, Any]:
+    """Deliver Start Chatterfy once a preliminary profile also has an AIO visit UUID."""
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT chatterfy_lead_id, aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1",
+                (int(user_id),),
+            )
+            user_row = await cur.fetchone() or {}
+    if not normalize_chatterfy_lead_id(user_row.get("chatterfy_lead_id")):
+        return {"status": "skipped", "reason": "missing_chatterfy_lead_id"}
+    if not normalize_aio_visit_uuid(user_row.get("aio_visit_uuid")):
+        return {"status": "pending", "reason": "missing_aio_visit_uuid"}
+    return await send_aio_postback_event(
+        int(user_id),
+        CHATTERFY_START_EVENT,
+        unique_key=f"{CHATTERFY_START_EVENT}:{int(user_id)}",
+    )
+
+
 async def send_pocket_aio_delivery(
     *,
     user_id: int,
@@ -2671,6 +2693,8 @@ class ChatterfyLeadBindingRequest(BaseModel):
     chatterfy_lead_id: str
     aio_visit_uuid: str = ""
     tracker_click_id: str = ""
+    first_name: str = ""
+    username: str = ""
 
 
 def require_ai_chatter_gateway_secret(supplied_secret: str) -> None:
@@ -2693,6 +2717,8 @@ async def bind_user_tracking_identity(
     chatterfy_lead_id: str = "",
     aio_visit_uuid: str = "",
     tracker_click_id: str = "",
+    first_name: str = "",
+    username: str = "",
 ) -> Dict[str, str]:
     if not db_pool:
         raise HTTPException(status_code=503, detail="Database is unavailable")
@@ -2711,8 +2737,18 @@ async def bind_user_tracking_identity(
     normalized_tracker_click_id = normalize_chatterfy_tracker_click_id(raw_tracker_click_id)
     if raw_tracker_click_id and not normalized_tracker_click_id:
         raise HTTPException(status_code=400, detail="Invalid tracker_click_id")
-    if not normalized_lead_id and not normalized_aio_visit_uuid and not normalized_tracker_click_id:
-        raise HTTPException(status_code=400, detail="At least one tracking ID is required")
+    normalized_first_name = str(first_name or "").strip()[:255]
+    normalized_username = str(username or "").strip().lstrip("@")[:255]
+    if normalized_username and not re.fullmatch(r"[A-Za-z0-9_]{5,32}", normalized_username):
+        normalized_username = ""
+    if (
+        not normalized_lead_id
+        and not normalized_aio_visit_uuid
+        and not normalized_tracker_click_id
+        and not normalized_first_name
+        and not normalized_username
+    ):
+        raise HTTPException(status_code=400, detail="At least one profile value is required")
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -2732,14 +2768,26 @@ async def bind_user_tracking_identity(
             await cur.execute(
                 """
                 INSERT INTO users (
-                    user_id, aio_visit_uuid, chatterfy_lead_id,
+                    user_id, username, first_name, aio_visit_uuid, chatterfy_lead_id,
                     chatterfy_tracker_click_id, lang, mode
                 )
                 VALUES (
-                    %s, NULLIF(%s, ''), NULLIF(%s, ''),
-                    NULLIF(%s, ''), 'ru', 'forex'
+                    %s, NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''),
+                    NULLIF(%s, ''), NULLIF(%s, ''), 'ru', 'forex'
                 )
                 ON DUPLICATE KEY UPDATE
+                    username = CASE
+                        WHEN VALUES(username) IS NOT NULL
+                             AND (username IS NULL OR TRIM(username) = '')
+                            THEN VALUES(username)
+                        ELSE username
+                    END,
+                    first_name = CASE
+                        WHEN VALUES(first_name) IS NOT NULL
+                             AND (first_name IS NULL OR TRIM(first_name) = '')
+                            THEN VALUES(first_name)
+                        ELSE first_name
+                    END,
                     aio_visit_uuid = CASE
                         WHEN VALUES(aio_visit_uuid) IS NOT NULL THEN VALUES(aio_visit_uuid)
                         ELSE aio_visit_uuid
@@ -2756,15 +2804,26 @@ async def bind_user_tracking_identity(
                 """,
                 (
                     int(user_id),
+                    normalized_username,
+                    normalized_first_name,
                     normalized_aio_visit_uuid,
                     normalized_lead_id,
                     normalized_tracker_click_id,
                 ),
             )
+            await cur.executemany(
+                """
+                INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
+                VALUES (%s, %s, 0, NULL)
+                """,
+                [(int(user_id), "forex"), (int(user_id), "binary")],
+            )
     return {
         "aio_visit_uuid": normalized_aio_visit_uuid,
         "chatterfy_lead_id": normalized_lead_id,
         "tracker_click_id": normalized_tracker_click_id,
+        "first_name": normalized_first_name,
+        "username": normalized_username,
     }
 
 
@@ -2780,6 +2839,8 @@ async def receive_chatterfy_lead_binding(
         chatterfy_lead_id=payload.chatterfy_lead_id,
         aio_visit_uuid=payload.aio_visit_uuid,
         tracker_click_id=payload.tracker_click_id,
+        first_name=payload.first_name,
+        username=payload.username,
     )
     return {"status": "ok", "tracking": tracking}
 
@@ -2823,17 +2884,29 @@ async def receive_chatterfy_lead_postback(request: Request):
         # Compatibility with the original URL where tracker.clickid was sent
         # under the aio_visit_uuid query key.
         tracker_click_id = raw_aio_visit_uuid
+    first_name = (
+        payload.get("first_name")
+        or payload.get("tg_first_name")
+        or payload.get("telegram_first_name")
+        or payload.get("tg_name")
+        or payload.get("name")
+        or ""
+    )
+    username = (
+        payload.get("tg_username")
+        or payload.get("telegram_username")
+        or payload.get("username")
+        or ""
+    )
     tracking = await bind_user_tracking_identity(
         user_id,
         chatterfy_lead_id=str(lead_id),
         aio_visit_uuid=str(aio_visit_uuid),
         tracker_click_id=str(tracker_click_id),
+        first_name=str(first_name),
+        username=str(username),
     )
-    event_result = await send_aio_postback_event(
-        user_id,
-        CHATTERFY_START_EVENT,
-        unique_key=f"{CHATTERFY_START_EVENT}:{user_id}",
-    )
+    event_result = await send_pending_chatterfy_start_event(user_id)
     return {"status": "ok", "tracking": tracking, "event": event_result}
 
 
@@ -2847,14 +2920,21 @@ async def receive_ai_chatter_dialog_start(
     if payload.user_id <= 0:
         raise HTTPException(status_code=400, detail="user_id must be positive")
 
-    if payload.chatterfy_lead_id or payload.aio_visit_uuid:
+    if (
+        payload.chatterfy_lead_id
+        or payload.aio_visit_uuid
+        or payload.first_name
+        or payload.username
+    ):
         await bind_user_tracking_identity(
             payload.user_id,
             chatterfy_lead_id=payload.chatterfy_lead_id,
             aio_visit_uuid=payload.aio_visit_uuid,
+            first_name=payload.first_name,
+            username=payload.username,
         )
 
-    event_result = await send_aio_postback_event(payload.user_id, CHATTERFY_START_EVENT)
+    event_result = await send_pending_chatterfy_start_event(payload.user_id)
     return {"status": "ok", "event": event_result}
 
 
@@ -3033,6 +3113,39 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "invalid_deposit_amount", telegram_id, source_ip)
         return {"status": "skipped", "reason": "invalid_deposit_amount", "log_id": log_id}
 
+    if chatterfy_lead_id_from_postback:
+        async with db_pool.acquire() as identity_conn:
+            async with identity_conn.cursor(aiomysql.DictCursor) as identity_cur:
+                await identity_cur.execute(
+                    """
+                    SELECT user_id
+                    FROM users
+                    WHERE user_id <> %s
+                      AND (chatterfy_lead_id = %s OR pocket_sub_id3 = %s)
+                    LIMIT 1
+                    """,
+                    (
+                        int(telegram_id),
+                        chatterfy_lead_id_from_postback,
+                        chatterfy_lead_id_from_postback,
+                    ),
+                )
+                conflicting_user = await identity_cur.fetchone()
+        if conflicting_user:
+            log_id = await insert_pocket_postback_log(
+                normalized,
+                payload,
+                "skipped",
+                "chatterfy_lead_conflict",
+                telegram_id,
+                source_ip,
+            )
+            return {
+                "status": "skipped",
+                "reason": "chatterfy_lead_conflict",
+                "log_id": log_id,
+            }
+
     if event_slug == POCKET_DEPOSIT_EVENT and not normalized.get("provider_event_id"):
         minute_bucket = datetime.utcnow().strftime("%Y%m%d%H%M")
         normalized["unique_key"] = f"{normalized.get('unique_key')}:{minute_bucket}"[:191]
@@ -3056,9 +3169,32 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                 )
                 user_row = await cur.fetchone()
                 if not user_row:
-                    await conn.rollback()
-                    log_id = await insert_pocket_postback_log(normalized, payload, "skipped", "user_not_found", telegram_id, source_ip)
-                    return {"status": "skipped", "reason": "user_not_found", "log_id": log_id}
+                    await cur.execute(
+                        """
+                        INSERT INTO users (
+                            user_id, aio_visit_uuid, chatterfy_lead_id, lang, mode
+                        )
+                        VALUES (%s, NULLIF(%s, ''), NULLIF(%s, ''), 'ru', 'forex')
+                        ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)
+                        """,
+                        (
+                            int(telegram_id),
+                            aio_visit_uuid_from_postback,
+                            chatterfy_lead_id_from_postback,
+                        ),
+                    )
+                    await cur.executemany(
+                        """
+                        INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
+                        VALUES (%s, %s, 0, NULL)
+                        """,
+                        [(int(telegram_id), "forex"), (int(telegram_id), "binary")],
+                    )
+                    user_row = {
+                        "user_id": int(telegram_id),
+                        "aio_visit_uuid": aio_visit_uuid_from_postback,
+                        "chatterfy_lead_id": chatterfy_lead_id_from_postback,
+                    }
 
                 if event_slug == POCKET_DEPOSIT_EVENT and not normalized.get("provider_event_id"):
                     await cur.execute(
@@ -3187,6 +3323,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         deposit_amount=f"{deposit_amount:.2f}",
         total_deposit_amount=f"{total_deposit_amount:.2f}",
     )
+    chatterfy_start_result = await send_pending_chatterfy_start_event(int(telegram_id))
     try:
         aichatter_result = await sync_aichatter_pocket_event(
             user_id=int(telegram_id),
@@ -3231,6 +3368,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         "access_granted": access_granted,
         "access_policy": signal_access_status.get("policy"),
         "aio": aio_result,
+        "chatterfy_start": chatterfy_start_result,
         "aichatter": aichatter_result,
         "chatterfy": chatterfy_result,
     }
@@ -8973,6 +9111,7 @@ async def cmd_start(message: types.Message):
                 )
 
     asyncio.create_task(send_aio_postback_event(user_id, "bot_start"))
+    asyncio.create_task(send_pending_chatterfy_start_event(user_id))
     asyncio.create_task(send_aio_user_fields(user_id, first_name=first_name, username=username))
     ai_chat_ready = await route_user_after_start(
         message,

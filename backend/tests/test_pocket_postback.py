@@ -62,6 +62,14 @@ class PocketPostbackSourceTest(unittest.TestCase):
         self.assertIn("sync_aichatter_pocket_event", source)
         self.assertIn("clickid=sub_id3", source)
 
+    def test_postback_creates_and_enriches_profile_before_bot_start(self):
+        source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+
+        self.assertIn("INSERT INTO users (\n                            user_id, aio_visit_uuid, chatterfy_lead_id, lang, mode", source)
+        self.assertNotIn('"user_not_found", telegram_id, source_ip', source)
+        self.assertIn('"chatterfy_lead_conflict"', source)
+        self.assertIn("send_pending_chatterfy_start_event(int(telegram_id))", source)
+
 
 if __name__ == "__main__":
     unittest.main()

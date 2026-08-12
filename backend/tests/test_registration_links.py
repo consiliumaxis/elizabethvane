@@ -50,6 +50,18 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertEqual(query["sub_id2"], "")
         self.assertEqual(query["sub_id3"], "")
 
+    def test_precontact_profile_link_keeps_chatterfy_id_without_aio_id(self):
+        result = build_registration_url(
+            "https://u3.shortink.io/register?click_id={click_id}&sub_id2={sub_id2}&sub_id3={sub_id3}",
+            click_id=7097261848,
+            chatterfy_lead_id="019ff304-efe6-7884-bfd8-f3c541007eef",
+        )
+        query = dict(parse_qsl(urlsplit(result).query, keep_blank_values=True))
+
+        self.assertEqual(query["click_id"], "7097261848")
+        self.assertEqual(query["sub_id2"], "")
+        self.assertEqual(query["sub_id3"], "019ff304-efe6-7884-bfd8-f3c541007eef")
+
     def test_fixed_campaign_value_is_not_overwritten_by_empty_duplicate(self):
         result = build_registration_url(
             "https://u3.shortink.io/register?cid=962430&cid={cid}&ac=elizabeth_vane_rev1&ac={ac}",
@@ -74,8 +86,11 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertIn('CHATTERFY_WEBHOOK_SECRET =', backend)
         self.assertIn('require_chatterfy_webhook_secret(supplied_secret)', backend)
         self.assertIn('tracker_click_id=str(tracker_click_id)', backend)
+        self.assertIn('first_name=str(first_name)', backend)
+        self.assertIn('username=str(username)', backend)
         self.assertIn('chatterfy_tracker_click_id = CASE', backend)
-        self.assertIn('unique_key=f"{CHATTERFY_START_EVENT}:{user_id}"', backend)
+        self.assertIn('send_pending_chatterfy_start_event(user_id)', backend)
+        self.assertIn("AND (username IS NULL OR TRIM(username) = '')", backend)
         self.assertIn('text="Registration link"', backend)
         self.assertIn('not registration_link.get("registered")', backend)
         self.assertIn('Number(user.pocket_registered || 0) !== 1', profile)

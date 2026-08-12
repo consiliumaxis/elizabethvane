@@ -200,7 +200,7 @@ class AichatterAdminTest(unittest.TestCase):
         self.assertIn('@app.post("/api/internal/aichatter/dialog-start")', backend)
         self.assertIn("require_ai_chatter_gateway_secret(x_ai_chatter_secret)", backend)
         self.assertIn("secrets.compare_digest(str(supplied_secret or \"\"), AI_CHATTER_GATEWAY_SECRET)", backend)
-        self.assertIn("send_aio_postback_event(payload.user_id, CHATTERFY_START_EVENT)", backend)
+        self.assertIn("send_pending_chatterfy_start_event(payload.user_id)", backend)
         self.assertIn("AI_CHATTER_AIO_EVENT_URL", config)
         self.assertIn("async def notify_aio_dialog_start", bot)
         self.assertIn('headers={"X-AI-Chatter-Secret": AI_CHATTER_GATEWAY_SECRET}', bot)
