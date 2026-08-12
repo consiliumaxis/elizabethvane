@@ -255,7 +255,6 @@ async def get_aichatter_user_summary(telegram_id: int) -> Dict[str, Any]:
     """
     telegram_id = int(telegram_id)
     pool = await _get_pool()
-    await _ensure_ai_settings_schema(pool)
 
     async with pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
         await cur.execute(
