@@ -15,6 +15,10 @@ AIO_FIELD_TRIGGER_BASE_URL = (os.getenv("AIO_FIELD_TRIGGER_BASE_URL") or "https:
 AIO_POCKET_REGISTRATION_CONVERSION_TYPE_UUID = (os.getenv("AIO_POCKET_REGISTRATION_CONVERSION_TYPE_UUID") or "").strip()
 AIO_POCKET_FTD_CONVERSION_TYPE_UUID = (os.getenv("AIO_POCKET_FTD_CONVERSION_TYPE_UUID") or "").strip()
 AIO_POCKET_DEPOSIT_CONVERSION_TYPE_UUID = (os.getenv("AIO_POCKET_DEPOSIT_CONVERSION_TYPE_UUID") or "").strip()
+AIO_CHATTERFY_START_CONVERSION_TYPE_UUID = (
+    os.getenv("AIO_CHATTERFY_START_CONVERSION_TYPE_UUID")
+    or "a39ea9ab-20ec-4628-8f19-ee8dcd6d25b9"
+).strip()
 AIO_USER_FIELD_NAMES = frozenset(
     {
         "tg_first_name",
@@ -90,9 +94,16 @@ def build_aio_postback_url(
     if not normalized_event_slug:
         raise ValueError("AIO event slug is invalid")
 
+    conversion_type_uuid = normalized_event_slug
+    if normalized_event_slug == "start_chatterfy":
+        conversion_type_uuid = _configured_uuid(
+            "AIO_CHATTERFY_START_CONVERSION_TYPE_UUID",
+            AIO_CHATTERFY_START_CONVERSION_TYPE_UUID,
+        )
+
     params = {
         "visit_uuid": visit_uuid,
-        "conversion_type_uuid": normalized_event_slug,
+        "conversion_type_uuid": conversion_type_uuid,
         "arrived_revenue": normalize_aio_revenue(revenue),
     }
     normalized_currency = str(currency or "").strip().upper()

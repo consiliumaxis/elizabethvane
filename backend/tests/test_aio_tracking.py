@@ -3,6 +3,7 @@ import unittest
 
 from aio_tracking import (
     build_aio_field_trigger_url,
+    build_aio_postback_url,
     build_aio_pocket_deposit_conversion_url,
     build_aio_pocket_ftd_conversion_url,
     build_aio_pocket_registration_conversion_url,
@@ -20,11 +21,13 @@ class AioTrackingTest(unittest.TestCase):
                 "AIO_POCKET_REGISTRATION_CONVERSION_TYPE_UUID",
                 "AIO_POCKET_FTD_CONVERSION_TYPE_UUID",
                 "AIO_POCKET_DEPOSIT_CONVERSION_TYPE_UUID",
+                "AIO_CHATTERFY_START_CONVERSION_TYPE_UUID",
             )
         }
         os.environ["AIO_POCKET_REGISTRATION_CONVERSION_TYPE_UUID"] = "68909ba1-2f86-44ed-97af-3a521017fe45"
         os.environ["AIO_POCKET_FTD_CONVERSION_TYPE_UUID"] = "69d70644-42bf-44de-82b2-be76891ebeb5"
         os.environ["AIO_POCKET_DEPOSIT_CONVERSION_TYPE_UUID"] = "427e553c-8ba2-4c24-8935-f27ea372f70a"
+        os.environ["AIO_CHATTERFY_START_CONVERSION_TYPE_UUID"] = "a39ea9ab-20ec-4628-8f19-ee8dcd6d25b9"
 
     def tearDown(self):
         for key, value in self.previous_env.items():
@@ -43,6 +46,16 @@ class AioTrackingTest(unittest.TestCase):
     def test_normalizes_revenue(self):
         self.assertEqual(normalize_aio_revenue("12.345"), "12.35")
         self.assertEqual(normalize_aio_revenue(None), "0.00")
+
+    def test_builds_start_chatterfy_conversion_url_with_configured_uuid(self):
+        url = build_aio_postback_url(
+            "10ac5afb-cbce-4465-95dc-d22a2f735574",
+            "start_chatterfy",
+            unique_key="start_chatterfy:7097261848",
+        )
+
+        self.assertIn("conversion_type_uuid=a39ea9ab-20ec-4628-8f19-ee8dcd6d25b9", url)
+        self.assertIn("unique=start_chatterfy%3A7097261848", url)
 
     def test_builds_pocket_registration_conversion_url(self):
         url = build_aio_pocket_registration_conversion_url(

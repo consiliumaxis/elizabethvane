@@ -75,6 +75,7 @@ class RegistrationLinksTest(unittest.TestCase):
         self.assertIn('require_chatterfy_webhook_secret(supplied_secret)', backend)
         self.assertIn('tracker_click_id=str(tracker_click_id)', backend)
         self.assertIn('chatterfy_tracker_click_id = CASE', backend)
+        self.assertIn('unique_key=f"{CHATTERFY_START_EVENT}:{user_id}"', backend)
         self.assertIn('text="Registration link"', backend)
         self.assertIn('not registration_link.get("registered")', backend)
         self.assertIn('Number(user.pocket_registered || 0) !== 1', profile)

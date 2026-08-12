@@ -2829,7 +2829,12 @@ async def receive_chatterfy_lead_postback(request: Request):
         aio_visit_uuid=str(aio_visit_uuid),
         tracker_click_id=str(tracker_click_id),
     )
-    return {"status": "ok", "tracking": tracking}
+    event_result = await send_aio_postback_event(
+        user_id,
+        CHATTERFY_START_EVENT,
+        unique_key=f"{CHATTERFY_START_EVENT}:{user_id}",
+    )
+    return {"status": "ok", "tracking": tracking, "event": event_result}
 
 
 @app.post("/api/internal/aichatter/dialog-start")
