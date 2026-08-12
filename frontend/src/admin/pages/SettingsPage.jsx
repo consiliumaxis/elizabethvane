@@ -443,6 +443,8 @@ export default function SettingsPage({ adminUser }) {
   const [systemAccessPolicy, setSystemAccessPolicy] = useState('registration_deposit');
   const [systemMinDeposit, setSystemMinDeposit] = useState('0.00');
   const [systemRegistrationUrl, setSystemRegistrationUrl] = useState('');
+  const [registrationButtonBotEnabled, setRegistrationButtonBotEnabled] = useState(true);
+  const [registrationButtonAppEnabled, setRegistrationButtonAppEnabled] = useState(true);
   const [channelId, setChannelId] = useState('-1003584421739');
   const [channelUrl, setChannelUrl] = useState('');
   const [checkSubscriptionEnabled, setCheckSubscriptionEnabled] = useState(true);
@@ -570,6 +572,8 @@ export default function SettingsPage({ adminUser }) {
       setSystemAccessPolicy(nextPolicy);
       setSystemMinDeposit(access.min_deposit_amount !== null && access.min_deposit_amount !== undefined ? String(access.min_deposit_amount) : '0.00');
       setSystemRegistrationUrl(access.registration_url || '');
+      setRegistrationButtonBotEnabled(Boolean(Number(access.registration_button_bot_enabled ?? 1)));
+      setRegistrationButtonAppEnabled(Boolean(Number(access.registration_button_app_enabled ?? 1)));
     } catch (e) {
       setError(e.message || tr('Could not load settings', 'Не удалось загрузить настройки'));
     }
@@ -817,6 +821,8 @@ export default function SettingsPage({ adminUser }) {
           policy: systemAccessPolicy,
           min_deposit_amount: systemAccessPolicy === 'registration_deposit' ? minDeposit : 0,
           registration_url: systemRegistrationUrl.trim(),
+          registration_button_bot_enabled: registrationButtonBotEnabled,
+          registration_button_app_enabled: registrationButtonAppEnabled,
         };
       }
 
@@ -1780,6 +1786,67 @@ export default function SettingsPage({ adminUser }) {
             )}
           </div>
         </div>
+
+        <section className="admin-registration-visibility">
+          <div className="admin-registration-visibility-head">
+            <div>
+              <span>{tr('Button visibility', 'Отображение кнопок')}</span>
+              <strong>{tr('Where users can get their personal link', 'Где пользователь может получить персональную ссылку')}</strong>
+            </div>
+            <small>
+              {tr(
+                'The /link manager command remains available regardless of these settings.',
+                'Команда менеджера /link работает независимо от этих настроек.'
+              )}
+            </small>
+          </div>
+
+          <div className="admin-registration-visibility-grid">
+            <div className={registrationButtonBotEnabled ? 'is-enabled' : ''}>
+              <div>
+                <span className="admin-registration-channel">Telegram Bot</span>
+                <strong>{tr('Show button in bot', 'Показывать кнопку в боте')}</strong>
+                <p>
+                  {tr(
+                    'Adds “Registration link” to the main bot menu for users who have not registered yet.',
+                    'Добавляет кнопку «Ссылка на регистрацию» в главное меню бота для пользователей без регистрации.'
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                className={`admin-user-profile-switch ${registrationButtonBotEnabled ? 'on' : 'off'}`}
+                onClick={() => setRegistrationButtonBotEnabled((value) => !value)}
+                aria-pressed={registrationButtonBotEnabled}
+              >
+                <span aria-hidden="true" />
+                <b>{registrationButtonBotEnabled ? tr('Shown', 'Показывается') : tr('Hidden', 'Скрыта')}</b>
+              </button>
+            </div>
+
+            <div className={registrationButtonAppEnabled ? 'is-enabled' : ''}>
+              <div>
+                <span className="admin-registration-channel">Elizabeth App</span>
+                <strong>{tr('Show button in app', 'Показывать кнопку в приложении')}</strong>
+                <p>
+                  {tr(
+                    'Shows the personal registration-link card in the user profile until registration is confirmed.',
+                    'Показывает карточку получения персональной ссылки в профиле до подтверждения регистрации.'
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                className={`admin-user-profile-switch ${registrationButtonAppEnabled ? 'on' : 'off'}`}
+                onClick={() => setRegistrationButtonAppEnabled((value) => !value)}
+                aria-pressed={registrationButtonAppEnabled}
+              >
+                <span aria-hidden="true" />
+                <b>{registrationButtonAppEnabled ? tr('Shown', 'Показывается') : tr('Hidden', 'Скрыта')}</b>
+              </button>
+            </div>
+          </div>
+        </section>
 
         <div className="admin-row-actions">
           <button className="admin-btn" onClick={() => saveSettings('access')} disabled={saving}>

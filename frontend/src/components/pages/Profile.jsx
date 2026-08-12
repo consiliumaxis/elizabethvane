@@ -56,6 +56,7 @@ export default function Profile({
   const forexAvailable = Number(user.forex_access ?? 1) === 1;
   const binaryAvailable = Number(user.binary_access ?? 1) === 1;
   const profileEditingAllowed = Number(user.profile_edit_allowed || 0) === 1;
+  const registrationLinkAppEnabled = Number(user.registration_link_app_enabled ?? 1) === 1;
   const selectedStrategy = strategies.find(s => s.id === user.strategy_id) || {};
 
   const systemStrategies = strategies.filter(s => s.is_system === 1);
@@ -352,7 +353,7 @@ export default function Profile({
           </div>
         )}
 
-        {!isDemo && Number(user.pocket_registered || 0) !== 1 ? (
+        {!isDemo && registrationLinkAppEnabled && Number(user.pocket_registered || 0) !== 1 ? (
           <section className="registration-link-card" aria-label={t.profile.registrationLinkTitle}>
             <div className="registration-link-copy">
               <span className="registration-link-kicker">Pocket Option</span>

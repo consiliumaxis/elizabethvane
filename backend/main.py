@@ -2004,6 +2004,18 @@ async def affiliate_user_info(
     )
 
 
+def normalize_settings_toggle(value: object, default: int = 1) -> int:
+    if value is None:
+        return 1 if default else 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"", "0", "false", "no", "off", "none"}:
+            return 0
+        if normalized in {"1", "true", "yes", "on"}:
+            return 1
+    return 1 if bool(value) else 0
+
+
 def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     policy = normalize_access_policy((row or {}).get("policy"))
     min_deposit = normalize_min_deposit((row or {}).get("min_deposit_amount"))
@@ -2011,6 +2023,12 @@ def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str,
         "policy": policy,
         "min_deposit_amount": str(min_deposit),
         "registration_url": str((row or {}).get("registration_url") or DEFAULT_REGISTRATION_URL).strip(),
+        "registration_button_bot_enabled": normalize_settings_toggle(
+            (row or {}).get("registration_button_bot_enabled"), 1
+        ),
+        "registration_button_app_enabled": normalize_settings_toggle(
+            (row or {}).get("registration_button_app_enabled"), 1
+        ),
         "updated_at": (row or {}).get("updated_at"),
         "updated_by": (row or {}).get("updated_by"),
     }
@@ -2022,6 +2040,8 @@ async def get_system_access_settings_row() -> Dict[str, Any]:
             "policy": ACCESS_POLICY_REGISTRATION_DEPOSIT,
             "min_deposit_amount": "0",
             "registration_url": DEFAULT_REGISTRATION_URL,
+            "registration_button_bot_enabled": 1,
+            "registration_button_app_enabled": 1,
         }
     )
     if not db_pool:
@@ -2031,7 +2051,9 @@ async def get_system_access_settings_row() -> Dict[str, Any]:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
                     """
-                    SELECT policy, min_deposit_amount, registration_url, updated_at, updated_by
+                    SELECT policy, min_deposit_amount, registration_url,
+                           registration_button_bot_enabled, registration_button_app_enabled,
+                           updated_at, updated_by
                     FROM admin_system_access_settings
                     WHERE id = 1
                     LIMIT 1
@@ -2109,6 +2131,12 @@ async def get_personal_registration_link(user_id: int) -> Optional[Dict[str, Any
     return {
         "url": registration_url,
         "registered": truthy_db(user_row.get("pocket_registered")) == 1,
+        "show_in_bot": normalize_settings_toggle(
+            access_settings.get("registration_button_bot_enabled"), 1
+        ) == 1,
+        "show_in_app": normalize_settings_toggle(
+            access_settings.get("registration_button_app_enabled"), 1
+        ) == 1,
     }
 
 
@@ -6111,9 +6139,24 @@ async def admin_settings_update(
                         (partner_id, int(admin["user_id"]), 1 if clear_token else 0),
                     )
             if isinstance(system_access_data, dict) and system_access_data:
+                await cur.execute(
+                    """
+                    SELECT registration_button_bot_enabled, registration_button_app_enabled
+                    FROM admin_system_access_settings
+                    WHERE id = 1
+                    LIMIT 1
+                    """
+                )
+                current_visibility = await cur.fetchone() or (1, 1)
                 access_policy = normalize_access_policy(system_access_data.get("policy"))
                 min_deposit = normalize_min_deposit(system_access_data.get("min_deposit_amount"))
                 registration_url = str(system_access_data.get("registration_url") or "").strip()
+                registration_button_bot_enabled = normalize_settings_toggle(
+                    system_access_data.get("registration_button_bot_enabled", current_visibility[0]), 1
+                )
+                registration_button_app_enabled = normalize_settings_toggle(
+                    system_access_data.get("registration_button_app_enabled", current_visibility[1]), 1
+                )
                 if registration_url:
                     parsed_registration_url = urlsplit(registration_url)
                     if parsed_registration_url.scheme not in {"http", "https"} or not parsed_registration_url.netloc:
@@ -6123,15 +6166,26 @@ async def admin_settings_update(
                 await cur.execute(
                     """
                     INSERT INTO admin_system_access_settings
-                        (id, policy, min_deposit_amount, registration_url, updated_by)
-                    VALUES (1, %s, %s, %s, %s)
+                        (id, policy, min_deposit_amount, registration_url,
+                         registration_button_bot_enabled, registration_button_app_enabled,
+                         updated_by)
+                    VALUES (1, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         policy = VALUES(policy),
                         min_deposit_amount = VALUES(min_deposit_amount),
                         registration_url = VALUES(registration_url),
+                        registration_button_bot_enabled = VALUES(registration_button_bot_enabled),
+                        registration_button_app_enabled = VALUES(registration_button_app_enabled),
                         updated_by = VALUES(updated_by)
                     """,
-                    (access_policy, str(min_deposit), registration_url or None, int(admin["user_id"])),
+                    (
+                        access_policy,
+                        str(min_deposit),
+                        registration_url or None,
+                        registration_button_bot_enabled,
+                        registration_button_app_enabled,
+                        int(admin["user_id"]),
+                    ),
                 )
                 shared_sync["registration_url"] = registration_url
                 shared_sync["min_deposit"] = str(min_deposit)
@@ -7313,12 +7367,16 @@ async def get_profile(user=Depends(get_telegram_user)):
     if user:
         forex_status = await get_signal_access_status(int(user_id), "forex")
         binary_status = await get_signal_access_status(int(user_id), "binary")
+        access_settings = await get_system_access_settings_row()
         admin_center_access = await has_admin_center_access(int(user_id))
         user["forex_access"] = 1 if truthy_db(forex_status.get("access")) == 1 else 0
         user["binary_access"] = 1 if truthy_db(binary_status.get("access")) == 1 else 0
         user["access_policy"] = forex_status.get("policy")
         user["is_admin"] = 1 if admin_center_access else 0
         user["admin_url"] = build_admin_webapp_url() if admin_center_access else ""
+        user["registration_link_app_enabled"] = normalize_settings_toggle(
+            access_settings.get("registration_button_app_enabled"), 1
+        )
     return user or {"error": "Not found"}
 
 
@@ -8477,7 +8535,11 @@ async def build_main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
     except Exception as exc:
         registration_link = None
         print(f"[Bot] registration link button failed for user={user_id}: {exc}")
-    if registration_link and not registration_link.get("registered"):
+    if (
+        registration_link
+        and registration_link.get("show_in_bot")
+        and not registration_link.get("registered")
+    ):
         keyboard_rows.append(
             [
                 InlineKeyboardButton(
