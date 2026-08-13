@@ -81,6 +81,25 @@ class AccessPolicySourceTest(unittest.TestCase):
         self.assertIn(".admin-access-policy-text", css)
         self.assertIn("grid-template-columns: 28px minmax(0, 1fr) auto", css)
 
+    def test_admin_access_ui_has_subsections_country_flags_and_shared_save(self):
+        ui = (PROJECT_ROOT / "frontend/src/admin/pages/SettingsPage.jsx").read_text(encoding="utf-8")
+        css = (PROJECT_ROOT / "frontend/src/admin/admin.css").read_text(encoding="utf-8")
+
+        self.assertIn("country-flag-icons/react/3x2", ui)
+        self.assertIn("function DepositCountryFlag", ui)
+        self.assertIn("const [accessEditorTab", ui)
+        self.assertIn("tr('Access', 'Доступ')", ui)
+        self.assertIn("tr('Link', 'Ссылка')", ui)
+        self.assertIn("tr('Deposits', 'Депозиты')", ui)
+        self.assertIn("admin-deposit-country-search", ui)
+        self.assertIn("filteredDepositCountries", ui)
+        self.assertIn("The button saves settings from all three subsections.", ui)
+        self.assertIn("tr('Save', 'Сохранить')", ui)
+        self.assertIn("saveSettings('access')", ui)
+        self.assertIn(".admin-access-tabs", css)
+        self.assertIn(".admin-deposit-country-menu", css)
+        self.assertIn(".admin-access-save-panel", css)
+
     def test_frontend_shows_signal_gate_modal_on_access_denied(self):
         modal = PROJECT_ROOT / "frontend/src/components/SignalGateModal.jsx"
         self.assertTrue(modal.exists(), "SignalGateModal should be available in Elizabeth frontend")

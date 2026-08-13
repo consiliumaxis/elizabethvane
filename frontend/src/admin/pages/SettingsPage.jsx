@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as CountryFlags from 'country-flag-icons/react/3x2';
 import { apiAdminFetchJson } from '../../lib/api';
 import { useAdminLocale } from '../useAdminLocale';
 import { PERMISSIONS, hasPermission } from '../permissions';
@@ -27,6 +28,23 @@ const DEFAULT_DEPOSIT_THRESHOLDS = {
   vip_deposit_amount: '30.00',
   copy_deposit_amount: '50.00',
 };
+
+function DepositCountryFlag({ countryCode, title = '' }) {
+  const normalizedCode = String(countryCode || '').trim().toUpperCase() === 'UK'
+    ? 'GB'
+    : String(countryCode || '').trim().toUpperCase();
+  const Flag = CountryFlags[normalizedCode];
+
+  if (!Flag) {
+    return (
+      <span className="admin-country-flag admin-country-flag-fallback" aria-hidden="true">
+        {normalizedCode || '—'}
+      </span>
+    );
+  }
+
+  return <Flag className="admin-country-flag" title={title || normalizedCode} />;
+}
 const STREAM_ANALYSIS_TYPES = [
   { key: 'forex', title: 'Forex' },
   { key: 'binary', title: 'Binary' },
@@ -471,9 +489,13 @@ export default function SettingsPage({ adminUser }) {
   const [streamMarketLoading, setStreamMarketLoading] = useState(false);
 
   const [systemAccessPolicy, setSystemAccessPolicy] = useState('registration_deposit');
+  const [accessEditorTab, setAccessEditorTab] = useState('access');
   const [depositDefaults, setDepositDefaults] = useState(DEFAULT_DEPOSIT_THRESHOLDS);
   const [depositCountries, setDepositCountries] = useState([]);
   const [selectedDepositCountryCode, setSelectedDepositCountryCode] = useState('UA');
+  const [depositCountryPickerOpen, setDepositCountryPickerOpen] = useState(false);
+  const [depositCountrySearch, setDepositCountrySearch] = useState('');
+  const depositCountryPickerRef = useRef(null);
   const [addingDepositCountry, setAddingDepositCountry] = useState(false);
   const [newDepositCountry, setNewDepositCountry] = useState({
     country_code: '',
@@ -644,6 +666,30 @@ export default function SettingsPage({ adminUser }) {
   }, [loadAll]);
 
   useEffect(() => {
+    if (!depositCountryPickerOpen) return undefined;
+
+    const closeOnOutsidePress = (event) => {
+      if (!depositCountryPickerRef.current?.contains(event.target)) {
+        setDepositCountryPickerOpen(false);
+        setDepositCountrySearch('');
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setDepositCountryPickerOpen(false);
+        setDepositCountrySearch('');
+      }
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePress);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePress);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [depositCountryPickerOpen]);
+
+  useEffect(() => {
     let cancelled = false;
     const loadMarketOptions = async () => {
       if (activeSection !== 'streams' || !streamMarket) {
@@ -752,6 +798,7 @@ export default function SettingsPage({ adminUser }) {
       prepared: prepareThresholdValues(item),
     }));
     if (shouldSaveAccess && !preparedDepositDefaults) {
+      setAccessEditorTab('deposits');
       setError(tr(
         'Check the default deposit levels: values must be positive and ordered Minimum ≤ VIP ≤ Copy.',
         'Проверьте резервные уровни: значения не могут быть отрицательными и должны идти в порядке Минимум ≤ VIP ≤ Copy.'
@@ -762,6 +809,7 @@ export default function SettingsPage({ adminUser }) {
       ? preparedDepositCountries.find((item) => !item.prepared)
       : null;
     if (invalidDepositCountry) {
+      setAccessEditorTab('deposits');
       setError(tr(
         `Check deposit levels for ${invalidDepositCountry.country_name || invalidDepositCountry.country_code}.`,
         `Проверьте уровни депозитов для ${invalidDepositCountry.country_name || invalidDepositCountry.country_code}.`
@@ -1248,15 +1296,42 @@ export default function SettingsPage({ adminUser }) {
     setError('');
   };
 
+  const countryDisplayNames = useMemo(() => {
+    try {
+      return new Intl.DisplayNames([language === 'ru' ? 'ru' : 'en'], { type: 'region' });
+    } catch {
+      return null;
+    }
+  }, [language]);
+  const getDepositCountryName = useCallback((item) => {
+    const storedName = String(item?.country_name || '').trim();
+    const countryCode = String(item?.country_code || '').trim().toUpperCase();
+    if (item?.is_custom) return storedName || countryCode;
+    const localizedName = countryDisplayNames?.of(countryCode);
+    return localizedName && localizedName !== countryCode
+      ? localizedName
+      : storedName || countryCode;
+  }, [countryDisplayNames]);
   const sortedDepositCountries = useMemo(
     () => [...depositCountries].sort((left, right) => (
-      String(left.country_name || left.country_code).localeCompare(
-        String(right.country_name || right.country_code),
+      getDepositCountryName(left).localeCompare(
+        getDepositCountryName(right),
         language === 'ru' ? 'ru' : 'en'
       )
     )),
-    [depositCountries, language]
+    [depositCountries, getDepositCountryName, language]
   );
+  const filteredDepositCountries = useMemo(() => {
+    const query = String(depositCountrySearch || '').trim().toLocaleLowerCase(
+      language === 'ru' ? 'ru' : 'en'
+    );
+    if (!query) return sortedDepositCountries;
+    return sortedDepositCountries.filter((item) => (
+      `${getDepositCountryName(item)} ${item.country_name || ''} ${item.country_code || ''}`
+        .toLocaleLowerCase(language === 'ru' ? 'ru' : 'en')
+        .includes(query)
+    ));
+  }, [depositCountrySearch, getDepositCountryName, language, sortedDepositCountries]);
   const selectedDepositCountry = depositCountries.find(
     (item) => item.country_code === selectedDepositCountryCode
   ) || null;
@@ -1271,6 +1346,14 @@ export default function SettingsPage({ adminUser }) {
         ? { ...item, [field]: value }
         : item
     )));
+  };
+
+  const selectDepositCountry = (countryCode) => {
+    setSelectedDepositCountryCode(countryCode);
+    setDepositCountryPickerOpen(false);
+    setDepositCountrySearch('');
+    setAddingDepositCountry(false);
+    setError('');
   };
 
   const openAddDepositCountry = () => {
@@ -1315,6 +1398,8 @@ export default function SettingsPage({ adminUser }) {
       },
     ]);
     setSelectedDepositCountryCode(countryCode);
+    setDepositCountryPickerOpen(false);
+    setDepositCountrySearch('');
     setAddingDepositCountry(false);
     setError('');
   };
@@ -1874,6 +1959,12 @@ export default function SettingsPage({ adminUser }) {
   }
 
   if (activeSection === 'access') {
+    const accessTabs = [
+      ['access', '🔐', tr('Access', 'Доступ'), tr('Signal rules', 'Правила сигналов')],
+      ['link', '🔗', tr('Link', 'Ссылка'), tr('Registration', 'Регистрация')],
+      ['deposits', '💵', tr('Deposits', 'Депозиты'), tr('GEO levels', 'Уровни GEO')],
+    ];
+
     return (
       <div className="admin-card admin-settings-detail">
         <div className="admin-row-between">
@@ -1881,184 +1972,90 @@ export default function SettingsPage({ adminUser }) {
           <button className="admin-btn-outline" onClick={goMenu}>{tr('← Back to settings', '← К карточкам')}</button>
         </div>
 
-        <section className="admin-access-section">
-          <div className="admin-access-section-head">
-            <span className="admin-access-section-number">1</span>
-            <div>
-              <h4>{tr('Signal access rule', 'Правило доступа к сигналам')}</h4>
+        <div className="admin-access-tabs" role="tablist" aria-label={tr('System access sections', 'Разделы доступа к системе')}>
+          {accessTabs.map(([key, icon, label, caption]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={accessEditorTab === key}
+              className={accessEditorTab === key ? 'active' : ''}
+              onClick={() => {
+                setAccessEditorTab(key);
+                setDepositCountryPickerOpen(false);
+                setDepositCountrySearch('');
+                setError('');
+                setStatus('');
+              }}
+            >
+              <span aria-hidden="true">{icon}</span>
+              <b>{label}</b>
+              <small>{caption}</small>
+            </button>
+          ))}
+        </div>
+
+        {accessEditorTab === 'access' ? (
+          <section className="admin-access-section admin-access-panel">
+            <div className="admin-access-panel-head">
+              <span>{tr('Signal access', 'Доступ к сигналам')}</span>
+              <h4>{tr('Automatic access rule', 'Автоматическое правило доступа')}</h4>
               <p>{tr(
-                'Choose the automatic rule. A personal allow or deny in the user profile always has priority.',
-                'Выберите автоматическое правило. Персональное разрешение или запрет в карточке пользователя всегда имеет приоритет.'
+                'Choose when signals become available. A personal allow or deny in the user profile always has priority.',
+                'Выберите, когда пользователю откроются сигналы. Персональное разрешение или запрет в карточке пользователя всегда имеет приоритет.'
               )}</p>
             </div>
-          </div>
-          <div className="admin-access-policy-list">
-            {accessPolicies.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className={`admin-access-policy ${systemAccessPolicy === item.key ? 'active' : ''}`}
-                onClick={() => setSystemAccessPolicy(item.key)}
-              >
-                <span className="admin-access-radio">{systemAccessPolicy === item.key ? '●' : '○'}</span>
-                <span className="admin-access-policy-text">
-                  <strong>{item.title}</strong>
-                  <small>{item.description}</small>
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
+            <div className="admin-access-policy-list">
+              {accessPolicies.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`admin-access-policy ${systemAccessPolicy === item.key ? 'active' : ''}`}
+                  onClick={() => setSystemAccessPolicy(item.key)}
+                >
+                  <span className="admin-access-radio">{systemAccessPolicy === item.key ? '●' : '○'}</span>
+                  <span className="admin-access-policy-text">
+                    <strong>{item.title}</strong>
+                    <small>{item.description}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
-        <section className="admin-access-section admin-deposit-settings">
-          <div className="admin-access-section-head">
-            <span className="admin-access-section-number">2</span>
-            <div>
+        {accessEditorTab === 'deposits' ? (
+          <section className="admin-access-section admin-access-panel admin-deposit-settings">
+            <div className="admin-access-panel-head">
+              <span>{tr('Deposit rules', 'Правила депозитов')}</span>
               <h4>{tr('Deposit levels by country', 'Уровни депозитов по странам')}</h4>
               <p>{tr(
                 'AIO GEO selects the country rule. Pocket GEO is stored separately for diagnostics. FTD and repeat deposits are accumulated.',
                 'GEO из AIO выбирает правило страны. GEO Pocket хранится отдельно для диагностики. FTD и повторные депозиты суммируются.'
               )}</p>
             </div>
-          </div>
 
-          <div className="admin-deposit-default-card">
-            <div className="admin-deposit-card-title">
-              <div>
-                <span>{tr('Fallback', 'Резерв')}</span>
-                <strong>{tr('Default values', 'Значения по умолчанию')}</strong>
-              </div>
-              <small>{tr('Used when AIO GEO is missing or unknown', 'Используются, если GEO AIO отсутствует или не найдено')}</small>
-            </div>
-            <div className="admin-deposit-threshold-grid">
-              {[
-                ['min_deposit_amount', tr('Minimum deposit', 'Минимальный депозит'), tr('Signal access', 'Доступ к сигналам')],
-                ['vip_deposit_amount', tr('VIP access from', 'Доступ к VIP от'), 'VIP'],
-                ['copy_deposit_amount', tr('Copy access from', 'Доступ к Copy от'), 'Copy'],
-              ].map(([field, title, hint]) => (
-                <label key={field} className="admin-deposit-threshold-field">
-                  <span>{title}</span>
-                  <div className="admin-money-input">
-                    <b>$</b>
-                    <input
-                      value={depositDefaults[field]}
-                      onChange={(event) => updateDepositDefaults(field, event.target.value)}
-                      inputMode="decimal"
-                      placeholder="0.00"
-                    />
-                  </div>
-                  <small>{hint}</small>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="admin-deposit-country-toolbar">
-            <label>
-              <span>{tr('Country rule', 'Настройка страны')}</span>
-              <select
-                className="admin-input"
-                value={selectedDepositCountryCode}
-                onChange={(event) => setSelectedDepositCountryCode(event.target.value)}
-              >
-                {sortedDepositCountries.map((item) => (
-                  <option key={item.country_code} value={item.country_code}>
-                    {item.country_name} · {item.country_code}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button type="button" className="admin-btn-outline" onClick={openAddDepositCountry}>
-              {tr('+ Add country', '+ Добавить страну')}
-            </button>
-          </div>
-
-          {addingDepositCountry ? (
-            <div className="admin-deposit-add-card">
+            <div className="admin-deposit-default-card">
               <div className="admin-deposit-card-title">
                 <div>
-                  <span>{tr('Custom GEO', 'Своя GEO')}</span>
-                  <strong>{tr('New country', 'Новая страна')}</strong>
+                  <span>{tr('Fallback', 'Резерв')}</span>
+                  <strong>{tr('Default values', 'Значения по умолчанию')}</strong>
                 </div>
-                <button type="button" className="admin-icon-btn" onClick={() => setAddingDepositCountry(false)} aria-label={tr('Close', 'Закрыть')}>×</button>
-              </div>
-              <div className="admin-deposit-country-identity">
-                <label>
-                  <span>{tr('Country name', 'Название страны')}</span>
-                  <input
-                    className="admin-input"
-                    value={newDepositCountry.country_name}
-                    onChange={(event) => setNewDepositCountry((current) => ({ ...current, country_name: event.target.value }))}
-                    placeholder={tr('For example: Georgia', 'Например: Georgia')}
-                    maxLength={100}
-                  />
-                </label>
-                <label>
-                  <span>{tr('ISO code', 'ISO-код')}</span>
-                  <input
-                    className="admin-input admin-country-code-input"
-                    value={newDepositCountry.country_code}
-                    onChange={(event) => setNewDepositCountry((current) => ({
-                      ...current,
-                      country_code: event.target.value.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 2),
-                    }))}
-                    placeholder="GE"
-                    maxLength={2}
-                  />
-                </label>
+                <small>{tr('Used when AIO GEO is missing or unknown', 'Используются, если GEO AIO отсутствует или не найдено')}</small>
               </div>
               <div className="admin-deposit-threshold-grid">
                 {[
-                  ['min_deposit_amount', tr('Minimum deposit', 'Минимальный депозит')],
-                  ['vip_deposit_amount', tr('VIP access from', 'Доступ к VIP от')],
-                  ['copy_deposit_amount', tr('Copy access from', 'Доступ к Copy от')],
-                ].map(([field, title]) => (
-                  <label key={field} className="admin-deposit-threshold-field">
-                    <span>{title}</span>
-                    <div className="admin-money-input">
-                      <b>$</b>
-                      <input
-                        value={newDepositCountry[field]}
-                        onChange={(event) => setNewDepositCountry((current) => ({ ...current, [field]: event.target.value }))}
-                        inputMode="decimal"
-                      />
-                    </div>
-                  </label>
-                ))}
-              </div>
-              <div className="admin-row-actions">
-                <button type="button" className="admin-btn" onClick={addDepositCountry}>{tr('Add country', 'Добавить страну')}</button>
-                <button type="button" className="admin-btn-outline" onClick={() => setAddingDepositCountry(false)}>{tr('Cancel', 'Отмена')}</button>
-              </div>
-            </div>
-          ) : null}
-
-          {selectedDepositCountry ? (
-            <div className="admin-deposit-country-card">
-              <div className="admin-deposit-card-title">
-                <div>
-                  <span>{selectedDepositCountry.is_custom ? tr('Custom country', 'Своя страна') : tr('Country from directory', 'Страна из справочника')}</span>
-                  <strong>{selectedDepositCountry.country_name} <code>{selectedDepositCountry.country_code}</code></strong>
-                </div>
-                {selectedDepositCountry.is_custom ? (
-                  <button type="button" className="admin-danger-link" onClick={removeSelectedDepositCountry}>
-                    {tr('Remove', 'Удалить')}
-                  </button>
-                ) : <small>{tr('Ready to edit', 'Можно редактировать')}</small>}
-              </div>
-              <div className="admin-deposit-threshold-grid">
-                {[
-                  ['min_deposit_amount', tr('Minimum deposit', 'Минимальный депозит'), tr('Unlocks signals', 'Открывает сигналы')],
-                  ['vip_deposit_amount', tr('VIP access from', 'Доступ к VIP от'), tr('VIP level', 'Уровень VIP')],
-                  ['copy_deposit_amount', tr('Copy access from', 'Доступ к Copy от'), tr('Copy level', 'Уровень Copy')],
+                  ['min_deposit_amount', tr('Minimum deposit', 'Минимальный депозит'), tr('Signal access', 'Доступ к сигналам')],
+                  ['vip_deposit_amount', tr('VIP access from', 'Доступ к VIP от'), 'VIP'],
+                  ['copy_deposit_amount', tr('Copy access from', 'Доступ к Copy от'), 'Copy'],
                 ].map(([field, title, hint]) => (
                   <label key={field} className="admin-deposit-threshold-field">
                     <span>{title}</span>
                     <div className="admin-money-input">
                       <b>$</b>
                       <input
-                        value={selectedDepositCountry[field]}
-                        onChange={(event) => updateDepositCountry(field, event.target.value)}
+                        value={depositDefaults[field]}
+                        onChange={(event) => updateDepositDefaults(field, event.target.value)}
                         inputMode="decimal"
                         placeholder="0.00"
                       />
@@ -2068,118 +2065,305 @@ export default function SettingsPage({ adminUser }) {
                 ))}
               </div>
             </div>
-          ) : null}
 
-          <div className="admin-deposit-logic-note">
-            <strong>{tr('How access is calculated', 'Как считается доступ')}</strong>
-            <span>{tr(
-              'Pocket deposits are added into one total. The user gets each level as soon as the accumulated amount reaches the threshold selected by AIO GEO.',
-              'Депозиты Pocket складываются в общую сумму. Пользователь получает каждый уровень, как только накопленная сумма достигает порога, выбранного по GEO AIO.'
-            )}</span>
-          </div>
-        </section>
+            <div className="admin-deposit-country-toolbar">
+              <div className="admin-deposit-country-picker" ref={depositCountryPickerRef}>
+                <span className="admin-deposit-picker-label">{tr('Country rule', 'Настройка страны')}</span>
+                <button
+                  type="button"
+                  className={`admin-deposit-country-trigger ${depositCountryPickerOpen ? 'is-open' : ''}`}
+                  onClick={() => setDepositCountryPickerOpen((value) => !value)}
+                  aria-haspopup="listbox"
+                  aria-expanded={depositCountryPickerOpen}
+                >
+                  {selectedDepositCountry ? (
+                    <>
+                      <DepositCountryFlag
+                        countryCode={selectedDepositCountry.country_code}
+                        title={getDepositCountryName(selectedDepositCountry)}
+                      />
+                      <span className="admin-deposit-country-trigger-copy">
+                        <strong>{getDepositCountryName(selectedDepositCountry)}</strong>
+                        <small>{selectedDepositCountry.country_code}</small>
+                      </span>
+                    </>
+                  ) : (
+                    <span className="admin-deposit-country-trigger-copy">
+                      <strong>{tr('Select country', 'Выберите страну')}</strong>
+                    </span>
+                  )}
+                  <span className="admin-deposit-country-chevron" aria-hidden="true">⌄</span>
+                </button>
 
-        <div className="admin-access-section-head admin-access-registration-head">
-          <span className="admin-access-section-number">3</span>
+                {depositCountryPickerOpen ? (
+                  <div className="admin-deposit-country-menu">
+                    <label className="admin-deposit-country-search">
+                      <span aria-hidden="true">⌕</span>
+                      <input
+                        type="search"
+                        value={depositCountrySearch}
+                        onChange={(event) => setDepositCountrySearch(event.target.value)}
+                        placeholder={tr('Search country or code', 'Поиск страны или кода')}
+                      />
+                    </label>
+                    <div className="admin-deposit-country-options" role="listbox">
+                      {filteredDepositCountries.length ? filteredDepositCountries.map((item) => (
+                        <button
+                          key={item.country_code}
+                          type="button"
+                          role="option"
+                          aria-selected={item.country_code === selectedDepositCountryCode}
+                          className={item.country_code === selectedDepositCountryCode ? 'is-selected' : ''}
+                          onClick={() => selectDepositCountry(item.country_code)}
+                        >
+                          <DepositCountryFlag countryCode={item.country_code} title={getDepositCountryName(item)} />
+                          <span>
+                            <strong>{getDepositCountryName(item)}</strong>
+                            <small>{item.is_custom ? tr('Custom country', 'Своя страна') : tr('Country directory', 'Справочник стран')}</small>
+                          </span>
+                          <code>{item.country_code}</code>
+                          <b aria-hidden="true">{item.country_code === selectedDepositCountryCode ? '✓' : ''}</b>
+                        </button>
+                      )) : (
+                        <div className="admin-deposit-country-empty">
+                          {tr('No countries found', 'Страны не найдены')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <button type="button" className="admin-btn-outline" onClick={openAddDepositCountry}>
+                {tr('+ Add country', '+ Добавить страну')}
+              </button>
+            </div>
+
+            {addingDepositCountry ? (
+              <div className="admin-deposit-add-card">
+                <div className="admin-deposit-card-title">
+                  <div>
+                    <span>{tr('Custom GEO', 'Своя GEO')}</span>
+                    <strong>{tr('New country', 'Новая страна')}</strong>
+                  </div>
+                  <button type="button" className="admin-icon-btn" onClick={() => setAddingDepositCountry(false)} aria-label={tr('Close', 'Закрыть')}>×</button>
+                </div>
+                <div className="admin-deposit-country-identity">
+                  <label>
+                    <span>{tr('Country name', 'Название страны')}</span>
+                    <input
+                      className="admin-input"
+                      value={newDepositCountry.country_name}
+                      onChange={(event) => setNewDepositCountry((current) => ({ ...current, country_name: event.target.value }))}
+                      placeholder={tr('For example: Georgia', 'Например: Georgia')}
+                      maxLength={100}
+                    />
+                  </label>
+                  <label>
+                    <span>{tr('ISO code', 'ISO-код')}</span>
+                    <div className="admin-country-code-editor">
+                      <DepositCountryFlag countryCode={newDepositCountry.country_code} title={newDepositCountry.country_name} />
+                      <input
+                        className="admin-input admin-country-code-input"
+                        value={newDepositCountry.country_code}
+                        onChange={(event) => setNewDepositCountry((current) => ({
+                          ...current,
+                          country_code: event.target.value.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 2),
+                        }))}
+                        placeholder="GE"
+                        maxLength={2}
+                      />
+                    </div>
+                  </label>
+                </div>
+                <div className="admin-deposit-threshold-grid">
+                  {[
+                    ['min_deposit_amount', tr('Minimum deposit', 'Минимальный депозит')],
+                    ['vip_deposit_amount', tr('VIP access from', 'Доступ к VIP от')],
+                    ['copy_deposit_amount', tr('Copy access from', 'Доступ к Copy от')],
+                  ].map(([field, title]) => (
+                    <label key={field} className="admin-deposit-threshold-field">
+                      <span>{title}</span>
+                      <div className="admin-money-input">
+                        <b>$</b>
+                        <input
+                          value={newDepositCountry[field]}
+                          onChange={(event) => setNewDepositCountry((current) => ({ ...current, [field]: event.target.value }))}
+                          inputMode="decimal"
+                        />
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                <div className="admin-row-actions">
+                  <button type="button" className="admin-btn" onClick={addDepositCountry}>{tr('Add country', 'Добавить страну')}</button>
+                  <button type="button" className="admin-btn-outline" onClick={() => setAddingDepositCountry(false)}>{tr('Cancel', 'Отмена')}</button>
+                </div>
+              </div>
+            ) : null}
+
+            {selectedDepositCountry ? (
+              <div className="admin-deposit-country-card">
+                <div className="admin-deposit-card-title">
+                  <div className="admin-deposit-country-heading">
+                    <DepositCountryFlag
+                      countryCode={selectedDepositCountry.country_code}
+                      title={getDepositCountryName(selectedDepositCountry)}
+                    />
+                    <div>
+                      <span>{selectedDepositCountry.is_custom ? tr('Custom country', 'Своя страна') : tr('Country from directory', 'Страна из справочника')}</span>
+                      <strong>{getDepositCountryName(selectedDepositCountry)} <code>{selectedDepositCountry.country_code}</code></strong>
+                    </div>
+                  </div>
+                  {selectedDepositCountry.is_custom ? (
+                    <button type="button" className="admin-danger-link" onClick={removeSelectedDepositCountry}>
+                      {tr('Remove', 'Удалить')}
+                    </button>
+                  ) : <small>{tr('Ready to edit', 'Можно редактировать')}</small>}
+                </div>
+                <div className="admin-deposit-threshold-grid">
+                  {[
+                    ['min_deposit_amount', tr('Minimum deposit', 'Минимальный депозит'), tr('Unlocks signals', 'Открывает сигналы')],
+                    ['vip_deposit_amount', tr('VIP access from', 'Доступ к VIP от'), tr('VIP level', 'Уровень VIP')],
+                    ['copy_deposit_amount', tr('Copy access from', 'Доступ к Copy от'), tr('Copy level', 'Уровень Copy')],
+                  ].map(([field, title, hint]) => (
+                    <label key={field} className="admin-deposit-threshold-field">
+                      <span>{title}</span>
+                      <div className="admin-money-input">
+                        <b>$</b>
+                        <input
+                          value={selectedDepositCountry[field]}
+                          onChange={(event) => updateDepositCountry(field, event.target.value)}
+                          inputMode="decimal"
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <small>{hint}</small>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="admin-deposit-logic-note">
+              <strong>{tr('How access is calculated', 'Как считается доступ')}</strong>
+              <span>{tr(
+                'Pocket deposits are added into one total. The user gets each level as soon as the accumulated amount reaches the threshold selected by AIO GEO.',
+                'Депозиты Pocket складываются в общую сумму. Пользователь получает каждый уровень, как только накопленная сумма достигает порога, выбранного по GEO AIO.'
+              )}</span>
+            </div>
+          </section>
+        ) : null}
+
+        {accessEditorTab === 'link' ? (
+          <section className="admin-access-section admin-access-panel admin-registration-panel">
+            <div className="admin-access-panel-head">
+              <span>{tr('Registration', 'Регистрация')}</span>
+              <h4>{tr('Personal registration link', 'Персональная ссылка регистрации')}</h4>
+              <p>{tr('One template for the bot, app and manager command.', 'Один шаблон для бота, приложения и команды менеджера.')}</p>
+            </div>
+
+            <div className="admin-field">
+              <label className="admin-label">{tr('Pocket Option registration URL', 'Ссылка регистрации на Pocket Option')}</label>
+              <textarea
+                className="admin-input admin-registration-template-input"
+                rows={5}
+                value={systemRegistrationUrl}
+                onChange={(e) => setSystemRegistrationUrl(e.target.value)}
+                placeholder="https://u3.shortink.io/register?...&click_id={click_id}&sub_id2={sub_id2}&sub_id3={sub_id3}"
+                spellCheck={false}
+              />
+              <div className="admin-muted">
+                {tr(
+                  'One template is used by the main bot, the mini app and manager command. Fixed UTM values are preserved.',
+                  'Один шаблон используется основным ботом, мини-апкой и командой менеджера. Фиксированные UTM-значения сохраняются.'
+                )}
+              </div>
+              <div className="admin-registration-template-help">
+                <div><code>{'{click_id}'}</code><span>{tr('Telegram user ID', 'Telegram ID пользователя')}</span></div>
+                <div><code>{'{sub_id2}'}</code><span>{tr('AIO visit UUID', 'UUID визита AIO')}</span></div>
+                <div><code>{'{sub_id3}'}</code><span>{tr('Chatterfy lead ID', 'ID лида Chatterfy')}</span></div>
+              </div>
+              <div className="admin-muted">
+                {tr(
+                  'If AIO or Chatterfy has not supplied an ID yet, its parameter remains empty. Other unknown placeholders are also sent empty.',
+                  'Если AIO или Chatterfy ещё не передали ID, соответствующий параметр останется пустым. Остальные неизвестные плейсхолдеры также передаются пустыми.'
+                )}
+              </div>
+            </div>
+
+            <section className="admin-registration-visibility">
+              <div className="admin-registration-visibility-head">
+                <div>
+                  <span>{tr('Button visibility', 'Отображение кнопок')}</span>
+                  <strong>{tr('Where users can get their personal link', 'Где пользователь может получить персональную ссылку')}</strong>
+                </div>
+                <small>
+                  {tr(
+                    'The /link manager command remains available regardless of these settings.',
+                    'Команда менеджера /link работает независимо от этих настроек.'
+                  )}
+                </small>
+              </div>
+
+              <div className="admin-registration-visibility-grid">
+                <div className={registrationButtonBotEnabled ? 'is-enabled' : ''}>
+                  <div>
+                    <span className="admin-registration-channel">Telegram Bot</span>
+                    <strong>{tr('Show button in bot', 'Показывать кнопку в боте')}</strong>
+                    <p>
+                      {tr(
+                        'Adds “Registration link” to the main bot menu for users who have not registered yet.',
+                        'Добавляет кнопку «Ссылка на регистрацию» в главное меню бота для пользователей без регистрации.'
+                      )}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className={`admin-user-profile-switch ${registrationButtonBotEnabled ? 'on' : 'off'}`}
+                    onClick={() => setRegistrationButtonBotEnabled((value) => !value)}
+                    aria-pressed={registrationButtonBotEnabled}
+                  >
+                    <span aria-hidden="true" />
+                    <b>{registrationButtonBotEnabled ? tr('Shown', 'Показывается') : tr('Hidden', 'Скрыта')}</b>
+                  </button>
+                </div>
+
+                <div className={registrationButtonAppEnabled ? 'is-enabled' : ''}>
+                  <div>
+                    <span className="admin-registration-channel">Elizabeth App</span>
+                    <strong>{tr('Show button in app', 'Показывать кнопку в приложении')}</strong>
+                    <p>
+                      {tr(
+                        'Shows the personal registration-link card in the user profile until registration is confirmed.',
+                        'Показывает карточку получения персональной ссылки в профиле до подтверждения регистрации.'
+                      )}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className={`admin-user-profile-switch ${registrationButtonAppEnabled ? 'on' : 'off'}`}
+                    onClick={() => setRegistrationButtonAppEnabled((value) => !value)}
+                    aria-pressed={registrationButtonAppEnabled}
+                  >
+                    <span aria-hidden="true" />
+                    <b>{registrationButtonAppEnabled ? tr('Shown', 'Показывается') : tr('Hidden', 'Скрыта')}</b>
+                  </button>
+                </div>
+              </div>
+            </section>
+          </section>
+        ) : null}
+
+        <div className="admin-access-save-panel">
           <div>
-            <h4>{tr('Personal registration link', 'Персональная ссылка регистрации')}</h4>
-            <p>{tr('One template for the bot, app and manager command.', 'Один шаблон для бота, приложения и команды менеджера.')}</p>
+            <strong>{tr('Save changes', 'Сохранить изменения')}</strong>
+            <small>{tr(
+              'The button saves settings from all three subsections.',
+              'Кнопка сохраняет настройки всех трёх подразделов.'
+            )}</small>
           </div>
-        </div>
-
-        <div className="admin-field">
-          <label className="admin-label">{tr('Pocket Option registration URL', 'Ссылка регистрации на Pocket Option')}</label>
-          <textarea
-            className="admin-input admin-registration-template-input"
-            rows={5}
-            value={systemRegistrationUrl}
-            onChange={(e) => setSystemRegistrationUrl(e.target.value)}
-            placeholder="https://u3.shortink.io/register?...&click_id={click_id}&sub_id2={sub_id2}&sub_id3={sub_id3}"
-            spellCheck={false}
-          />
-          <div className="admin-muted">
-            {tr(
-              'One template is used by the main bot, the mini app and manager command. Fixed UTM values are preserved.',
-              'Один шаблон используется основным ботом, мини-апкой и командой менеджера. Фиксированные UTM-значения сохраняются.'
-            )}
-          </div>
-          <div className="admin-registration-template-help">
-            <div><code>{'{click_id}'}</code><span>{tr('Telegram user ID', 'Telegram ID пользователя')}</span></div>
-            <div><code>{'{sub_id2}'}</code><span>{tr('AIO visit UUID', 'UUID визита AIO')}</span></div>
-            <div><code>{'{sub_id3}'}</code><span>{tr('Chatterfy lead ID', 'ID лида Chatterfy')}</span></div>
-          </div>
-          <div className="admin-muted">
-            {tr(
-              'If AIO or Chatterfy has not supplied an ID yet, its parameter remains empty. Other unknown placeholders are also sent empty.',
-              'Если AIO или Chatterfy ещё не передали ID, соответствующий параметр останется пустым. Остальные неизвестные плейсхолдеры также передаются пустыми.'
-            )}
-          </div>
-        </div>
-
-        <section className="admin-registration-visibility">
-          <div className="admin-registration-visibility-head">
-            <div>
-              <span>{tr('Button visibility', 'Отображение кнопок')}</span>
-              <strong>{tr('Where users can get their personal link', 'Где пользователь может получить персональную ссылку')}</strong>
-            </div>
-            <small>
-              {tr(
-                'The /link manager command remains available regardless of these settings.',
-                'Команда менеджера /link работает независимо от этих настроек.'
-              )}
-            </small>
-          </div>
-
-          <div className="admin-registration-visibility-grid">
-            <div className={registrationButtonBotEnabled ? 'is-enabled' : ''}>
-              <div>
-                <span className="admin-registration-channel">Telegram Bot</span>
-                <strong>{tr('Show button in bot', 'Показывать кнопку в боте')}</strong>
-                <p>
-                  {tr(
-                    'Adds “Registration link” to the main bot menu for users who have not registered yet.',
-                    'Добавляет кнопку «Ссылка на регистрацию» в главное меню бота для пользователей без регистрации.'
-                  )}
-                </p>
-              </div>
-              <button
-                type="button"
-                className={`admin-user-profile-switch ${registrationButtonBotEnabled ? 'on' : 'off'}`}
-                onClick={() => setRegistrationButtonBotEnabled((value) => !value)}
-                aria-pressed={registrationButtonBotEnabled}
-              >
-                <span aria-hidden="true" />
-                <b>{registrationButtonBotEnabled ? tr('Shown', 'Показывается') : tr('Hidden', 'Скрыта')}</b>
-              </button>
-            </div>
-
-            <div className={registrationButtonAppEnabled ? 'is-enabled' : ''}>
-              <div>
-                <span className="admin-registration-channel">Elizabeth App</span>
-                <strong>{tr('Show button in app', 'Показывать кнопку в приложении')}</strong>
-                <p>
-                  {tr(
-                    'Shows the personal registration-link card in the user profile until registration is confirmed.',
-                    'Показывает карточку получения персональной ссылки в профиле до подтверждения регистрации.'
-                  )}
-                </p>
-              </div>
-              <button
-                type="button"
-                className={`admin-user-profile-switch ${registrationButtonAppEnabled ? 'on' : 'off'}`}
-                onClick={() => setRegistrationButtonAppEnabled((value) => !value)}
-                aria-pressed={registrationButtonAppEnabled}
-              >
-                <span aria-hidden="true" />
-                <b>{registrationButtonAppEnabled ? tr('Shown', 'Показывается') : tr('Hidden', 'Скрыта')}</b>
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <div className="admin-row-actions">
           <button className="admin-btn" onClick={() => saveSettings('access')} disabled={saving}>
-            {saving ? tr('Saving…', 'Сохранение...') : tr('Save access', 'Сохранить доступ')}
+            {saving ? tr('Saving…', 'Сохранение...') : tr('Save', 'Сохранить')}
           </button>
         </div>
 
