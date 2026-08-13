@@ -48,11 +48,11 @@ class RegistrationLinkVisibilityTest(unittest.TestCase):
         self.assertIn("Show button in bot", self.settings)
         self.assertIn("Show button in app", self.settings)
         self.assertIn(
-            'system_access_data.get("registration_button_bot_enabled", current_visibility[0])',
+            'system_access_data.get("registration_button_bot_enabled", current_access[0])',
             self.backend,
         )
         self.assertIn(
-            'system_access_data.get("registration_button_app_enabled", current_visibility[1])',
+            'system_access_data.get("registration_button_app_enabled", current_access[1])',
             self.backend,
         )
 

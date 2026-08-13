@@ -9,7 +9,7 @@ import secrets
 import random
 import re
 import shutil
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 from fastapi import FastAPI, Request, Depends, HTTPException, Header, Query, BackgroundTasks
@@ -234,6 +234,30 @@ except ModuleNotFoundError:
         normalize_access_policy,
         normalize_min_deposit,
         system_policy_grants_signal_access,
+    )
+try:
+    from backend.deposit_access import (
+        DEFAULT_COPY_DEPOSIT,
+        DEFAULT_MIN_DEPOSIT,
+        DEFAULT_VIP_DEPOSIT,
+        calculate_deposit_access,
+        normalize_country_code as normalize_deposit_country_code,
+        normalize_country_rule,
+        normalize_deposit_thresholds,
+        resolve_deposit_thresholds,
+        serialize_deposit_thresholds,
+    )
+except ModuleNotFoundError:
+    from deposit_access import (
+        DEFAULT_COPY_DEPOSIT,
+        DEFAULT_MIN_DEPOSIT,
+        DEFAULT_VIP_DEPOSIT,
+        calculate_deposit_access,
+        normalize_country_code as normalize_deposit_country_code,
+        normalize_country_rule,
+        normalize_deposit_thresholds,
+        resolve_deposit_thresholds,
+        serialize_deposit_thresholds,
     )
 try:
     from backend.profile_editing import (
@@ -1903,7 +1927,7 @@ async def get_affiliate_user(*, telegram_id: Optional[int] = None, trader_id: st
                        COALESCE(pocket_registered, 0) AS pocket_registered,
                        COALESCE(pocket_deposited, 0) AS pocket_deposited,
                        COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
-                       pocket_registered_at
+                       pocket_registered_at, aio_country_code, pocket_country_code
                 FROM users
                 WHERE {' OR '.join(clauses)}
                 ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
@@ -1975,15 +1999,21 @@ async def affiliate_check_deposit(
     if not user or not str(user.get("trader_id") or "").strip():
         return affiliate_api_response(False, "no_trader_id", "Trader ID was not found")
     deposit_sum = float(user.get("pocket_deposit_amount") or 0)
+    deposit_profile = await get_user_deposit_access_profile(telegram_id, user)
+    vip_threshold = float(deposit_profile.get("vip_deposit_amount") or 0)
     data = {
         "tg_user_id": telegram_id,
         "trader_id": user.get("trader_id"),
         "sum_deposits": deposit_sum,
-        "min_deposit": AI_CHAT_MIN_DEPOSIT,
-        "shortage": max(0.0, AI_CHAT_MIN_DEPOSIT - deposit_sum),
+        # AI Chatter's confirmation path opens its VIP onboarding, therefore
+        # it uses the user's country-specific VIP threshold.
+        "min_deposit": vip_threshold,
+        "shortage": max(0.0, vip_threshold - deposit_sum),
         "deposit_status": int(user.get("pocket_deposited") or 0),
+        "country_code": deposit_profile.get("country_code") or "",
+        "threshold_source": deposit_profile.get("source") or "default",
     }
-    if not int(user.get("pocket_deposited") or 0) or deposit_sum < AI_CHAT_MIN_DEPOSIT:
+    if not int(user.get("pocket_deposited") or 0) or deposit_sum < vip_threshold:
         code = "no_deposits" if deposit_sum <= 0 else "below_threshold"
         return affiliate_api_response(False, code, "Deposit is not confirmed", data)
     return affiliate_api_response(True, "confirmed", "Deposit confirmed", data)
@@ -2028,10 +2058,25 @@ def normalize_settings_toggle(value: object, default: int = 1) -> int:
 
 def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     policy = normalize_access_policy((row or {}).get("policy"))
-    min_deposit = normalize_min_deposit((row or {}).get("min_deposit_amount"))
+    deposit_defaults = serialize_deposit_thresholds(
+        {
+            "min_deposit_amount": (row or {}).get(
+                "default_min_deposit_amount", DEFAULT_MIN_DEPOSIT
+            ),
+            "vip_deposit_amount": (row or {}).get(
+                "default_vip_deposit_amount", DEFAULT_VIP_DEPOSIT
+            ),
+            "copy_deposit_amount": (row or {}).get(
+                "default_copy_deposit_amount", DEFAULT_COPY_DEPOSIT
+            ),
+        }
+    )
     return {
         "policy": policy,
-        "min_deposit_amount": str(min_deposit),
+        # Kept as a response alias for older clients. New code uses
+        # deposit_defaults and country-specific rows.
+        "min_deposit_amount": deposit_defaults["min_deposit_amount"],
+        "deposit_defaults": deposit_defaults,
         "registration_url": str((row or {}).get("registration_url") or DEFAULT_REGISTRATION_URL).strip(),
         "registration_button_bot_enabled": normalize_settings_toggle(
             (row or {}).get("registration_button_bot_enabled"), 1
@@ -2044,11 +2089,42 @@ def serialize_system_access_settings(row: Optional[Dict[str, Any]]) -> Dict[str,
     }
 
 
-async def get_system_access_settings_row() -> Dict[str, Any]:
+def serialize_deposit_country_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = normalize_country_rule(row)
+    return {
+        "country_code": normalized["country_code"],
+        "country_name": normalized["country_name"],
+        **serialize_deposit_thresholds(normalized),
+        "is_custom": 1 if normalized["is_custom"] else 0,
+        "updated_at": row.get("updated_at"),
+        "updated_by": row.get("updated_by"),
+    }
+
+
+async def get_deposit_country_settings_rows() -> List[Dict[str, Any]]:
+    if not db_pool:
+        return []
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT country_code, country_name, min_deposit_amount,
+                       vip_deposit_amount, copy_deposit_amount, is_custom,
+                       updated_at, updated_by
+                FROM admin_deposit_country_settings
+                ORDER BY country_name ASC, country_code ASC
+                """
+            )
+            return [serialize_deposit_country_row(row) for row in (await cur.fetchall() or [])]
+
+
+async def get_system_access_settings_row(*, include_countries: bool = False) -> Dict[str, Any]:
     default_settings = serialize_system_access_settings(
         {
             "policy": ACCESS_POLICY_REGISTRATION_DEPOSIT,
-            "min_deposit_amount": "0",
+            "default_min_deposit_amount": DEFAULT_MIN_DEPOSIT,
+            "default_vip_deposit_amount": DEFAULT_VIP_DEPOSIT,
+            "default_copy_deposit_amount": DEFAULT_COPY_DEPOSIT,
             "registration_url": DEFAULT_REGISTRATION_URL,
             "registration_button_bot_enabled": 1,
             "registration_button_app_enabled": 1,
@@ -2061,7 +2137,9 @@ async def get_system_access_settings_row() -> Dict[str, Any]:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
                     """
-                    SELECT policy, min_deposit_amount, registration_url,
+                    SELECT policy, min_deposit_amount,
+                           default_min_deposit_amount, default_vip_deposit_amount,
+                           default_copy_deposit_amount, registration_url,
                            registration_button_bot_enabled, registration_button_app_enabled,
                            updated_at, updated_by
                     FROM admin_system_access_settings
@@ -2070,10 +2148,82 @@ async def get_system_access_settings_row() -> Dict[str, Any]:
                     """
                 )
                 row = await cur.fetchone()
-        return serialize_system_access_settings(row) if row else default_settings
+        settings = serialize_system_access_settings(row) if row else default_settings
+        if include_countries:
+            settings["deposit_countries"] = await get_deposit_country_settings_rows()
+        return settings
     except Exception as e:
         print(f"System access settings fallback: {e}")
+        if include_countries:
+            default_settings["deposit_countries"] = []
         return default_settings
+
+
+async def get_deposit_thresholds_for_country(aio_country_code: object) -> Dict[str, Any]:
+    settings = await get_system_access_settings_row()
+    defaults = settings.get("deposit_defaults") or {}
+    country_code = normalize_deposit_country_code(aio_country_code)
+    country_rows: List[Dict[str, Any]] = []
+    if db_pool and country_code:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT country_code, country_name, min_deposit_amount,
+                           vip_deposit_amount, copy_deposit_amount, is_custom
+                    FROM admin_deposit_country_settings
+                    WHERE country_code = %s
+                    LIMIT 1
+                    """,
+                    (country_code,),
+                )
+                country_row = await cur.fetchone()
+                if country_row:
+                    country_rows.append(country_row)
+    return resolve_deposit_thresholds(defaults, country_rows, country_code)
+
+
+async def get_user_deposit_access_profile(
+    user_id: int,
+    user_row: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    row = dict(user_row or {})
+    required_fields = {
+        "aio_country_code",
+        "pocket_country_code",
+        "pocket_deposit_amount",
+        "pocket_registered",
+        "pocket_deposited",
+    }
+    if not required_fields.issubset(row.keys()) and db_pool:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT aio_country_code, pocket_country_code,
+                           COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                           COALESCE(pocket_registered, 0) AS pocket_registered,
+                           COALESCE(pocket_deposited, 0) AS pocket_deposited
+                    FROM users
+                    WHERE user_id = %s
+                    LIMIT 1
+                    """,
+                    (int(user_id),),
+                )
+                row.update(await cur.fetchone() or {})
+    thresholds = await get_deposit_thresholds_for_country(row.get("aio_country_code"))
+    access = calculate_deposit_access(
+        thresholds,
+        row.get("pocket_deposit_amount"),
+        registered=row.get("pocket_registered"),
+        deposited=row.get("pocket_deposited"),
+    )
+    return {
+        **thresholds,
+        **access,
+        "aio_country_code": str(row.get("aio_country_code") or "").strip().upper(),
+        "pocket_country_code": str(row.get("pocket_country_code") or "").strip().upper(),
+    }
 
 
 def normalize_chatterfy_lead_id(value: object) -> str:
@@ -2104,7 +2254,8 @@ async def get_personal_registration_link(user_id: int) -> Optional[Dict[str, Any
             await cur.execute(
                 """
                 SELECT user_id, aio_visit_uuid, chatterfy_lead_id,
-                       trader_id, profile_trader_id, country,
+                       trader_id, profile_trader_id, aio_country_code,
+                       pocket_country_code, country,
                        pocket_site_id, pocket_cid, pocket_sub_id1,
                        pocket_sub_id2, pocket_sub_id3,
                        COALESCE(pocket_registered, 0) AS pocket_registered
@@ -2135,7 +2286,12 @@ async def get_personal_registration_link(user_id: int) -> Optional[Dict[str, Any
             "trader_id": user_row.get("profile_trader_id") or user_row.get("trader_id") or "",
             "cid": user_row.get("pocket_cid") or "",
             "sub_id1": user_row.get("pocket_sub_id1") or "",
-            "country": user_row.get("country") or "",
+            "country": (
+                user_row.get("aio_country_code")
+                or user_row.get("pocket_country_code")
+                or user_row.get("country")
+                or ""
+            ),
         },
     )
     return {
@@ -2177,6 +2333,8 @@ async def get_signal_access_status(user_id: int, mode: str) -> Dict[str, Any]:
                     COALESCE(u.pocket_registered, 0) AS pocket_registered,
                     COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
                     COALESCE(u.pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                    u.aio_country_code,
+                    u.pocket_country_code,
                     COALESCE(uma.is_enabled, 0) AS manual_access,
                     COALESCE(uma.override_mode, 'inherit') AS override_mode
                 FROM users u
@@ -2189,17 +2347,22 @@ async def get_signal_access_status(user_id: int, mode: str) -> Dict[str, Any]:
             row = await cur.fetchone()
     if not row:
         return {"access": 0, "policy": settings.get("policy")}
+    deposit_profile = await get_user_deposit_access_profile(int(user_id), row)
     if truthy_db(row.get("is_blocked")) == 1:
-        return {"access": 0, "policy": "blocked"}
+        return {"access": 0, "policy": "blocked", **deposit_profile}
     override_mode = str(row.get("override_mode") or "inherit").strip().lower()
     if override_mode == "allow":
-        return {"access": 1, "policy": "manual_allow"}
+        return {"access": 1, "policy": "manual_allow", **deposit_profile}
     if override_mode == "deny":
-        return {"access": 0, "policy": "manual_deny"}
+        return {"access": 0, "policy": "manual_deny", **deposit_profile}
+    effective_settings = {
+        **settings,
+        "min_deposit_amount": deposit_profile["min_deposit_amount"],
+    }
     return {
-        "access": 1 if system_policy_grants_signal_access(settings, row) else 0,
+        "access": 1 if system_policy_grants_signal_access(effective_settings, row) else 0,
         "policy": settings.get("policy"),
-        "min_deposit_amount": settings.get("min_deposit_amount"),
+        **deposit_profile,
     }
 
 
@@ -2252,6 +2415,15 @@ def extract_pocket_deposit_status(payload: Any) -> Dict[str, Any]:
     return {"deposited": 1 if amount > 0 else 0, "deposit_amount": amount}
 
 
+def extract_pocket_country(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    lowered = {str(key).strip().lower(): value for key, value in payload.items()}
+    raw = lowered.get("country_code") or lowered.get("country") or lowered.get("geo") or ""
+    raw_country = str(raw).strip().upper()[:32]
+    return normalize_deposit_country_code(raw_country) or raw_country
+
+
 async def fetch_pocket_user_info(trader_id: str, partner_id: str, api_token: str) -> Dict[str, Any]:
     url = build_pocket_user_info_url(trader_id, partner_id, api_token)
     async with httpx.AsyncClient() as client:
@@ -2273,6 +2445,7 @@ async def sync_pocket_balance_for_user(user_row: Dict[str, Any], pocket_settings
         balance = extract_pocket_balance(payload)
         registration_status = extract_pocket_registration_status(payload)
         deposit_status = extract_pocket_deposit_status(payload)
+        pocket_country_code = extract_pocket_country(payload)
         if balance is None:
             raise ValueError("Pocket response does not contain balance")
         async with db_pool.acquire() as conn:
@@ -2287,6 +2460,7 @@ async def sync_pocket_balance_for_user(user_row: Dict[str, Any], pocket_settings
                         pocket_deposited = %s,
                         pocket_registered_at = COALESCE(%s, pocket_registered_at),
                         pocket_deposit_amount = GREATEST(COALESCE(pocket_deposit_amount, 0), %s),
+                        pocket_country_code = CASE WHEN %s <> '' THEN %s ELSE pocket_country_code END,
                         pocket_checked_at = NOW()
                     WHERE user_id = %s
                     """,
@@ -2296,6 +2470,8 @@ async def sync_pocket_balance_for_user(user_row: Dict[str, Any], pocket_settings
                         deposit_status["deposited"],
                         registration_status["registered_at"],
                         deposit_status["deposit_amount"],
+                        pocket_country_code,
+                        pocket_country_code,
                         user_id,
                     ),
                 )
@@ -2491,14 +2667,10 @@ async def apply_pending_aio_geo_for_visit(
                 await cur.execute(
                     """
                     UPDATE users
-                    SET aio_country_code = %s,
-                        country = CASE
-                            WHEN country IS NULL OR TRIM(country) = '' THEN %s
-                            ELSE country
-                        END
+                    SET aio_country_code = %s
                     WHERE user_id = %s
                     """,
-                    (country_code, country_code, user_id),
+                    (country_code, user_id),
                 )
                 await cur.executemany(
                     """
@@ -2611,6 +2783,8 @@ async def receive_aio_geo_postback(request: Request):
             )
 
     result = await apply_pending_aio_geo_for_visit(aio_visit_uuid, conversion_type_uuid)
+    if result.get("status") == "applied" and result.get("user_id"):
+        await sync_aio_profile_status_fields(int(result["user_id"]))
     return {
         "status": result.get("status"),
         "click_id": aio_visit_uuid,
@@ -3323,7 +3497,10 @@ async def sync_aio_profile_status_fields(user_id: int) -> Dict[str, Any]:
                 SELECT aio_visit_uuid, aio_status_fields_visit_uuid,
                        aio_dep_ok_synced_value, aio_vip_synced_value,
                        aio_copy_synced_value,
-                       COALESCE(pocket_deposited, 0) AS pocket_deposited
+                       COALESCE(pocket_registered, 0) AS pocket_registered,
+                       COALESCE(pocket_deposited, 0) AS pocket_deposited,
+                       COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                       aio_country_code, pocket_country_code
                 FROM users
                 WHERE user_id = %s
                 LIMIT 1
@@ -3336,12 +3513,11 @@ async def sync_aio_profile_status_fields(user_id: int) -> Dict[str, Any]:
     if not aio_visit_uuid:
         return {"status": "skipped", "reason": "missing_aio_visit_uuid"}
 
-    # Deposit is authoritative in Pocket. VIP and Copy do not yet have a
-    # corresponding access entity in Elizabeth, so they start at a truthful 0.
+    deposit_profile = await get_user_deposit_access_profile(int(user_id), user_row)
     desired_values = {
-        "tg_dep_ok": 1 if truthy_db(user_row.get("pocket_deposited")) == 1 else 0,
-        "tg_vip": 0,
-        "tg_copy": 0,
+        "tg_dep_ok": int(deposit_profile.get("deposit_access") or 0),
+        "tg_vip": int(deposit_profile.get("vip_access") or 0),
+        "tg_copy": int(deposit_profile.get("copy_access") or 0),
     }
     synced_visit_uuid = normalize_aio_visit_uuid(
         user_row.get("aio_status_fields_visit_uuid")
@@ -3413,15 +3589,6 @@ async def aio_profile_status_backfill_worker() -> None:
                     SELECT user_id
                     FROM users
                     WHERE NULLIF(TRIM(aio_visit_uuid), '') IS NOT NULL
-                      AND (
-                          COALESCE(aio_status_fields_visit_uuid, '') <> LOWER(TRIM(aio_visit_uuid))
-                          OR aio_dep_ok_synced_value IS NULL
-                          OR aio_vip_synced_value IS NULL
-                          OR aio_copy_synced_value IS NULL
-                          OR aio_dep_ok_synced_value <> CASE WHEN COALESCE(pocket_deposited, 0) = 1 THEN 1 ELSE 0 END
-                          OR aio_vip_synced_value <> 0
-                          OR aio_copy_synced_value <> 0
-                      )
                     ORDER BY user_id ASC
                     LIMIT 5000
                     """
@@ -3562,6 +3729,9 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         raise HTTPException(status_code=403, detail="Invalid postback secret")
 
     normalized = normalize_pocket_postback_payload(payload)
+    raw_pocket_country = str(normalized.get("country") or "").strip().upper()[:32]
+    pocket_country_code = normalize_deposit_country_code(raw_pocket_country) or raw_pocket_country
+    normalized["country"] = pocket_country_code
     source_ip = request.client.host if request.client else ""
     event_slug = normalized.get("event_slug")
     telegram_id = normalized.get("telegram_id")
@@ -3731,6 +3901,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                             pocket_sub_id3 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id3 END,
                             aio_visit_uuid = CASE WHEN %s <> '' THEN %s ELSE aio_visit_uuid END,
                             chatterfy_lead_id = CASE WHEN %s <> '' THEN %s ELSE chatterfy_lead_id END,
+                            pocket_country_code = CASE WHEN %s <> '' THEN %s ELSE pocket_country_code END,
                             country = CASE WHEN %s <> '' THEN %s ELSE country END,
                             pocket_registered = 1,
                             pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
@@ -3739,9 +3910,10 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                         """,
                         (trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
                          sub_id1, sub_id1, sub_id2, sub_id2, sub_id3, sub_id3,
-                         aio_visit_uuid_from_postback, aio_visit_uuid_from_postback,
-                         chatterfy_lead_id_from_postback, chatterfy_lead_id_from_postback,
-                         normalized.get("country") or "", normalized.get("country") or "", telegram_id),
+                          aio_visit_uuid_from_postback, aio_visit_uuid_from_postback,
+                          chatterfy_lead_id_from_postback, chatterfy_lead_id_from_postback,
+                          normalized.get("country") or "", normalized.get("country") or "",
+                          normalized.get("country") or "", normalized.get("country") or "", telegram_id),
                     )
                 else:
                     await cur.execute(
@@ -3756,6 +3928,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                             pocket_sub_id3 = CASE WHEN %s <> '' THEN %s ELSE pocket_sub_id3 END,
                             aio_visit_uuid = CASE WHEN %s <> '' THEN %s ELSE aio_visit_uuid END,
                             chatterfy_lead_id = CASE WHEN %s <> '' THEN %s ELSE chatterfy_lead_id END,
+                            pocket_country_code = CASE WHEN %s <> '' THEN %s ELSE pocket_country_code END,
                             country = CASE WHEN %s <> '' THEN %s ELSE country END,
                             pocket_registered = 1,
                             pocket_registered_at = COALESCE(pocket_registered_at, DATE_FORMAT(NOW(), '%%Y-%%m-%%dT%%H:%%i:%%sZ')),
@@ -3766,9 +3939,10 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                         """,
                         (trader_id, trader_id, click_id, click_id, site_id, site_id, cid, cid,
                          sub_id1, sub_id1, sub_id2, sub_id2, sub_id3, sub_id3,
-                         aio_visit_uuid_from_postback, aio_visit_uuid_from_postback,
-                         chatterfy_lead_id_from_postback, chatterfy_lead_id_from_postback,
-                         normalized.get("country") or "", normalized.get("country") or "",
+                          aio_visit_uuid_from_postback, aio_visit_uuid_from_postback,
+                          chatterfy_lead_id_from_postback, chatterfy_lead_id_from_postback,
+                          normalized.get("country") or "", normalized.get("country") or "",
+                          normalized.get("country") or "", normalized.get("country") or "",
                          f"{deposit_amount:.2f}", telegram_id),
                     )
                 await cur.execute(
@@ -3887,9 +4061,11 @@ async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
                COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
                u.profile_updated_at,
                COALESCE(u.balance, 0) AS balance,
-               COALESCE(u.pocket_registered, 0) AS pocket_registered,
-               COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
-               COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
+                COALESCE(u.pocket_registered, 0) AS pocket_registered,
+                COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
+                COALESCE(u.pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                u.aio_country_code, u.pocket_country_code,
+                COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                u.balance_synced_at, u.balance_sync_error,
                COALESCE(fx.is_enabled, 0) AS forex_access,
                COALESCE(bin.is_enabled, 0) AS binary_access,
@@ -4126,6 +4302,7 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                     "pocket_deposited = 0",
                     "pocket_registered_at = NULL",
                     "pocket_deposit_amount = 0",
+                    "pocket_country_code = NULL",
                     "country = NULL",
                     "pocket_checked_at = NULL",
                     "balance = 0",
@@ -4889,7 +5066,8 @@ async def admin_user_profile_details(
                        COALESCE(pocket_deposited, 0) AS pocket_deposited,
                        pocket_registered_at,
                        COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
-                       country, pocket_checked_at, aio_visit_uuid, aio_country_code, chatterfy_lead_id,
+                       country, pocket_country_code, pocket_checked_at,
+                       aio_visit_uuid, aio_country_code, chatterfy_lead_id,
                        chatterfy_tracker_click_id
                 FROM users
                 WHERE user_id = %s
@@ -5051,6 +5229,8 @@ async def admin_user_profile_details(
             "error": "AI Chatter is unavailable",
         }
 
+    deposit_access = await get_user_deposit_access_profile(target_user_id, pocket_row)
+
     return {
         "status": "success",
         "user": user_row,
@@ -5058,6 +5238,7 @@ async def admin_user_profile_details(
         "activity": activity,
         "ai_chatter": ai_chatter,
         "pocket": pocket_row,
+        "deposit_access": deposit_access,
         "postbacks": postbacks,
         "aio_inbound_postbacks": aio_inbound_postbacks,
         "aio_outbound_events": aio_outbound_events,
@@ -5909,7 +6090,7 @@ async def admin_settings(
     if has_permission(admin, PERM_SETTINGS_API):
         settings["pocket_api"] = await get_pocket_api_settings_row()
     if has_permission(admin, PERM_SETTINGS_SYSTEM_ACCESS):
-        settings["system_access"] = await get_system_access_settings_row()
+        settings["system_access"] = await get_system_access_settings_row(include_countries=True)
     return {
         "status": "success",
         "settings": settings,
@@ -6130,6 +6311,7 @@ async def admin_settings_update(
                 raise HTTPException(status_code=400, detail=validation.get("error") or "OpenAI key is invalid")
 
     shared_sync: Dict[str, Any] = {}
+    aio_status_resync_required = False
 
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -6383,38 +6565,62 @@ async def admin_settings_update(
             if isinstance(system_access_data, dict) and system_access_data:
                 await cur.execute(
                     """
-                    SELECT registration_button_bot_enabled, registration_button_app_enabled
+                    SELECT registration_button_bot_enabled, registration_button_app_enabled,
+                           default_min_deposit_amount, default_vip_deposit_amount,
+                           default_copy_deposit_amount
                     FROM admin_system_access_settings
                     WHERE id = 1
                     LIMIT 1
                     """
                 )
-                current_visibility = await cur.fetchone() or (1, 1)
+                current_access = await cur.fetchone() or (
+                    1,
+                    1,
+                    DEFAULT_MIN_DEPOSIT,
+                    DEFAULT_VIP_DEPOSIT,
+                    DEFAULT_COPY_DEPOSIT,
+                )
                 access_policy = normalize_access_policy(system_access_data.get("policy"))
-                min_deposit = normalize_min_deposit(system_access_data.get("min_deposit_amount"))
+                defaults_payload = system_access_data.get("deposit_defaults")
+                if not isinstance(defaults_payload, dict):
+                    defaults_payload = {}
+                try:
+                    deposit_defaults = normalize_deposit_thresholds(
+                        defaults_payload.get(
+                            "min_deposit_amount",
+                            system_access_data.get("min_deposit_amount", current_access[2]),
+                        ),
+                        defaults_payload.get("vip_deposit_amount", current_access[3]),
+                        defaults_payload.get("copy_deposit_amount", current_access[4]),
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
                 registration_url = str(system_access_data.get("registration_url") or "").strip()
                 registration_button_bot_enabled = normalize_settings_toggle(
-                    system_access_data.get("registration_button_bot_enabled", current_visibility[0]), 1
+                    system_access_data.get("registration_button_bot_enabled", current_access[0]), 1
                 )
                 registration_button_app_enabled = normalize_settings_toggle(
-                    system_access_data.get("registration_button_app_enabled", current_visibility[1]), 1
+                    system_access_data.get("registration_button_app_enabled", current_access[1]), 1
                 )
                 if registration_url:
                     parsed_registration_url = urlsplit(registration_url)
                     if parsed_registration_url.scheme not in {"http", "https"} or not parsed_registration_url.netloc:
                         raise HTTPException(status_code=400, detail="registration_url must be a full HTTP(S) URL")
-                if access_policy != ACCESS_POLICY_REGISTRATION_DEPOSIT:
-                    min_deposit = normalize_min_deposit(0)
                 await cur.execute(
                     """
                     INSERT INTO admin_system_access_settings
-                        (id, policy, min_deposit_amount, registration_url,
+                        (id, policy, min_deposit_amount,
+                         default_min_deposit_amount, default_vip_deposit_amount,
+                         default_copy_deposit_amount, registration_url,
                          registration_button_bot_enabled, registration_button_app_enabled,
                          updated_by)
-                    VALUES (1, %s, %s, %s, %s, %s, %s)
+                    VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         policy = VALUES(policy),
                         min_deposit_amount = VALUES(min_deposit_amount),
+                        default_min_deposit_amount = VALUES(default_min_deposit_amount),
+                        default_vip_deposit_amount = VALUES(default_vip_deposit_amount),
+                        default_copy_deposit_amount = VALUES(default_copy_deposit_amount),
                         registration_url = VALUES(registration_url),
                         registration_button_bot_enabled = VALUES(registration_button_bot_enabled),
                         registration_button_app_enabled = VALUES(registration_button_app_enabled),
@@ -6422,21 +6628,103 @@ async def admin_settings_update(
                     """,
                     (
                         access_policy,
-                        str(min_deposit),
+                        str(deposit_defaults["min_deposit_amount"]),
+                        str(deposit_defaults["min_deposit_amount"]),
+                        str(deposit_defaults["vip_deposit_amount"]),
+                        str(deposit_defaults["copy_deposit_amount"]),
                         registration_url or None,
                         registration_button_bot_enabled,
                         registration_button_app_enabled,
                         int(admin["user_id"]),
                     ),
                 )
+
+                if "deposit_countries" in system_access_data:
+                    raw_country_rows = system_access_data.get("deposit_countries")
+                    if not isinstance(raw_country_rows, list):
+                        raise HTTPException(status_code=400, detail="deposit_countries must be a list")
+                    if len(raw_country_rows) > 250:
+                        raise HTTPException(status_code=400, detail="Too many country deposit settings")
+
+                    normalized_country_rows: List[Dict[str, Any]] = []
+                    seen_country_codes = set()
+                    try:
+                        for raw_country_row in raw_country_rows:
+                            if not isinstance(raw_country_row, dict):
+                                raise ValueError("Every country deposit setting must be an object")
+                            country_row = normalize_country_rule(raw_country_row)
+                            country_code = country_row["country_code"]
+                            if country_code in seen_country_codes:
+                                raise ValueError(f"Duplicate country code: {country_code}")
+                            seen_country_codes.add(country_code)
+                            normalized_country_rows.append(country_row)
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+                    for country_row in normalized_country_rows:
+                        await cur.execute(
+                            """
+                            INSERT INTO admin_deposit_country_settings
+                                (country_code, country_name, min_deposit_amount,
+                                 vip_deposit_amount, copy_deposit_amount, is_custom, updated_by)
+                            VALUES (%s, %s, %s, %s, %s, 1, %s)
+                            ON DUPLICATE KEY UPDATE
+                                country_name = VALUES(country_name),
+                                min_deposit_amount = VALUES(min_deposit_amount),
+                                vip_deposit_amount = VALUES(vip_deposit_amount),
+                                copy_deposit_amount = VALUES(copy_deposit_amount),
+                                updated_by = VALUES(updated_by)
+                            """,
+                            (
+                                country_row["country_code"],
+                                country_row["country_name"],
+                                str(country_row["min_deposit_amount"]),
+                                str(country_row["vip_deposit_amount"]),
+                                str(country_row["copy_deposit_amount"]),
+                                int(admin["user_id"]),
+                            ),
+                        )
+
+                    submitted_custom_codes = [
+                        row["country_code"]
+                        for row in normalized_country_rows
+                        if bool(row.get("is_custom"))
+                    ]
+                    if submitted_custom_codes:
+                        placeholders = ",".join(["%s"] * len(submitted_custom_codes))
+                        await cur.execute(
+                            f"""
+                            DELETE FROM admin_deposit_country_settings
+                            WHERE is_custom = 1
+                              AND country_code NOT IN ({placeholders})
+                            """,
+                            tuple(submitted_custom_codes),
+                        )
+                    else:
+                        await cur.execute(
+                            "DELETE FROM admin_deposit_country_settings WHERE is_custom = 1"
+                        )
+
+                await cur.execute(
+                    """
+                    UPDATE users
+                    SET aio_dep_ok_synced_value = NULL,
+                        aio_vip_synced_value = NULL,
+                        aio_copy_synced_value = NULL
+                    WHERE NULLIF(TRIM(COALESCE(aio_visit_uuid, '')), '') IS NOT NULL
+                    """
+                )
+                aio_status_resync_required = True
                 shared_sync["registration_url"] = registration_url
-                shared_sync["min_deposit"] = str(min_deposit)
+                shared_sync["min_deposit"] = str(deposit_defaults["min_deposit_amount"])
     if shared_sync:
         try:
             await sync_shared_ai_access_settings(**shared_sync)
         except Exception as exc:
             print(f"Shared AI/access settings sync failed: {exc}")
             raise HTTPException(status_code=502, detail="Settings saved, but AI Chatter synchronization failed")
+    if aio_status_resync_required:
+        asyncio.create_task(aio_profile_status_backfill_worker())
     return {"status": "success"}
 
 
@@ -7590,8 +7878,11 @@ async def get_profile(user=Depends(get_telegram_user)):
                        COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
                        u.profile_updated_at,
                         COALESCE(u.balance, 0) AS balance,
-                        COALESCE(u.pocket_registered, 0) AS pocket_registered,
-                        COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
+                         COALESCE(u.pocket_registered, 0) AS pocket_registered,
+                         COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
+                         COALESCE(u.pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                         u.aio_country_code, u.pocket_country_code,
+                         COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                        u.balance_synced_at,
                        COALESCE(fx.is_enabled, 0) AS forex_access,
                        COALESCE(bin.is_enabled, 0) AS binary_access,
@@ -7619,6 +7910,7 @@ async def get_profile(user=Depends(get_telegram_user)):
         user["registration_link_app_enabled"] = normalize_settings_toggle(
             access_settings.get("registration_button_app_enabled"), 1
         )
+        user["deposit_access"] = await get_user_deposit_access_profile(int(user_id), user)
     return user or {"error": "Not found"}
 
 
@@ -9562,7 +9854,10 @@ async def get_manager_stats_summary(target_kind: str, target_value: Any) -> Opti
             if target_kind == "id":
                 await cur.execute(
                     """
-                    SELECT user_id, username, first_name, country,
+                    SELECT user_id, username, first_name,
+                           COALESCE(NULLIF(aio_country_code, ''),
+                                    NULLIF(pocket_country_code, ''),
+                                    NULLIF(country, '')) AS country,
                            COALESCE(pocket_deposit_amount, 0) AS deposit_amount
                     FROM users
                     WHERE user_id = %s
@@ -9574,7 +9869,10 @@ async def get_manager_stats_summary(target_kind: str, target_value: Any) -> Opti
                 normalized_username = str(target_value or "").strip().lower().lstrip("@")
                 await cur.execute(
                     """
-                    SELECT user_id, username, first_name, country,
+                    SELECT user_id, username, first_name,
+                           COALESCE(NULLIF(aio_country_code, ''),
+                                    NULLIF(pocket_country_code, ''),
+                                    NULLIF(country, '')) AS country,
                            COALESCE(pocket_deposit_amount, 0) AS deposit_amount
                     FROM users
                     WHERE LOWER(COALESCE(username, '')) IN (%s, %s)
@@ -9732,7 +10030,37 @@ async def get_registration_link_by_target(target_kind: str, target_value: str) -
     link_data = await get_personal_registration_link(user_id)
     if not link_data:
         return {"status": "not_found"}
-    return {"status": "success", "user_id": user_id, "url": link_data["url"]}
+    deposit_access = await get_user_deposit_access_profile(user_id)
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "url": link_data["url"],
+        "deposit_access": deposit_access,
+    }
+
+
+def format_registration_deposit_requirements(profile: Dict[str, Any]) -> str:
+    def money(value: Any) -> str:
+        try:
+            return f"${Decimal(str(value or 0)):,.2f}"
+        except (InvalidOperation, TypeError, ValueError):
+            return "$0.00"
+
+    country_code = str(profile.get("country_code") or "").strip().upper()
+    country_name = str(profile.get("country_name") or "").strip()
+    source = str(profile.get("source") or "default").strip().lower()
+    if source == "country" and country_code:
+        country_label = f"{country_name} ({country_code})" if country_name else country_code
+    else:
+        country_label = "Default rates (GEO is not available)"
+    return "\n".join(
+        [
+            f"Deposit requirements · {country_label}",
+            f"Minimum deposit: {money(profile.get('min_deposit_amount'))}",
+            f"VIP access: from {money(profile.get('vip_deposit_amount'))}",
+            f"Copy access: from {money(profile.get('copy_deposit_amount'))}",
+        ]
+    )
 
 
 async def get_registration_link_by_chatterfy_lead_id(lead_id: str) -> Dict[str, Any]:
@@ -9784,6 +10112,9 @@ async def cmd_manager_registration_link(message: types.Message):
         int(result["user_id"]),
     )
     await message.answer(str(result["url"]), disable_web_page_preview=True)
+    await message.answer(
+        format_registration_deposit_requirements(result.get("deposit_access") or {})
+    )
 
 
 @dp.message(CommandStart())

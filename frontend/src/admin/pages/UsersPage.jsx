@@ -119,6 +119,7 @@ const ARCHIVE_FIELD_LABELS = {
   pocket_trader_id: ['Pocket Trader ID', 'Trader ID от Pocket'],
   aio_visit_uuid: ['AIO visit ID', 'ID визита AIO'],
   aio_country_code: ['AIO country code', 'Код страны AIO'],
+  pocket_country_code: ['Pocket country code', 'Код страны Pocket'],
   aio_status_fields_visit_uuid: ['AIO status visit ID', 'ID визита для статусов AIO'],
   aio_dep_ok_synced_value: ['AIO deposit flag', 'Переданный флаг депозита AIO'],
   aio_vip_synced_value: ['AIO VIP flag', 'Переданный флаг VIP AIO'],
@@ -295,6 +296,8 @@ const getArchiveProfile = (snapshot = {}) => {
     balance: mainUser.balance,
     deposit: mainUser.pocket_deposit_amount ?? mainUser.deposit,
     country: mainUser.country || chatterUser.country || '',
+    aioCountry: mainUser.aio_country_code || '',
+    pocketCountry: mainUser.pocket_country_code || mainUser.country || '',
     registrationStatus: chatterUser.registration_status
       || (Number(mainUser.pocket_registered) === 1 ? 'registered' : ''),
     depositStatus: chatterUser.deposit_status
@@ -414,6 +417,7 @@ export default function UsersPage({ adminUser }) {
         activity: res.activity || {},
         aiChatter: res.ai_chatter || { available: false, exists: false },
         pocket: res.pocket || {},
+        depositAccess: res.deposit_access || {},
         postbacks: res.postbacks || [],
         aioInboundPostbacks: res.aio_inbound_postbacks || [],
         aioOutboundEvents: res.aio_outbound_events || [],
@@ -725,6 +729,7 @@ export default function UsersPage({ adminUser }) {
     const archiveProfile = getArchiveProfile(archiveSnapshot);
     const pocket = profileDetails?.pocket || {};
     const pocketPostbacks = profileDetails?.postbacks || [];
+    const depositAccess = profileDetails?.depositAccess || {};
     const aioInboundPostbacks = profileDetails?.aioInboundPostbacks || [];
     const aioOutboundEvents = profileDetails?.aioOutboundEvents || [];
     const latestAioInbound = aioInboundPostbacks[0] || null;
@@ -905,6 +910,81 @@ export default function UsersPage({ adminUser }) {
                 </div>
               </section>
 
+              <section className="admin-user-profile-section admin-user-deposit-access-section">
+                <div className="admin-user-profile-section-head">
+                  <div>
+                    <span>{tr('Country and deposit access', 'Страна и доступ по депозиту')}</span>
+                    <h3>{tr('Personal deposit levels', 'Персональные уровни депозитов')}</h3>
+                  </div>
+                  <small>
+                    {depositAccess.source === 'country'
+                      ? tr('Country rule', 'Правило страны')
+                      : tr('Default fallback', 'Резервные значения')}
+                  </small>
+                </div>
+                <div className="admin-user-profile-fields compact admin-user-geo-fields">
+                  <div>
+                    <span>{tr('AIO country', 'Страна AIO')}</span>
+                    <strong>{formatPocketValue(depositAccess.aio_country_code || pocket.aio_country_code)}</strong>
+                    <small>{tr('Selects the deposit rule', 'Определяет правило депозитов')}</small>
+                  </div>
+                  <div>
+                    <span>{tr('Pocket country', 'Страна Pocket')}</span>
+                    <strong>{formatPocketValue(depositAccess.pocket_country_code || pocket.pocket_country_code || pocket.country)}</strong>
+                    <small>{tr('Stored separately for diagnostics', 'Хранится отдельно для диагностики')}</small>
+                  </div>
+                  <div>
+                    <span>{tr('Effective rule', 'Применённое правило')}</span>
+                    <strong>
+                      {depositAccess.source === 'country'
+                        ? `${depositAccess.country_name || depositAccess.country_code || '—'}${depositAccess.country_name && depositAccess.country_code ? ` · ${depositAccess.country_code}` : ''}`
+                        : tr('Default values', 'Значения по умолчанию')}
+                    </strong>
+                    <small>{tr('Based on AIO GEO', 'На основании GEO AIO')}</small>
+                  </div>
+                  <div>
+                    <span>{tr('Accumulated deposits', 'Накоплено депозитов')}</span>
+                    <strong>{formatBalance(depositAccess.deposit_amount ?? pocket.pocket_deposit_amount)}</strong>
+                    <small>{tr('FTD + repeat deposits', 'FTD + повторные депозиты')}</small>
+                  </div>
+                </div>
+                <div className="admin-user-deposit-levels">
+                  {[
+                    {
+                      key: 'deposit',
+                      title: tr('Minimum deposit', 'Минимальный депозит'),
+                      value: depositAccess.min_deposit_amount,
+                      enabled: Number(depositAccess.deposit_access || 0) === 1,
+                      shortage: depositAccess.shortage,
+                    },
+                    {
+                      key: 'vip',
+                      title: 'VIP',
+                      value: depositAccess.vip_deposit_amount,
+                      enabled: Number(depositAccess.vip_access || 0) === 1,
+                      shortage: depositAccess.vip_shortage,
+                    },
+                    {
+                      key: 'copy',
+                      title: 'Copy',
+                      value: depositAccess.copy_deposit_amount,
+                      enabled: Number(depositAccess.copy_access || 0) === 1,
+                      shortage: depositAccess.copy_shortage,
+                    },
+                  ].map((level) => (
+                    <div key={level.key} className={level.enabled ? 'is-unlocked' : ''}>
+                      <span>{level.title}</span>
+                      <strong>{formatBalance(level.value)}</strong>
+                      <small>
+                        {level.enabled
+                          ? tr('Access granted', 'Доступ открыт')
+                          : `${tr('Remaining', 'Не хватает')}: ${formatBalance(level.shortage)}`}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
               <section className="admin-user-profile-section admin-user-journey-section">
                 <div className="admin-user-profile-section-head">
                   <div>
@@ -1011,8 +1091,8 @@ export default function UsersPage({ adminUser }) {
                     <strong>{formatAdminDate(pocket.pocket_registered_at)}</strong>
                   </div>
                   <div>
-                    <span>{tr('Country', 'Страна')}</span>
-                    <strong>{formatPocketValue(pocket.country)}</strong>
+                    <span>{tr('Pocket country', 'Страна Pocket')}</span>
+                    <strong>{formatPocketValue(pocket.pocket_country_code || pocket.country)}</strong>
                   </div>
                   <div>
                     <span>{tr('Last Pocket event', 'Последнее событие Pocket')}</span>
@@ -1740,6 +1820,14 @@ export default function UsersPage({ adminUser }) {
                       <div>
                         <span>{tr('Country', 'Страна')}</span>
                         <strong>{archiveProfile.country || '—'}</strong>
+                      </div>
+                      <div>
+                        <span>{tr('AIO country', 'Страна AIO')}</span>
+                        <strong>{archiveProfile.aioCountry || '—'}</strong>
+                      </div>
+                      <div>
+                        <span>{tr('Pocket country', 'Страна Pocket')}</span>
+                        <strong>{archiveProfile.pocketCountry || '—'}</strong>
                       </div>
                       <div>
                         <span>{tr('Registration', 'Регистрация')}</span>

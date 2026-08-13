@@ -12,6 +12,20 @@ try:
 except ModuleNotFoundError:
     from analysis_ai_service import DEFAULT_ANALYSIS_GPT_MODEL, DEFAULT_ANALYSIS_GPT_PROMPT
 try:
+    from backend.deposit_access import (
+        DEFAULT_COPY_DEPOSIT,
+        DEFAULT_MIN_DEPOSIT,
+        DEFAULT_VIP_DEPOSIT,
+        POPULAR_DEPOSIT_COUNTRIES,
+    )
+except ModuleNotFoundError:
+    from deposit_access import (
+        DEFAULT_COPY_DEPOSIT,
+        DEFAULT_MIN_DEPOSIT,
+        DEFAULT_VIP_DEPOSIT,
+        POPULAR_DEPOSIT_COUNTRIES,
+    )
+try:
     from backend.bot_funnel import (
         DEFAULT_CHANNEL_ID,
         DEFAULT_CHANNEL_URL,
@@ -123,6 +137,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     pocket_deposited TINYINT(1) NOT NULL DEFAULT 0,
                     pocket_registered_at VARCHAR(64) NULL,
                     pocket_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+                    pocket_country_code VARCHAR(32) NULL,
                     country VARCHAR(32) NULL,
                     pocket_checked_at TIMESTAMP NULL DEFAULT NULL,
                     balance DECIMAL(18,2) NOT NULL DEFAULT 0.00,
@@ -523,11 +538,30 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     id TINYINT NOT NULL PRIMARY KEY DEFAULT 1,
                     policy VARCHAR(32) NOT NULL DEFAULT 'registration_deposit',
                     min_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+                    default_min_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 10.00,
+                    default_vip_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 30.00,
+                    default_copy_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 50.00,
                     registration_url TEXT NULL,
                     registration_button_bot_enabled TINYINT(1) NOT NULL DEFAULT 1,
                     registration_button_app_enabled TINYINT(1) NOT NULL DEFAULT 1,
                     updated_by BIGINT NULL,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS admin_deposit_country_settings (
+                    country_code CHAR(2) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+                    country_name VARCHAR(100) NOT NULL,
+                    min_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 10.00,
+                    vip_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 30.00,
+                    copy_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 50.00,
+                    is_custom TINYINT(1) NOT NULL DEFAULT 0,
+                    updated_by BIGINT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    KEY idx_deposit_country_name (country_name)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -582,6 +616,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "users", "pocket_deposited", "ALTER TABLE users ADD COLUMN pocket_deposited TINYINT(1) NOT NULL DEFAULT 0")
         await _ensure_column(conn, db_name, "users", "pocket_registered_at", "ALTER TABLE users ADD COLUMN pocket_registered_at VARCHAR(64) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_deposit_amount", "ALTER TABLE users ADD COLUMN pocket_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00")
+        await _ensure_column(conn, db_name, "users", "pocket_country_code", "ALTER TABLE users ADD COLUMN pocket_country_code VARCHAR(32) NULL AFTER pocket_deposit_amount")
         await _ensure_column(conn, db_name, "users", "country", "ALTER TABLE users ADD COLUMN country VARCHAR(32) NULL AFTER pocket_deposit_amount")
         await _ensure_column(conn, db_name, "users", "pocket_checked_at", "ALTER TABLE users ADD COLUMN pocket_checked_at TIMESTAMP NULL DEFAULT NULL")
         await _ensure_column(conn, db_name, "users", "balance", "ALTER TABLE users ADD COLUMN balance DECIMAL(18,2) NOT NULL DEFAULT 0.00")
@@ -923,6 +958,9 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "manager_stats_audit", "command_name", "ALTER TABLE manager_stats_audit ADD COLUMN command_name VARCHAR(16) NOT NULL DEFAULT 'stats' AFTER id")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "policy", "ALTER TABLE admin_system_access_settings ADD COLUMN policy VARCHAR(32) NOT NULL DEFAULT 'registration_deposit'")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "min_deposit_amount", "ALTER TABLE admin_system_access_settings ADD COLUMN min_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00")
+        await _ensure_column(conn, db_name, "admin_system_access_settings", "default_min_deposit_amount", "ALTER TABLE admin_system_access_settings ADD COLUMN default_min_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 10.00 AFTER min_deposit_amount")
+        await _ensure_column(conn, db_name, "admin_system_access_settings", "default_vip_deposit_amount", "ALTER TABLE admin_system_access_settings ADD COLUMN default_vip_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 30.00 AFTER default_min_deposit_amount")
+        await _ensure_column(conn, db_name, "admin_system_access_settings", "default_copy_deposit_amount", "ALTER TABLE admin_system_access_settings ADD COLUMN default_copy_deposit_amount DECIMAL(18,2) NOT NULL DEFAULT 50.00 AFTER default_vip_deposit_amount")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "registration_url", "ALTER TABLE admin_system_access_settings ADD COLUMN registration_url TEXT NULL AFTER min_deposit_amount")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "registration_button_bot_enabled", "ALTER TABLE admin_system_access_settings ADD COLUMN registration_button_bot_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER registration_url")
         await _ensure_column(conn, db_name, "admin_system_access_settings", "registration_button_app_enabled", "ALTER TABLE admin_system_access_settings ADD COLUMN registration_button_app_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER registration_button_bot_enabled")
@@ -936,6 +974,28 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 SET channel_id = -channel_id
                 WHERE channel_id > 0
                   AND CAST(channel_id AS CHAR) LIKE '100%'
+                """
+            )
+            await cur.execute(
+                """
+                UPDATE users u
+                SET pocket_country_code = (
+                    SELECT p.country
+                    FROM pocket_postback_events p
+                    WHERE p.user_id = u.user_id
+                      AND p.country IS NOT NULL
+                      AND TRIM(p.country) <> ''
+                    ORDER BY p.created_at DESC, p.id DESC
+                    LIMIT 1
+                )
+                WHERE pocket_country_code IS NULL
+                  AND EXISTS (
+                    SELECT 1
+                    FROM pocket_postback_events p2
+                    WHERE p2.user_id = u.user_id
+                      AND p2.country IS NOT NULL
+                      AND TRIM(p2.country) <> ''
+                  )
                 """
             )
         await _ensure_column(conn, db_name, "admin_support_links", "check_subscription_enabled", "ALTER TABLE admin_support_links ADD COLUMN check_subscription_enabled TINYINT(1) NOT NULL DEFAULT 1")
@@ -1200,10 +1260,32 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
-                INSERT INTO admin_system_access_settings (id, policy, min_deposit_amount, updated_by)
-                VALUES (1, 'registration_deposit', 0.00, NULL)
+                INSERT INTO admin_system_access_settings
+                    (id, policy, min_deposit_amount, default_min_deposit_amount,
+                     default_vip_deposit_amount, default_copy_deposit_amount, updated_by)
+                VALUES (1, 'registration_deposit', 0.00, %s, %s, %s, NULL)
                 ON DUPLICATE KEY UPDATE id = id
+                """,
+                (str(DEFAULT_MIN_DEPOSIT), str(DEFAULT_VIP_DEPOSIT), str(DEFAULT_COPY_DEPOSIT)),
+            )
+
+            await cur.executemany(
                 """
+                INSERT IGNORE INTO admin_deposit_country_settings
+                    (country_code, country_name, min_deposit_amount,
+                     vip_deposit_amount, copy_deposit_amount, is_custom, updated_by)
+                VALUES (%s, %s, %s, %s, %s, 0, NULL)
+                """,
+                [
+                    (
+                        country_code,
+                        country_name,
+                        str(DEFAULT_MIN_DEPOSIT),
+                        str(DEFAULT_VIP_DEPOSIT),
+                        str(DEFAULT_COPY_DEPOSIT),
+                    )
+                    for country_code, country_name in POPULAR_DEPOSIT_COUNTRIES
+                ],
             )
 
             await cur.executemany(

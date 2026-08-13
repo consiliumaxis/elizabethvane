@@ -1575,6 +1575,52 @@
   color: #28673a;
 }
 
+.admin-user-deposit-access-section {
+  grid-column: 1 / -1;
+  border-color: rgba(143, 106, 46, 0.28);
+  background:
+    radial-gradient(circle at 92% 8%, rgba(212, 165, 64, 0.12), transparent 31%),
+    rgba(255, 251, 244, 0.88);
+}
+
+.admin-user-deposit-levels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-user-deposit-levels > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(143, 106, 46, 0.16);
+  border-radius: 12px;
+  background: rgba(143, 106, 46, 0.055);
+  padding: 11px;
+}
+
+.admin-user-deposit-levels > div.is-unlocked {
+  border-color: rgba(45, 139, 71, 0.3);
+  background: linear-gradient(145deg, rgba(232, 248, 235, 0.96), rgba(255, 252, 244, 0.88));
+}
+
+.admin-user-deposit-levels span,
+.admin-user-deposit-levels small {
+  color: var(--text-soft);
+  font-size: 0.65rem;
+  line-height: 1.35;
+}
+
+.admin-user-deposit-levels strong {
+  color: var(--text-main);
+  font-size: 1rem;
+}
+
+.admin-user-deposit-levels .is-unlocked strong,
+.admin-user-deposit-levels .is-unlocked small {
+  color: #28673a;
+}
+
 .admin-user-journey-progress {
   height: 6px;
   overflow: hidden;
@@ -2558,6 +2604,284 @@
   font-weight: 500;
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+
+.admin-access-section {
+  margin-top: 14px;
+  border: 1px solid rgba(143, 106, 46, 0.2);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(255, 252, 246, 0.98), rgba(246, 237, 220, 0.72));
+  padding: 16px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.admin-access-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+.admin-access-section-number {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #9a712d, #6f4c16);
+  color: #fffaf0;
+  font-size: 0.82rem;
+  font-weight: 900;
+  box-shadow: 0 6px 14px rgba(91, 62, 18, 0.2);
+}
+
+.admin-access-section-head h4 {
+  margin: 1px 0 3px;
+  color: var(--text-main);
+  font-size: 1rem;
+}
+
+.admin-access-section-head p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.admin-access-registration-head {
+  margin: 18px 0 10px;
+}
+
+.admin-deposit-default-card,
+.admin-deposit-country-card,
+.admin-deposit-add-card {
+  margin-top: 14px;
+  border: 1px solid rgba(143, 106, 46, 0.2);
+  border-radius: 15px;
+  background: rgba(255, 253, 249, 0.88);
+  padding: 13px;
+}
+
+.admin-deposit-default-card {
+  border-color: rgba(70, 137, 94, 0.28);
+  background: linear-gradient(145deg, rgba(241, 250, 242, 0.96), rgba(255, 252, 244, 0.94));
+}
+
+.admin-deposit-add-card {
+  border-style: dashed;
+  border-color: rgba(143, 106, 46, 0.45);
+}
+
+.admin-deposit-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-deposit-card-title > div {
+  display: grid;
+  gap: 3px;
+}
+
+.admin-deposit-card-title > div > span {
+  color: var(--accent-strong);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-deposit-card-title strong {
+  color: var(--text-main);
+  font-size: 0.94rem;
+}
+
+.admin-deposit-card-title code {
+  margin-left: 5px;
+  border-radius: 7px;
+  background: rgba(143, 106, 46, 0.12);
+  color: var(--accent-strong);
+  padding: 3px 6px;
+  font-size: 0.72rem;
+}
+
+.admin-deposit-card-title small {
+  max-width: 280px;
+  color: var(--text-soft);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.admin-deposit-threshold-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.admin-deposit-threshold-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.admin-deposit-threshold-field > span,
+.admin-deposit-country-toolbar label > span,
+.admin-deposit-country-identity label > span {
+  color: var(--text-soft);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.admin-deposit-threshold-field small {
+  color: rgba(92, 68, 34, 0.7);
+  font-size: 0.68rem;
+}
+
+.admin-money-input {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(143, 106, 46, 0.24);
+  border-radius: 11px;
+  background: rgba(255, 253, 249, 0.96);
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.admin-money-input:focus-within {
+  border-color: rgba(143, 106, 46, 0.62);
+  box-shadow: 0 0 0 3px rgba(143, 106, 46, 0.1);
+}
+
+.admin-money-input b {
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  min-width: 34px;
+  border-right: 1px solid rgba(143, 106, 46, 0.15);
+  background: rgba(143, 106, 46, 0.08);
+  color: var(--accent-strong);
+}
+
+.admin-money-input input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-main);
+  padding: 0 10px;
+  font: inherit;
+  font-weight: 800;
+}
+
+.admin-deposit-country-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.admin-deposit-country-toolbar label,
+.admin-deposit-country-identity label {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-deposit-country-toolbar .admin-btn-outline {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.admin-deposit-country-identity {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.admin-country-code-input {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 900;
+}
+
+.admin-icon-btn,
+.admin-danger-link {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.admin-icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--text-soft);
+  font-size: 1.25rem;
+}
+
+.admin-icon-btn:hover {
+  background: rgba(143, 106, 46, 0.1);
+}
+
+.admin-danger-link {
+  color: #a43f32;
+  font-weight: 800;
+  padding: 7px 4px;
+}
+
+.admin-deposit-logic-note {
+  display: grid;
+  gap: 4px;
+  margin-top: 13px;
+  border-left: 3px solid rgba(143, 106, 46, 0.65);
+  border-radius: 0 10px 10px 0;
+  background: rgba(143, 106, 46, 0.07);
+  padding: 10px 12px;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.admin-deposit-logic-note strong {
+  color: var(--text-main);
+}
+
+@media (max-width: 680px) {
+  .admin-access-section {
+    padding: 12px;
+    border-radius: 15px;
+  }
+
+  .admin-user-deposit-levels {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-deposit-threshold-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-deposit-country-toolbar,
+  .admin-deposit-country-identity {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-deposit-country-toolbar .admin-btn-outline {
+    width: 100%;
+  }
+
+  .admin-deposit-card-title {
+    align-items: flex-start;
+  }
+
+  .admin-deposit-card-title small {
+    max-width: 150px;
+  }
 }
 
 .admin-stream-levels-grid {

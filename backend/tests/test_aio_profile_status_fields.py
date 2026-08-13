@@ -34,9 +34,10 @@ class AioProfileStatusFieldsSourceTest(unittest.TestCase):
             self.backend.count("sync_aio_profile_status_fields("),
             6,
         )
-        self.assertIn('"tg_dep_ok": 1 if truthy_db', self.backend)
-        self.assertIn('"tg_vip": 0', self.backend)
-        self.assertIn('"tg_copy": 0', self.backend)
+        self.assertIn('"tg_dep_ok": int(deposit_profile.get("deposit_access") or 0)', self.backend)
+        self.assertIn('"tg_vip": int(deposit_profile.get("vip_access") or 0)', self.backend)
+        self.assertIn('"tg_copy": int(deposit_profile.get("copy_access") or 0)', self.backend)
+        self.assertIn("get_user_deposit_access_profile", self.backend)
         self.assertIn('"aio_status_fields": aio_status_fields_result', self.backend)
 
     def test_user_cards_receive_and_render_pocket_milestones(self):
