@@ -3328,6 +3328,41 @@ async def bind_user_tracking_identity(
     }
 
 
+async def record_chatterfy_bot_channel_subscription(user_id: int) -> Dict[str, Any]:
+    """Store a Chatterfy-confirmed channel subscription without changing the bot funnel."""
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database is unavailable")
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                UPDATE users
+                SET chatterfy_bot_channel_subscribed_at = COALESCE(
+                    chatterfy_bot_channel_subscribed_at,
+                    NOW()
+                )
+                WHERE user_id = %s
+                """,
+                (int(user_id),),
+            )
+            first_confirmation = cur.rowcount > 0
+            await cur.execute(
+                """
+                SELECT chatterfy_bot_channel_subscribed_at
+                FROM users
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (int(user_id),),
+            )
+            subscription_row = await cur.fetchone() or {}
+    return {
+        "status": "recorded" if first_confirmation else "already_recorded",
+        "subscribed": bool(subscription_row.get("chatterfy_bot_channel_subscribed_at")),
+        "subscribed_at": subscription_row.get("chatterfy_bot_channel_subscribed_at"),
+    }
+
+
 @app.post("/api/internal/chatterfy/lead")
 async def receive_chatterfy_lead_binding(
     payload: ChatterfyLeadBindingRequest,
@@ -3356,9 +3391,17 @@ async def receive_chatterfy_lead_postback(request: Request):
     require_chatterfy_webhook_secret(supplied_secret)
 
     event_slug = normalize_chatterfy_event(payload.get("event") or payload.get("event_slug"))
-    if event_slug not in {CHATTERFY_START_EVENT, CHATTERFY_BOT_START_EVENT}:
+    if event_slug not in {
+        CHATTERFY_START_EVENT,
+        CHATTERFY_BOT_START_EVENT,
+        CHANNEL_SUBSCRIBE_EVENT,
+    }:
         raise HTTPException(status_code=400, detail="Unsupported Chatterfy event")
-    chatterfy_source = "bot" if event_slug == CHATTERFY_BOT_START_EVENT else "account"
+    chatterfy_source = (
+        "bot"
+        if event_slug in {CHATTERFY_BOT_START_EVENT, CHANNEL_SUBSCRIBE_EVENT}
+        else "account"
+    )
 
     raw_user_id = payload.get("tgid") or payload.get("tg_user_id") or payload.get("user_id")
     try:
@@ -3418,7 +3461,10 @@ async def receive_chatterfy_lead_postback(request: Request):
         username=str(username),
         chatterfy_source=chatterfy_source,
     )
-    event_result = await send_pending_chatterfy_start_event(user_id, event_slug)
+    if event_slug == CHANNEL_SUBSCRIBE_EVENT:
+        event_result = await record_chatterfy_bot_channel_subscription(user_id)
+    else:
+        event_result = await send_pending_chatterfy_start_event(user_id, event_slug)
     return {"status": "ok", "tracking": tracking, "event": event_result}
 
 
@@ -4285,6 +4331,7 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                     "aio_copy_synced_value = NULL",
                     "chatterfy_lead_id = NULL",
                     "chatterfy_bot_lead_id = NULL",
+                    "chatterfy_bot_channel_subscribed_at = NULL",
                     "chatterfy_tracker_click_id = NULL",
                     "trader_id = NULL",
                     "profile_name = NULL",
@@ -5066,6 +5113,7 @@ async def admin_user_profile_details(
                        COALESCE(pocket_deposit_amount, 0) AS pocket_deposit_amount,
                        country, pocket_country_code, pocket_checked_at,
                        aio_visit_uuid, aio_country_code, chatterfy_lead_id,
+                       chatterfy_bot_lead_id, chatterfy_bot_channel_subscribed_at,
                        chatterfy_tracker_click_id
                 FROM users
                 WHERE user_id = %s

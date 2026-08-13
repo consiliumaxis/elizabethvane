@@ -21,7 +21,10 @@ class PrecontactProfileTest(unittest.TestCase):
 
         self.assertIn('payload.get("start0")', main_source)
         self.assertIn('lead_column = "chatterfy_bot_lead_id"', main_source)
-        self.assertIn('chatterfy_source = "bot"', main_source)
+        self.assertIn(
+            "event_slug in {CHATTERFY_BOT_START_EVENT, CHANNEL_SUBSCRIBE_EVENT}",
+            main_source,
+        )
         self.assertIn('send_pending_chatterfy_start_event(user_id, event_slug)', main_source)
         self.assertIn("chatterfy_bot_lead_id VARCHAR(255) NULL", schema_source)
 

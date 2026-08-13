@@ -2846,6 +2846,20 @@
   font-weight: 800;
 }
 
+.admin-user-chatterfy-grid > .is-subscribed {
+  border-color: rgba(55, 137, 76, 0.26);
+  background: rgba(236, 249, 239, 0.9);
+}
+
+.admin-user-chatterfy-grid > .is-subscribed strong {
+  color: #28673a;
+}
+
+.admin-user-chatterfy-grid > .is-subscribed small {
+  background: rgba(55, 137, 76, 0.11);
+  color: #28673a;
+}
+
 .admin-deposit-country-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

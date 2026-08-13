@@ -127,6 +127,8 @@ const ARCHIVE_FIELD_LABELS = {
   conversion_type_uuid: ['Conversion type UUID', 'UUID типа конверсии'],
   country_code: ['Country code', 'Код страны'],
   chatterfy_lead_id: ['Chatterfy lead ID', 'ID лида Chatterfy'],
+  chatterfy_bot_lead_id: ['Chatterfy Bot chat ID', 'ID чата Chatterfy Bot'],
+  chatterfy_bot_channel_subscribed_at: ['Chatterfy channel subscription', 'Подписка на канал из Chatterfy'],
   chatterfy_tracker_click_id: ['Chatterfy tracker click ID', 'Tracker Click ID Chatterfy'],
   event_slug: ['Event type', 'Тип события'],
   event_code: ['Event code', 'Код события'],
@@ -745,8 +747,11 @@ export default function UsersPage({ adminUser }) {
     ) === 1;
     const telegramChatId = pocket.user_id || selectedUser.user_id || '';
     const chatterfyChatId = pocket.chatterfy_lead_id || '';
+    const chatterfyBotChatId = pocket.chatterfy_bot_lead_id || '';
+    const chatterfyChannelSubscribedAt = pocket.chatterfy_bot_channel_subscribed_at || '';
+    const chatterfyChannelSubscribed = Boolean(chatterfyChannelSubscribedAt);
     const trackerClickId = pocket.chatterfy_tracker_click_id || '';
-    const chatterfyLinked = Boolean(chatterfyChatId);
+    const chatterfyLinked = Boolean(chatterfyChatId || chatterfyBotChatId);
     const onboarding = profileDetails?.onboarding || null;
     const activity = profileDetails?.activity || {};
     const aiChatter = profileDetails?.aiChatter || { available: true, exists: false };
@@ -1271,8 +1276,8 @@ export default function UsersPage({ adminUser }) {
                 <strong>Chatterfy</strong>
                 <p>
                   {tr(
-                    'Chatterfy chat identifiers are linked to the Telegram user. The tracker click ID is stored separately from the AIO visit UUID.',
-                    'Идентификаторы чата Chatterfy связаны с Telegram-пользователем. Tracker Click ID хранится отдельно от UUID визита AIO.'
+                    'Chatterfy account and bot identifiers are linked to the Telegram user. Channel subscription is recorded only for administrators.',
+                    'Идентификаторы аккаунта и бота Chatterfy связаны с Telegram-пользователем. Подписка на канал фиксируется только для администраторов.'
                   )}
                 </p>
               </div>
@@ -1295,14 +1300,30 @@ export default function UsersPage({ adminUser }) {
                     <small>click_id</small>
                   </div>
                   <div>
-                    <span>Chatterfy Chat ID <code>{'{id}'}</code></span>
+                    <span>Chatterfy Chat ID · Account</span>
                     <strong>{formatPocketValue(chatterfyChatId)}</strong>
                     <small>sub_id3</small>
+                  </div>
+                  <div>
+                    <span>Chatterfy Bot Chat ID <code>{'{id}'}</code></span>
+                    <strong>{formatPocketValue(chatterfyBotChatId)}</strong>
+                    <small>{tr('Bot flow', 'Воронка бота')}</small>
                   </div>
                   <div>
                     <span>Tracker Click ID <code>{'{tracker.clickid}'}</code></span>
                     <strong>{formatPocketValue(trackerClickId)}</strong>
                     <small>{tr('Stored separately', 'Хранится отдельно')}</small>
+                  </div>
+                  <div className={chatterfyChannelSubscribed ? 'is-subscribed' : 'is-not-subscribed'}>
+                    <span>{tr('Channel subscription', 'Подписка на канал')}</span>
+                    <strong>
+                      {chatterfyChannelSubscribed ? tr('Yes', 'Есть') : tr('No', 'Нет')}
+                    </strong>
+                    <small>
+                      {chatterfyChannelSubscribed
+                        ? formatAdminDate(chatterfyChannelSubscribedAt)
+                        : tr('No postback received', 'Postback ещё не получен')}
+                    </small>
                   </div>
                 </div>
 
