@@ -12,6 +12,7 @@ from aio_tracking import (
     normalize_aio_country_code,
     normalize_aio_revenue,
     normalize_aio_visit_uuid,
+    select_aio_profile_status_fields,
 )
 
 
@@ -142,6 +143,31 @@ class AioTrackingTest(unittest.TestCase):
             "https://app.aio.tech/api/v1/trigger/field/10ac5afb-cbce-4465-95dc-d22a2f735574/"
             "?tg_dep_ok=0&tg_vip=0&tg_copy=0",
         )
+
+    def test_threshold_sync_does_not_promote_vip_or_copy(self):
+        fields = select_aio_profile_status_fields(
+            deposit_access_enabled=1,
+            synced_values={"tg_dep_ok": 0, "tg_vip": 0, "tg_copy": 0},
+        )
+
+        self.assertEqual(fields, {"tg_dep_ok": 1})
+
+    def test_new_visit_initializes_vip_and_copy_to_zero(self):
+        fields = select_aio_profile_status_fields(
+            deposit_access_enabled=1,
+            synced_values={"tg_dep_ok": 1, "tg_vip": 1, "tg_copy": 1},
+            visit_changed=True,
+        )
+
+        self.assertEqual(fields, {"tg_dep_ok": 1, "tg_vip": 0, "tg_copy": 0})
+
+    def test_existing_vip_and_copy_values_are_not_overwritten(self):
+        fields = select_aio_profile_status_fields(
+            deposit_access_enabled=1,
+            synced_values={"tg_dep_ok": 1, "tg_vip": 1, "tg_copy": 1},
+        )
+
+        self.assertEqual(fields, {})
 
     def test_rejects_unknown_batch_field(self):
         with self.assertRaisesRegex(ValueError, "AIO field name is invalid"):

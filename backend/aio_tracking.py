@@ -41,6 +41,7 @@ AIO_USER_FIELD_NAMES = frozenset(
     }
     | {f"tg_question{index}" for index in range(1, 11)}
 )
+AIO_INITIAL_ONLY_PROFILE_STATUS_FIELDS = ("tg_vip", "tg_copy")
 
 
 def normalize_aio_visit_uuid(value: Optional[str]) -> Optional[str]:
@@ -89,6 +90,42 @@ def normalize_aio_revenue(value: Optional[object]) -> str:
     if amount < 0:
         amount = Decimal("0")
     return str(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _normalize_binary_status(value: object) -> int:
+    if isinstance(value, str):
+        return 1 if value.strip().lower() in {"1", "true", "yes", "on"} else 0
+    return 1 if bool(value) else 0
+
+
+def select_aio_profile_status_fields(
+    deposit_access_enabled: object,
+    synced_values: Mapping[str, object],
+    visit_changed: bool = False,
+) -> dict[str, int]:
+    """Return profile fields that may be synchronized automatically.
+
+    Deposit access keeps following the active access rule. VIP and Copy are
+    deliberately initialized to zero only; their future positive states will
+    be delivered by a separate integration flow instead of deposit thresholds.
+    """
+    normalized_synced_values = dict(synced_values or {})
+    desired_deposit_access = _normalize_binary_status(deposit_access_enabled)
+    fields_to_send: dict[str, int] = {}
+
+    synced_deposit_access = normalized_synced_values.get("tg_dep_ok")
+    if (
+        visit_changed
+        or synced_deposit_access is None
+        or _normalize_binary_status(synced_deposit_access) != desired_deposit_access
+    ):
+        fields_to_send["tg_dep_ok"] = desired_deposit_access
+
+    for field_name in AIO_INITIAL_ONLY_PROFILE_STATUS_FIELDS:
+        if visit_changed or normalized_synced_values.get(field_name) is None:
+            fields_to_send[field_name] = 0
+
+    return fields_to_send
 
 
 def _configured_uuid(env_name: str, default_value: str) -> str:

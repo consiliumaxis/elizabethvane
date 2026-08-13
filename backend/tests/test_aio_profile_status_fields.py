@@ -34,9 +34,19 @@ class AioProfileStatusFieldsSourceTest(unittest.TestCase):
             self.backend.count("sync_aio_profile_status_fields("),
             6,
         )
-        self.assertIn('"tg_dep_ok": int(deposit_profile.get("deposit_access") or 0)', self.backend)
-        self.assertIn('"tg_vip": int(deposit_profile.get("vip_access") or 0)', self.backend)
-        self.assertIn('"tg_copy": int(deposit_profile.get("copy_access") or 0)', self.backend)
+        self.assertIn("select_aio_profile_status_fields", self.backend)
+        self.assertIn(
+            'deposit_access_enabled=deposit_profile.get("deposit_access")',
+            self.backend,
+        )
+        self.assertNotIn(
+            '"tg_vip": int(deposit_profile.get("vip_access") or 0)',
+            self.backend,
+        )
+        self.assertNotIn(
+            '"tg_copy": int(deposit_profile.get("copy_access") or 0)',
+            self.backend,
+        )
         self.assertIn("get_user_deposit_access_profile", self.backend)
         self.assertIn('"aio_status_fields": aio_status_fields_result', self.backend)
 

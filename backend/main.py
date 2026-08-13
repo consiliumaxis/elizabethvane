@@ -140,6 +140,7 @@ try:
         normalize_aio_country_code,
         normalize_aio_revenue,
         normalize_aio_visit_uuid,
+        select_aio_profile_status_fields,
     )
 except ModuleNotFoundError:
     from aio_tracking import (
@@ -156,6 +157,7 @@ except ModuleNotFoundError:
         normalize_aio_country_code,
         normalize_aio_revenue,
         normalize_aio_visit_uuid,
+        select_aio_profile_status_fields,
     )
 try:
     from backend.bot_funnel import (
@@ -3514,22 +3516,18 @@ async def sync_aio_profile_status_fields(user_id: int) -> Dict[str, Any]:
         return {"status": "skipped", "reason": "missing_aio_visit_uuid"}
 
     deposit_profile = await get_user_deposit_access_profile(int(user_id), user_row)
-    desired_values = {
-        "tg_dep_ok": int(deposit_profile.get("deposit_access") or 0),
-        "tg_vip": int(deposit_profile.get("vip_access") or 0),
-        "tg_copy": int(deposit_profile.get("copy_access") or 0),
-    }
     synced_visit_uuid = normalize_aio_visit_uuid(
         user_row.get("aio_status_fields_visit_uuid")
     )
     visit_changed = synced_visit_uuid != aio_visit_uuid
-    fields_to_send = {
-        field_name: desired_value
-        for field_name, desired_value in desired_values.items()
-        if visit_changed
-        or user_row.get(AIO_PROFILE_STATUS_FIELD_COLUMNS[field_name]) is None
-        or truthy_db(user_row.get(AIO_PROFILE_STATUS_FIELD_COLUMNS[field_name])) != desired_value
-    }
+    fields_to_send = select_aio_profile_status_fields(
+        deposit_access_enabled=deposit_profile.get("deposit_access"),
+        synced_values={
+            field_name: user_row.get(column_name)
+            for field_name, column_name in AIO_PROFILE_STATUS_FIELD_COLUMNS.items()
+        },
+        visit_changed=visit_changed,
+    )
     if not fields_to_send:
         return {"status": "skipped", "reason": "up_to_date"}
 
