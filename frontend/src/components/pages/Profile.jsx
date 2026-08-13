@@ -57,7 +57,6 @@ export default function Profile({
   const binaryAvailable = Number(user.binary_access ?? 1) === 1;
   const profileEditingAllowed = Number(user.profile_edit_allowed || 0) === 1;
   const registrationLinkAppEnabled = Number(user.registration_link_app_enabled ?? 1) === 1;
-  const depositAccess = user.deposit_access || {};
   const selectedStrategy = strategies.find(s => s.id === user.strategy_id) || {};
 
   const systemStrategies = strategies.filter(s => s.is_system === 1);
@@ -370,36 +369,6 @@ export default function Profile({
               {registrationLinkLoading ? t.profile.registrationLinkLoading : t.profile.registrationLinkButton}
             </button>
             {registrationLinkError ? <div className="registration-link-error">{registrationLinkError}</div> : null}
-          </section>
-        ) : null}
-
-        {!isDemo && depositAccess.min_deposit_amount !== undefined ? (
-          <section className="profile-deposit-access-card" aria-label="Deposit access levels">
-            <div className="profile-deposit-access-head">
-              <div>
-                <span>YOUR DEPOSIT LEVELS</span>
-                <strong>
-                  {depositAccess.source === 'country'
-                    ? `${depositAccess.country_name || 'Country'}${depositAccess.country_code ? ` · ${depositAccess.country_code}` : ''}`
-                    : 'International default'}
-                </strong>
-              </div>
-              <small>{formatBalance(depositAccess.deposit_amount)} deposited</small>
-            </div>
-            <div className="profile-deposit-access-levels">
-              {[
-                ['Minimum', depositAccess.min_deposit_amount, depositAccess.deposit_access],
-                ['VIP', depositAccess.vip_deposit_amount, depositAccess.vip_access],
-                ['Copy', depositAccess.copy_deposit_amount, depositAccess.copy_access],
-              ].map(([label, value, available]) => (
-                <div key={label} className={Number(available || 0) === 1 ? 'is-unlocked' : ''}>
-                  <span>{label}</span>
-                  <strong>{formatBalance(value)}</strong>
-                  <small>{Number(available || 0) === 1 ? 'Unlocked' : 'Required'}</small>
-                </div>
-              ))}
-            </div>
-            <p>AIO GEO selects your level. Pocket deposits are added together automatically.</p>
           </section>
         ) : null}
 

@@ -55,6 +55,20 @@ class AdminUserProfileSourceTest(unittest.TestCase):
         self.assertIn("profileLoading", frontend)
         self.assertIn("profileError", frontend)
 
+    def test_client_profile_hides_internal_deposit_levels(self):
+        profile = (
+            PROJECT_ROOT / "frontend/src/components/pages/Profile.jsx"
+        ).read_text(encoding="utf-8")
+        styles = (
+            PROJECT_ROOT / "frontend/src/components/pages/Profile.css"
+        ).read_text(encoding="utf-8")
+        backend = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("YOUR DEPOSIT LEVELS", profile)
+        self.assertNotIn("profile-deposit-access-card", profile)
+        self.assertNotIn(".profile-deposit-access-card", styles)
+        self.assertIn('"deposit_access": deposit_access', backend)
+
 
 if __name__ == "__main__":
     unittest.main()
