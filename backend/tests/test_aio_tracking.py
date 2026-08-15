@@ -26,6 +26,7 @@ class AioTrackingTest(unittest.TestCase):
                 "AIO_POCKET_DEPOSIT_CONVERSION_TYPE_UUID",
                 "AIO_CHATTERFY_START_CONVERSION_TYPE_UUID",
                 "AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID",
+                "AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID",
             )
         }
         os.environ["AIO_POCKET_REGISTRATION_CONVERSION_TYPE_UUID"] = "68909ba1-2f86-44ed-97af-3a521017fe45"
@@ -33,6 +34,7 @@ class AioTrackingTest(unittest.TestCase):
         os.environ["AIO_POCKET_DEPOSIT_CONVERSION_TYPE_UUID"] = "427e553c-8ba2-4c24-8935-f27ea372f70a"
         os.environ["AIO_CHATTERFY_START_CONVERSION_TYPE_UUID"] = "a39ea9ab-20ec-4628-8f19-ee8dcd6d25b9"
         os.environ["AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID"] = "f84ed98b-0882-422a-b0ca-bd89c0b2561d"
+        os.environ["AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID"] = "0a74b0c3-1c23-45d3-828e-9a910043e4a4"
 
     def tearDown(self):
         for key, value in self.previous_env.items():
@@ -78,6 +80,23 @@ class AioTrackingTest(unittest.TestCase):
 
         self.assertIn("conversion_type_uuid=f84ed98b-0882-422a-b0ca-bd89c0b2561d", url)
         self.assertIn("unique=start_bot_chatterfy%3A7097261848", url)
+
+    def test_builds_channel_subscription_with_dedicated_conversion_endpoint(self):
+        url = build_aio_postback_url(
+            "10ac5afb-cbce-4465-95dc-d22a2f735574",
+            "channel_subscribe",
+            revenue="0",
+            currency="USD",
+            unique_key="channel_subscribe:7097261848",
+        )
+
+        self.assertEqual(
+            url,
+            "https://app.aio.tech/api/v1/trigger/conversion/"
+            "10ac5afb-cbce-4465-95dc-d22a2f735574/"
+            "0a74b0c3-1c23-45d3-828e-9a910043e4a4"
+            "?arrived_revenue=0.00&currency=usd",
+        )
 
     def test_builds_pocket_registration_conversion_url(self):
         url = build_aio_pocket_registration_conversion_url(

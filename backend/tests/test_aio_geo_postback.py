@@ -24,6 +24,7 @@ class AioGeoPostbackSourceTest(unittest.TestCase):
         self.assertIn("require_aio_geo_postback_secret", source)
         self.assertIn("get_aio_geo_postback_conversion_type_uuids", source)
         self.assertIn("AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID", source)
+        self.assertIn("AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID", source)
         self.assertIn(
             "conversion_type_uuid not in get_aio_geo_postback_conversion_type_uuids()",
             source,

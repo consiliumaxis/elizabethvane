@@ -451,3 +451,12 @@ def is_active_channel_member(status: Any, is_member: Any = None) -> bool:
     if normalized_status == "restricted":
         return bool(is_member)
     return False
+
+
+def is_resolved_join_request_error(value: Any) -> bool:
+    """Return whether Telegram says another actor already resolved the request."""
+    normalized_error = str(value or "").strip().upper()
+    return any(
+        error_code in normalized_error
+        for error_code in ("USER_ALREADY_PARTICIPANT", "HIDE_REQUESTER_MISSING")
+    )

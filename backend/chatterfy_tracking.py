@@ -1,10 +1,16 @@
 import re
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 
 CHATTERFY_START_EVENT = "start_chatterfy"
 CHATTERFY_BOT_START_EVENT = "start_bot_chatterfy"
 CHATTERFY_CHANNEL_SUBSCRIBE_EVENT = "channel_subscribe"
+DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL = (
+    "https://api.chatterfy.ai/api/postbacks/"
+    "01a000ec-a191-79d0-a2f1-4fb6cc6d4b4e/bot-postback"
+    "?chat_id={chatId}&step_id=01a006d8-3872-7c3a-9584-5d9a1f01b4f1&status=auto"
+)
 CHATTERFY_ALLOWED_EVENTS = {
     "start": CHATTERFY_START_EVENT,
     "bot_start": CHATTERFY_START_EVENT,
@@ -37,6 +43,25 @@ def normalize_telegram_id(value: Optional[object]) -> Optional[int]:
         return int(raw)
     except ValueError:
         return None
+
+
+def build_chatterfy_join_approval_postback_url(
+    template: Optional[object],
+    telegram_id: Optional[object],
+) -> str:
+    normalized_telegram_id = normalize_telegram_id(telegram_id)
+    if not normalized_telegram_id:
+        raise ValueError("Valid Telegram chat ID is required")
+
+    raw_template = str(template or "").strip()
+    if "{chatId}" not in raw_template:
+        raise ValueError("Chatterfy postback URL must contain {chatId}")
+
+    request_url = raw_template.replace("{chatId}", str(normalized_telegram_id))
+    parsed_url = urlsplit(request_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise ValueError("Invalid Chatterfy postback URL")
+    return request_url
 
 
 def normalize_chatterfy_text(value: Optional[object], max_length: int = 255) -> str:

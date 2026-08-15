@@ -11,6 +11,10 @@ AIO_VISIT_UUID_RE = re.compile(
 )
 AIO_EVENT_SLUG_RE = re.compile(r"^[a-z0-9_][a-z0-9_-]{0,63}$")
 AIO_POSTBACK_BASE_URL = (os.getenv("AIO_POSTBACK_BASE_URL") or "https://app.aio.tech/api/v1/trigger/conversion-request").strip()
+AIO_CONVERSION_BASE_URL = (
+    os.getenv("AIO_CONVERSION_BASE_URL")
+    or "https://app.aio.tech/api/v1/trigger/conversion"
+).strip().rstrip("/")
 AIO_FIELD_TRIGGER_BASE_URL = (os.getenv("AIO_FIELD_TRIGGER_BASE_URL") or "https://app.aio.tech/api/v1/trigger/field").strip()
 AIO_POCKET_REGISTRATION_CONVERSION_TYPE_UUID = (os.getenv("AIO_POCKET_REGISTRATION_CONVERSION_TYPE_UUID") or "").strip()
 AIO_POCKET_FTD_CONVERSION_TYPE_UUID = (os.getenv("AIO_POCKET_FTD_CONVERSION_TYPE_UUID") or "").strip()
@@ -22,6 +26,10 @@ AIO_CHATTERFY_START_CONVERSION_TYPE_UUID = (
 AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID = (
     os.getenv("AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID")
     or "f84ed98b-0882-422a-b0ca-bd89c0b2561d"
+).strip()
+AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID = (
+    os.getenv("AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID")
+    or "0a74b0c3-1c23-45d3-828e-9a910043e4a4"
 ).strip()
 AIO_GEO_CONVERSION_TYPE_UUID = (
     os.getenv("AIO_GEO_CONVERSION_TYPE_UUID")
@@ -148,6 +156,23 @@ def build_aio_postback_url(
         raise ValueError("AIO visit UUID is invalid")
     if not normalized_event_slug:
         raise ValueError("AIO event slug is invalid")
+
+    if normalized_event_slug == "channel_subscribe":
+        conversion_type_uuid = _configured_uuid(
+            "AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID",
+            AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID,
+        )
+        normalized_currency = str(currency or "usd").strip().lower() or "usd"
+        query = urlencode(
+            {
+                "arrived_revenue": normalize_aio_revenue(revenue),
+                "currency": normalized_currency,
+            }
+        )
+        return (
+            f"{AIO_CONVERSION_BASE_URL}/{visit_uuid}/{conversion_type_uuid}"
+            f"?{query}"
+        )
 
     conversion_type_uuid = normalized_event_slug
     if normalized_event_slug == "start_chatterfy":

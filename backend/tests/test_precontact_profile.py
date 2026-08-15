@@ -37,6 +37,8 @@ class PrecontactProfileTest(unittest.TestCase):
         self.assertIn('"previous_status": existing_event.get("status")', source)
         self.assertIn("asyncio.create_task(send_pending_chatterfy_start_events(user_id))", source)
         self.assertIn("chatterfy_start_result = await send_pending_chatterfy_start_events", source)
+        self.assertIn("async def send_pending_channel_subscription_event", source)
+        self.assertIn("asyncio.create_task(send_pending_channel_subscription_event(int(user_id)))", source)
 
     def test_precontact_profiles_are_not_broadcast_targets(self):
         source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")

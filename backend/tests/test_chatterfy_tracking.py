@@ -4,6 +4,8 @@ from chatterfy_tracking import (
     CHATTERFY_BOT_START_EVENT,
     CHATTERFY_CHANNEL_SUBSCRIBE_EVENT,
     CHATTERFY_START_EVENT,
+    DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL,
+    build_chatterfy_join_approval_postback_url,
     normalize_chatterfy_event,
     normalize_chatterfy_payload,
     normalize_telegram_id,
@@ -43,6 +45,29 @@ class ChatterfyTrackingTest(unittest.TestCase):
         self.assertEqual(normalized["tg_first_name"], "Dev")
         self.assertEqual(normalized["chatterfy_id"], "contact-42")
         self.assertEqual(normalized["unique_key"], "start_chatterfy:7097261848:contact-42")
+
+    def test_builds_join_approval_postback_for_telegram_chat(self):
+        request_url = build_chatterfy_join_approval_postback_url(
+            DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL,
+            "7097261848",
+        )
+
+        self.assertIn("chat_id=7097261848", request_url)
+        self.assertIn("step_id=01a006d8-3872-7c3a-9584-5d9a1f01b4f1", request_url)
+        self.assertTrue(request_url.endswith("status=auto"))
+        self.assertNotIn("{chatId}", request_url)
+
+    def test_join_approval_postback_rejects_invalid_input(self):
+        with self.assertRaises(ValueError):
+            build_chatterfy_join_approval_postback_url(
+                DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL,
+                "not-a-chat-id",
+            )
+        with self.assertRaises(ValueError):
+            build_chatterfy_join_approval_postback_url(
+                "https://example.com/without-placeholder",
+                "7097261848",
+            )
 
 
 if __name__ == "__main__":

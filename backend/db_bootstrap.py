@@ -475,6 +475,25 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS chatterfy_join_approval_postbacks (
+                    user_id BIGINT NOT NULL PRIMARY KEY,
+                    request_url TEXT NOT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                    attempt_count INT NOT NULL DEFAULT 1,
+                    response_status INT NULL,
+                    response_body LONGTEXT NULL,
+                    error TEXT NULL,
+                    last_attempt_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    sent_at TIMESTAMP NULL DEFAULT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    KEY idx_chatterfy_join_postback_status (status, updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS aio_inbound_postbacks (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     aio_visit_uuid VARCHAR(64) CHARACTER SET ascii NOT NULL,

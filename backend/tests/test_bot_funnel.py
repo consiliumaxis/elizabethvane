@@ -15,6 +15,7 @@ from bot_funnel import (
     get_quiz_question,
     get_quiz_steps_to_complete,
     is_active_channel_member,
+    is_resolved_join_request_error,
     is_skip_answer,
     is_valid_quiz_step,
     map_quiz_answer_locally,
@@ -169,6 +170,10 @@ class BotFunnelTest(unittest.TestCase):
         self.assertEqual(CHANNEL_SUBSCRIBE_EVENT, "channel_subscribe")
         self.assertEqual(CHATTERFY_CHANNEL_SUBSCRIBE_EVENT, CHANNEL_SUBSCRIBE_EVENT)
 
+        self.assertTrue(is_resolved_join_request_error("Bad Request: USER_ALREADY_PARTICIPANT"))
+        self.assertTrue(is_resolved_join_request_error("HIDE_REQUESTER_MISSING"))
+        self.assertFalse(is_resolved_join_request_error("CHAT_ADMIN_REQUIRED"))
+
     def test_start_flow_sends_video_note_before_first_quiz_question(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 
@@ -240,13 +245,7 @@ class BotFunnelTest(unittest.TestCase):
         click_handler = source.split("async def process_channel_open_click", 1)[1].split(
             '@app.get("/api/bot/channel/open")', 1
         )[0]
-        self.assertIn("channel_subscribed_at = NOW()", click_handler)
-        self.assertIn("await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)", click_handler)
-        self.assertIn("await post_to_ai_chatter", click_handler)
-        self.assertLess(
-            click_handler.index("await send_aio_postback_event"),
-            click_handler.index("await post_to_ai_chatter"),
-        )
+        self.assertIn("await complete_channel_subscription", click_handler)
 
     def test_telegram_join_request_mode_approves_before_starting_ai(self):
         source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
@@ -257,6 +256,8 @@ class BotFunnelTest(unittest.TestCase):
             "async def map_quiz_answer_with_ai", 1
         )[0]
         self.assertIn("await bot.approve_chat_join_request", handler)
+        self.assertIn("is_resolved_join_request_error", handler)
+        self.assertIn("await is_user_channel_member", handler)
         self.assertIn("await complete_channel_subscription", handler)
         self.assertLess(
             handler.index("await bot.approve_chat_join_request"),
@@ -269,7 +270,15 @@ class BotFunnelTest(unittest.TestCase):
         confirmation = source.split("async def complete_channel_subscription", 1)[1].split(
             '@app.get("/api/bot/channel/open")', 1
         )[0]
-        self.assertIn("channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())", confirmation)
+        self.assertIn("await ensure_onboarding_row(user_id)", confirmation)
+        self.assertIn("SET channel_subscribed_at = NOW()", confirmation)
+        subscription_update = confirmation.split("SET channel_subscribed_at = NOW()", 1)[1].split(
+            '""",', 1
+        )[0]
+        self.assertNotIn("quiz_completed_at", subscription_update)
+        self.assertIn("AND quiz_completed_at IS NOT NULL", confirmation)
+        self.assertIn("send_pending_channel_subscription_event", confirmation)
+        self.assertIn("deliver_channel_subscription_media", confirmation)
 
         message_handler = source.split("async def handle_onboarding_answer", 1)[1].split(
             "@dp.callback_query", 1

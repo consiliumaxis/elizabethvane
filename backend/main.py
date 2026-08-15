@@ -127,6 +127,7 @@ except ModuleNotFoundError:
     )
 try:
     from backend.aio_tracking import (
+        AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID,
         AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID,
         AIO_GEO_CONVERSION_TYPE_UUID,
         build_aio_field_trigger_url,
@@ -144,6 +145,7 @@ try:
     )
 except ModuleNotFoundError:
     from aio_tracking import (
+        AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID,
         AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID,
         AIO_GEO_CONVERSION_TYPE_UUID,
         build_aio_field_trigger_url,
@@ -171,6 +173,7 @@ try:
         get_quiz_question,
         get_quiz_steps_to_complete,
         is_active_channel_member,
+        is_resolved_join_request_error,
         is_skip_answer,
         is_valid_quiz_step,
         map_quiz_answer_locally,
@@ -193,6 +196,7 @@ except ModuleNotFoundError:
         get_quiz_question,
         get_quiz_steps_to_complete,
         is_active_channel_member,
+        is_resolved_join_request_error,
         is_skip_answer,
         is_valid_quiz_step,
         map_quiz_answer_locally,
@@ -208,9 +212,17 @@ try:
 except ModuleNotFoundError:
     from chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
 try:
-    from backend.chatterfy_tracking import normalize_chatterfy_event
+    from backend.chatterfy_tracking import (
+        DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL,
+        build_chatterfy_join_approval_postback_url,
+        normalize_chatterfy_event,
+    )
 except ModuleNotFoundError:
-    from chatterfy_tracking import normalize_chatterfy_event
+    from chatterfy_tracking import (
+        DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL,
+        build_chatterfy_join_approval_postback_url,
+        normalize_chatterfy_event,
+    )
 try:
     from backend.registration_links import (
         DEFAULT_REGISTRATION_URL,
@@ -452,6 +464,10 @@ AI_CHATTER_GATEWAY_URL = (
 ).strip()
 AI_CHATTER_GATEWAY_SECRET = (os.getenv("AI_CHATTER_GATEWAY_SECRET") or "").strip()
 CHATTERFY_WEBHOOK_SECRET = (os.getenv("CHATTERFY_WEBHOOK_SECRET") or "").strip()
+CHATTERFY_JOIN_APPROVAL_POSTBACK_URL = (
+    os.getenv("CHATTERFY_JOIN_APPROVAL_POSTBACK_URL")
+    or DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL
+).strip()
 AIO_GEO_POSTBACK_SECRET = (os.getenv("AIO_GEO_POSTBACK_SECRET") or "").strip()
 BOT_AI_MANAGER_ENABLED = (
     (os.getenv("BOT_AI_MANAGER_ENABLED") or "1").strip().lower()
@@ -2572,6 +2588,7 @@ def get_aio_geo_postback_conversion_type_uuids() -> set[str]:
         for conversion_uuid in (
             normalize_aio_visit_uuid(AIO_GEO_CONVERSION_TYPE_UUID),
             normalize_aio_visit_uuid(AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID),
+            normalize_aio_visit_uuid(AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID),
         )
         if conversion_uuid
     }
@@ -2949,6 +2966,122 @@ async def send_chatterfy_pocket_postback(
     return result
 
 
+async def send_chatterfy_join_approval_postback(user_id: int) -> Dict[str, Any]:
+    """Notify Chatterfy once after this bot confirms a Telegram join request."""
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+    try:
+        request_url = build_chatterfy_join_approval_postback_url(
+            CHATTERFY_JOIN_APPROVAL_POSTBACK_URL,
+            user_id,
+        )
+    except ValueError as exc:
+        return {"status": "skipped", "reason": str(exc)}
+
+    claimed = False
+    previous_status = ""
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                INSERT IGNORE INTO chatterfy_join_approval_postbacks (
+                    user_id, request_url, status, attempt_count, last_attempt_at
+                )
+                VALUES (%s, %s, 'pending', 1, NOW())
+                """,
+                (int(user_id), request_url),
+            )
+            claimed = cur.rowcount > 0
+            if not claimed:
+                # A failed delivery may be retried by a later confirmed join event.
+                # A stale pending claim only occurs if the process stopped mid-request.
+                await cur.execute(
+                    """
+                    UPDATE chatterfy_join_approval_postbacks
+                    SET request_url = %s,
+                        status = 'pending',
+                        attempt_count = attempt_count + 1,
+                        response_status = NULL,
+                        response_body = NULL,
+                        error = NULL,
+                        last_attempt_at = NOW()
+                    WHERE user_id = %s
+                      AND (
+                          status = 'failed'
+                          OR (status = 'pending' AND updated_at < NOW() - INTERVAL 5 MINUTE)
+                      )
+                    """,
+                    (request_url, int(user_id)),
+                )
+                claimed = cur.rowcount > 0
+            if not claimed:
+                await cur.execute(
+                    """
+                    SELECT status
+                    FROM chatterfy_join_approval_postbacks
+                    WHERE user_id = %s
+                    LIMIT 1
+                    """,
+                    (int(user_id),),
+                )
+                existing_row = await cur.fetchone() or {}
+                previous_status = str(existing_row.get("status") or "")
+
+    if not claimed:
+        return {
+            "status": "skipped",
+            "reason": "duplicate" if previous_status == "sent" else "in_progress",
+            "previous_status": previous_status,
+        }
+
+    response_status = None
+    response_body = ""
+    error_text = None
+    final_status = "sent"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(request_url)
+        response_status = response.status_code
+        response_body = response.text[:4000]
+        if response.status_code >= 400:
+            final_status = "failed"
+            error_text = f"Chatterfy returned HTTP {response.status_code}"
+    except Exception as exc:
+        final_status = "failed"
+        error_text = str(exc)[:4000]
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE chatterfy_join_approval_postbacks
+                SET status = %s,
+                    response_status = %s,
+                    response_body = %s,
+                    error = %s,
+                    sent_at = CASE
+                        WHEN %s = 'sent' THEN COALESCE(sent_at, NOW())
+                        ELSE sent_at
+                    END
+                WHERE user_id = %s
+                """,
+                (
+                    final_status,
+                    response_status,
+                    response_body,
+                    error_text,
+                    final_status,
+                    int(user_id),
+                ),
+            )
+
+    return {
+        "status": final_status,
+        "response_status": response_status,
+        "error": error_text,
+    }
+
+
 async def send_aio_postback_event(
     user_id: int,
     event_slug: str,
@@ -2966,6 +3099,8 @@ async def send_aio_postback_event(
     default_unique_key = f"{normalized_event_slug}:{user_id}"
     normalized_unique_key = str(unique_key or default_unique_key).strip()[:128] or default_unique_key
     normalized_currency = str(currency or "").strip().upper()[:8] or None
+    if normalized_event_slug == CHANNEL_SUBSCRIBE_EVENT and not normalized_currency:
+        normalized_currency = "USD"
     normalized_revenue = normalize_aio_revenue(revenue)
 
     async with db_pool.acquire() as conn:
@@ -3094,11 +3229,42 @@ async def send_pending_chatterfy_start_event(
     )
 
 
+async def send_pending_channel_subscription_event(user_id: int) -> Dict[str, Any]:
+    """Deliver a confirmed channel subscription once an AIO visit is linked."""
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT channel_subscribed_at
+                FROM user_onboarding
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (int(user_id),),
+            )
+            onboarding_row = await cur.fetchone() or {}
+    if not onboarding_row.get("channel_subscribed_at"):
+        return {"status": "skipped", "reason": "channel_not_subscribed"}
+    return await send_aio_postback_event(
+        int(user_id),
+        CHANNEL_SUBSCRIBE_EVENT,
+        currency="USD",
+        unique_key=f"{CHANNEL_SUBSCRIBE_EVENT}:{int(user_id)}",
+    )
+
+
 async def send_pending_chatterfy_start_events(user_id: int) -> Dict[str, Any]:
-    """Retry both independent Chatterfy starts when tracking arrives later."""
+    """Retry source starts and subscription when tracking arrives later."""
     account_result = await send_pending_chatterfy_start_event(user_id, CHATTERFY_START_EVENT)
     bot_result = await send_pending_chatterfy_start_event(user_id, CHATTERFY_BOT_START_EVENT)
-    return {"account": account_result, "bot": bot_result}
+    channel_result = await send_pending_channel_subscription_event(user_id)
+    return {
+        "account": account_result,
+        "bot": bot_result,
+        "channel_subscribe": channel_result,
+    }
 
 
 async def send_pocket_aio_delivery(
@@ -3316,6 +3482,7 @@ async def bind_user_tracking_identity(
             )
     if normalized_aio_visit_uuid:
         await apply_pending_aio_geo_for_user(int(user_id))
+        asyncio.create_task(send_pending_channel_subscription_event(int(user_id)))
     asyncio.create_task(sync_aio_profile_status_fields(int(user_id)))
     return {
         "aio_visit_uuid": normalized_aio_visit_uuid,
@@ -9358,7 +9525,6 @@ async def process_channel_open_click(user_id: int):
         return
     first_name = ""
     username = ""
-    first_click = False
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
@@ -9368,28 +9534,11 @@ async def process_channel_open_click(user_id: int):
             user = await cur.fetchone() or {}
             first_name = str(user.get("first_name") or "")
             username = str(user.get("username") or "")
-            await cur.execute(
-                """
-                UPDATE user_onboarding
-                SET channel_subscribed_at = NOW()
-                WHERE user_id = %s AND channel_subscribed_at IS NULL
-                """,
-                (user_id,),
-            )
-            first_click = cur.rowcount > 0
-    if not first_click:
-        return
-
-    await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)
-    await post_to_ai_chatter({
-        "user_id": user_id,
-        "message_id": int(datetime.now().timestamp() * 1_000_000),
-        "first_name": first_name,
-        "username": username,
-        "text": "Hello",
-        "voice_file_id": "",
-        "is_start": True,
-    })
+    await complete_channel_subscription(
+        user_id,
+        first_name=first_name,
+        username=username,
+    )
 
 
 async def get_channel_join_request_url(settings: Dict[str, Any]) -> str:
@@ -9423,19 +9572,19 @@ async def complete_channel_subscription(
     first_name: str = "",
     username: str = "",
 ) -> bool:
-    """Mark the first confirmed subscription and start the media funnel once."""
+    """Persist subscription immediately and start media only after the quiz."""
     if not db_pool:
         return False
+    await ensure_onboarding_row(user_id)
     first_confirmation = False
+    start_media_funnel = False
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
                 UPDATE user_onboarding
-                SET channel_subscribed_at = NOW(),
-                    channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())
+                SET channel_subscribed_at = NOW()
                 WHERE user_id = %s
-                  AND quiz_completed_at IS NOT NULL
                   AND channel_subscribed_at IS NULL
                 """,
                 (user_id,),
@@ -9444,34 +9593,35 @@ async def complete_channel_subscription(
             await cur.execute(
                 """
                 UPDATE user_onboarding
-                SET channel_gate_completed_at = COALESCE(channel_gate_completed_at, NOW())
+                SET channel_gate_completed_at = NOW()
                 WHERE user_id = %s
                   AND quiz_completed_at IS NOT NULL
+                  AND channel_subscribed_at IS NOT NULL
+                  AND channel_gate_completed_at IS NULL
                 """,
                 (user_id,),
             )
-    if not first_confirmation:
-        return False
-    asyncio.create_task(
-        deliver_channel_subscription_events(
-            user_id,
-            first_name=first_name,
-            username=username,
+            start_media_funnel = cur.rowcount > 0
+    if first_confirmation:
+        asyncio.create_task(send_pending_channel_subscription_event(user_id))
+    if start_media_funnel:
+        asyncio.create_task(
+            deliver_channel_subscription_media(
+                user_id,
+                first_name=first_name,
+                username=username,
+            )
         )
-    )
-    return True
+    return first_confirmation or start_media_funnel
 
 
-async def deliver_channel_subscription_events(
+async def deliver_channel_subscription_media(
     user_id: int,
     *,
     first_name: str = "",
     username: str = "",
 ) -> None:
-    try:
-        await send_aio_postback_event(user_id, CHANNEL_SUBSCRIBE_EVENT)
-    except Exception as exc:
-        print(f"[Bot] channel subscription AIO event failed for {user_id}: {exc}")
+    """Start the downstream media/AI flow once its quiz prerequisite is met."""
     try:
         await post_to_ai_chatter({
             "user_id": user_id,
@@ -9626,8 +9776,33 @@ async def handle_channel_join_request(request: types.ChatJoinRequest):
             user_id=request.from_user.id,
         )
     except Exception as exc:
-        print(f"[Bot] join request approval failed for {request.from_user.id}: {exc}")
-        return
+        request_was_resolved = is_resolved_join_request_error(exc)
+        user_is_member = request_was_resolved and await is_user_channel_member(
+            int(request.from_user.id),
+            request.chat.id,
+        )
+        if not user_is_member:
+            print(f"[Bot] join request approval failed for {request.from_user.id}: {exc}")
+            return
+        print(
+            f"[Bot] join request for {request.from_user.id} was already resolved; "
+            "confirmed active channel membership"
+        )
+    try:
+        chatterfy_result = await send_chatterfy_join_approval_postback(
+            int(request.from_user.id)
+        )
+        if chatterfy_result.get("status") == "failed":
+            print(
+                f"[Bot] Chatterfy join approval postback failed for "
+                f"{request.from_user.id}: {chatterfy_result.get('error')}"
+            )
+    except Exception as exc:
+        # Chatterfy must not block the Telegram onboarding after approval.
+        print(
+            f"[Bot] Chatterfy join approval postback error for "
+            f"{request.from_user.id}: {exc}"
+        )
     started = await complete_channel_subscription(
         int(request.from_user.id),
         first_name=request.from_user.first_name or "",
