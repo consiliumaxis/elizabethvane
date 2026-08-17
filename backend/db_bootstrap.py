@@ -494,6 +494,29 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS chatterfy_direct_postback_events (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    event_slug VARCHAR(64) CHARACTER SET ascii NOT NULL,
+                    unique_key VARCHAR(191) NOT NULL DEFAULT 'once',
+                    request_url TEXT NOT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                    attempt_count INT NOT NULL DEFAULT 1,
+                    response_status INT NULL,
+                    response_body LONGTEXT NULL,
+                    error TEXT NULL,
+                    last_attempt_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    sent_at TIMESTAMP NULL DEFAULT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_chatterfy_direct_once (user_id, event_slug, unique_key),
+                    KEY idx_chatterfy_direct_status (status, updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS aio_inbound_postbacks (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     aio_visit_uuid VARCHAR(64) CHARACTER SET ascii NOT NULL,
@@ -540,6 +563,12 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     chatterfy_response_body LONGTEXT NULL,
                     chatterfy_error TEXT NULL,
                     chatterfy_sent_at TIMESTAMP NULL DEFAULT NULL,
+                    chatterfy_bot_request_url TEXT NULL,
+                    chatterfy_bot_status VARCHAR(32) NULL,
+                    chatterfy_bot_response_status INT NULL,
+                    chatterfy_bot_response_body LONGTEXT NULL,
+                    chatterfy_bot_error TEXT NULL,
+                    chatterfy_bot_sent_at TIMESTAMP NULL DEFAULT NULL,
                     aichatter_status VARCHAR(32) NULL,
                     aichatter_error TEXT NULL,
                     aichatter_synced_at TIMESTAMP NULL DEFAULT NULL,
@@ -973,6 +1002,12 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_response_body", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_response_body LONGTEXT NULL")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_error", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_error TEXT NULL")
         await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_sent_at", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_sent_at TIMESTAMP NULL DEFAULT NULL")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_bot_request_url", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_bot_request_url TEXT NULL AFTER chatterfy_sent_at")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_bot_status", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_bot_status VARCHAR(32) NULL AFTER chatterfy_bot_request_url")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_bot_response_status", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_bot_response_status INT NULL AFTER chatterfy_bot_status")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_bot_response_body", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_bot_response_body LONGTEXT NULL AFTER chatterfy_bot_response_status")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_bot_error", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_bot_error TEXT NULL AFTER chatterfy_bot_response_body")
+        await _ensure_column(conn, db_name, "pocket_postback_events", "chatterfy_bot_sent_at", "ALTER TABLE pocket_postback_events ADD COLUMN chatterfy_bot_sent_at TIMESTAMP NULL DEFAULT NULL AFTER chatterfy_bot_error")
         await _ensure_column(conn, db_name, "pocket_postback_events", "aichatter_status", "ALTER TABLE pocket_postback_events ADD COLUMN aichatter_status VARCHAR(32) NULL AFTER chatterfy_sent_at")
         await _ensure_column(conn, db_name, "pocket_postback_events", "aichatter_error", "ALTER TABLE pocket_postback_events ADD COLUMN aichatter_error TEXT NULL AFTER aichatter_status")
         await _ensure_column(conn, db_name, "pocket_postback_events", "aichatter_synced_at", "ALTER TABLE pocket_postback_events ADD COLUMN aichatter_synced_at TIMESTAMP NULL DEFAULT NULL AFTER aichatter_error")

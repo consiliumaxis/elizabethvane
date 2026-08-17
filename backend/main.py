@@ -208,18 +208,32 @@ except ModuleNotFoundError:
         validate_final_message_config,
     )
 try:
-    from backend.chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
+    from backend.chatterfy_pocket import (
+        CHATTERFY_POCKET_EVENT_SLUGS,
+        build_chatterfy_bot_pocket_postback_url,
+        build_chatterfy_pocket_postback_url,
+    )
 except ModuleNotFoundError:
-    from chatterfy_pocket import CHATTERFY_POCKET_EVENT_SLUGS, build_chatterfy_pocket_postback_url
+    from chatterfy_pocket import (
+        CHATTERFY_POCKET_EVENT_SLUGS,
+        build_chatterfy_bot_pocket_postback_url,
+        build_chatterfy_pocket_postback_url,
+    )
 try:
     from backend.chatterfy_tracking import (
+        DEFAULT_CHATTERFY_ACCOUNT_REGISTRATION_POSTBACK_URL,
+        DEFAULT_CHATTERFY_CONTACT_START_POSTBACK_URL,
         DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL,
+        build_chatterfy_bot_postback_url,
         build_chatterfy_join_approval_postback_url,
         normalize_chatterfy_event,
     )
 except ModuleNotFoundError:
     from chatterfy_tracking import (
+        DEFAULT_CHATTERFY_ACCOUNT_REGISTRATION_POSTBACK_URL,
+        DEFAULT_CHATTERFY_CONTACT_START_POSTBACK_URL,
         DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL,
+        build_chatterfy_bot_postback_url,
         build_chatterfy_join_approval_postback_url,
         normalize_chatterfy_event,
     )
@@ -467,6 +481,14 @@ CHATTERFY_WEBHOOK_SECRET = (os.getenv("CHATTERFY_WEBHOOK_SECRET") or "").strip()
 CHATTERFY_JOIN_APPROVAL_POSTBACK_URL = (
     os.getenv("CHATTERFY_JOIN_APPROVAL_POSTBACK_URL")
     or DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL
+).strip()
+CHATTERFY_CONTACT_START_POSTBACK_URL = (
+    os.getenv("CHATTERFY_CONTACT_START_POSTBACK_URL")
+    or DEFAULT_CHATTERFY_CONTACT_START_POSTBACK_URL
+).strip()
+CHATTERFY_ACCOUNT_REGISTRATION_POSTBACK_URL = (
+    os.getenv("CHATTERFY_ACCOUNT_REGISTRATION_POSTBACK_URL")
+    or DEFAULT_CHATTERFY_ACCOUNT_REGISTRATION_POSTBACK_URL
 ).strip()
 AIO_GEO_POSTBACK_SECRET = (os.getenv("AIO_GEO_POSTBACK_SECRET") or "").strip()
 BOT_AI_MANAGER_ENABLED = (
@@ -2966,6 +2988,261 @@ async def send_chatterfy_pocket_postback(
     return result
 
 
+async def send_chatterfy_bot_pocket_postback(
+    *,
+    log_id: int,
+    event_slug: str,
+    tgid: int,
+) -> Dict[str, Any]:
+    """Deliver a Pocket event to the Chatterfy bot flow once per Pocket log."""
+    if not db_pool or not log_id:
+        return {"status": "skipped", "reason": "db_unavailable"}
+    try:
+        request_url = build_chatterfy_bot_pocket_postback_url(
+            event_slug=event_slug,
+            tgid=tgid,
+        )
+    except ValueError as exc:
+        return {"status": "skipped", "reason": str(exc)}
+
+    claimed = False
+    previous_status = ""
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                UPDATE pocket_postback_events
+                SET chatterfy_bot_request_url = %s,
+                    chatterfy_bot_status = 'pending',
+                    chatterfy_bot_response_status = NULL,
+                    chatterfy_bot_response_body = NULL,
+                    chatterfy_bot_error = NULL
+                WHERE id = %s
+                  AND (
+                      chatterfy_bot_status IS NULL
+                      OR chatterfy_bot_status = 'failed'
+                  )
+                """,
+                (request_url, int(log_id)),
+            )
+            claimed = cur.rowcount > 0
+            if not claimed:
+                await cur.execute(
+                    """
+                    SELECT chatterfy_bot_status
+                    FROM pocket_postback_events
+                    WHERE id = %s
+                    LIMIT 1
+                    """,
+                    (int(log_id),),
+                )
+                existing_row = await cur.fetchone() or {}
+                previous_status = str(existing_row.get("chatterfy_bot_status") or "")
+
+    if not claimed:
+        return {
+            "status": "skipped",
+            "reason": "duplicate" if previous_status == "sent" else "in_progress",
+            "previous_status": previous_status,
+        }
+
+    response_status = None
+    response_body = ""
+    error_text = None
+    final_status = "sent"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(request_url)
+        response_status = response.status_code
+        response_body = response.text[:4000]
+        if response.status_code >= 400:
+            final_status = "failed"
+            error_text = f"Chatterfy returned HTTP {response.status_code}"
+    except Exception as exc:
+        final_status = "failed"
+        error_text = str(exc)[:4000]
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE pocket_postback_events
+                SET chatterfy_bot_status = %s,
+                    chatterfy_bot_response_status = %s,
+                    chatterfy_bot_response_body = %s,
+                    chatterfy_bot_error = %s,
+                    chatterfy_bot_sent_at = CASE
+                        WHEN %s = 'sent' THEN COALESCE(chatterfy_bot_sent_at, NOW())
+                        ELSE chatterfy_bot_sent_at
+                    END
+                WHERE id = %s
+                """,
+                (
+                    final_status,
+                    response_status,
+                    response_body,
+                    error_text,
+                    final_status,
+                    int(log_id),
+                ),
+            )
+    return {
+        "status": final_status,
+        "response_status": response_status,
+        "error": error_text,
+    }
+
+
+async def send_chatterfy_direct_postback(
+    *,
+    user_id: int,
+    event_slug: str,
+    postback_url_template: str,
+    unique_key: str = "once",
+) -> Dict[str, Any]:
+    """Deliver one direct Chatterfy flow event with durable deduplication."""
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+
+    normalized_event_slug = str(event_slug or "").strip().lower()[:64]
+    if not re.fullmatch(r"[a-z0-9_][a-z0-9_-]{0,63}", normalized_event_slug):
+        return {"status": "skipped", "reason": "invalid_event_slug"}
+    normalized_unique_key = str(unique_key or "once").strip()[:191] or "once"
+    try:
+        request_url = build_chatterfy_bot_postback_url(
+            postback_url_template,
+            user_id,
+        )
+    except ValueError as exc:
+        return {"status": "skipped", "reason": str(exc)}
+
+    claimed = False
+    event_id = 0
+    previous_status = ""
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                INSERT IGNORE INTO chatterfy_direct_postback_events (
+                    user_id, event_slug, unique_key, request_url,
+                    status, attempt_count, last_attempt_at
+                )
+                VALUES (%s, %s, %s, %s, 'pending', 1, NOW())
+                """,
+                (
+                    int(user_id),
+                    normalized_event_slug,
+                    normalized_unique_key,
+                    request_url,
+                ),
+            )
+            claimed = cur.rowcount > 0
+            if claimed:
+                event_id = int(cur.lastrowid)
+            else:
+                await cur.execute(
+                    """
+                    UPDATE chatterfy_direct_postback_events
+                    SET request_url = %s,
+                        status = 'pending',
+                        attempt_count = attempt_count + 1,
+                        response_status = NULL,
+                        response_body = NULL,
+                        error = NULL,
+                        last_attempt_at = NOW()
+                    WHERE user_id = %s
+                      AND event_slug = %s
+                      AND unique_key = %s
+                      AND (
+                          status = 'failed'
+                          OR (status = 'pending' AND updated_at < NOW() - INTERVAL 5 MINUTE)
+                      )
+                    """,
+                    (
+                        request_url,
+                        int(user_id),
+                        normalized_event_slug,
+                        normalized_unique_key,
+                    ),
+                )
+                claimed = cur.rowcount > 0
+                await cur.execute(
+                    """
+                    SELECT id, status
+                    FROM chatterfy_direct_postback_events
+                    WHERE user_id = %s AND event_slug = %s AND unique_key = %s
+                    LIMIT 1
+                    """,
+                    (int(user_id), normalized_event_slug, normalized_unique_key),
+                )
+                existing_row = await cur.fetchone() or {}
+                event_id = int(existing_row.get("id") or 0)
+                previous_status = str(existing_row.get("status") or "")
+
+    if not claimed or not event_id:
+        return {
+            "status": "skipped",
+            "reason": "duplicate" if previous_status == "sent" else "in_progress",
+            "previous_status": previous_status,
+            "event_id": event_id or None,
+        }
+
+    response_status = None
+    response_body = ""
+    error_text = None
+    final_status = "sent"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(request_url)
+        response_status = response.status_code
+        response_body = response.text[:4000]
+        if response.status_code >= 400:
+            final_status = "failed"
+            error_text = f"Chatterfy returned HTTP {response.status_code}"
+    except Exception as exc:
+        final_status = "failed"
+        error_text = str(exc)[:4000]
+
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE chatterfy_direct_postback_events
+                SET status = %s,
+                    response_status = %s,
+                    response_body = %s,
+                    error = %s,
+                    sent_at = CASE
+                        WHEN %s = 'sent' THEN COALESCE(sent_at, NOW())
+                        ELSE sent_at
+                    END
+                WHERE id = %s
+                """,
+                (
+                    final_status,
+                    response_status,
+                    response_body,
+                    error_text,
+                    final_status,
+                    event_id,
+                ),
+            )
+    return {
+        "status": final_status,
+        "event_id": event_id,
+        "response_status": response_status,
+        "error": error_text,
+    }
+
+
+async def send_chatterfy_contact_start_postback(user_id: int) -> Dict[str, Any]:
+    return await send_chatterfy_direct_postback(
+        user_id=int(user_id),
+        event_slug="contact_start",
+        postback_url_template=CHATTERFY_CONTACT_START_POSTBACK_URL,
+    )
+
+
 async def send_chatterfy_join_approval_postback(user_id: int) -> Dict[str, Any]:
     """Notify Chatterfy once after this bot confirms a Telegram join request."""
     if not db_pool:
@@ -3222,11 +3499,19 @@ async def send_pending_chatterfy_start_event(
         return {"status": "skipped", "reason": "missing_chatterfy_lead_id"}
     if not normalize_aio_visit_uuid(user_row.get("aio_visit_uuid")):
         return {"status": "pending", "reason": "missing_aio_visit_uuid"}
-    return await send_aio_postback_event(
+    aio_result = await send_aio_postback_event(
         int(user_id),
         normalized_event_slug,
         unique_key=f"{normalized_event_slug}:{int(user_id)}",
     )
+    if normalized_event_slug != CHATTERFY_START_EVENT:
+        return aio_result
+
+    # The Chatterfy "Contact" step represents the same business event as the
+    # AIO Start Chatterfy conversion. Keep both deliveries on this single
+    # trigger instead of treating /start in the main Telegram bot as contact.
+    contact_result = await send_chatterfy_contact_start_postback(int(user_id))
+    return {**aio_result, "chatterfy_contact": contact_result}
 
 
 async def send_pending_channel_subscription_event(user_id: int) -> Dict[str, Any]:
@@ -4214,6 +4499,22 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         revenue=f"{deposit_amount:.2f}" if event_slug in {POCKET_FTD_EVENT, POCKET_DEPOSIT_EVENT} else "",
         unique_key=normalized.get("unique_key") or event_slug,
     )
+    chatterfy_bot_result = await send_chatterfy_bot_pocket_postback(
+        log_id=log_id,
+        event_slug=event_slug,
+        tgid=int(telegram_id),
+    )
+    if event_slug == POCKET_REGISTRATION_EVENT:
+        chatterfy_account_registration_result = await send_chatterfy_direct_postback(
+            user_id=int(telegram_id),
+            event_slug="pocket_registration_account",
+            postback_url_template=CHATTERFY_ACCOUNT_REGISTRATION_POSTBACK_URL,
+        )
+    else:
+        chatterfy_account_registration_result = {
+            "status": "skipped",
+            "reason": "not_registration",
+        }
     return {
         "status": status,
         "log_id": log_id,
@@ -4235,6 +4536,8 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
         "chatterfy_start": chatterfy_start_result,
         "aichatter": aichatter_result,
         "chatterfy": chatterfy_result,
+        "chatterfy_bot": chatterfy_bot_result,
+        "chatterfy_account_registration": chatterfy_account_registration_result,
     }
 
 
@@ -5373,6 +5676,8 @@ async def admin_user_profile_details(
                 SELECT id, event_slug, status, reason, trader_id, deposit_amount,
                        country, site_id, cid, sub_id1, sub_id2, sub_id3,
                        chatterfy_status, chatterfy_response_status, chatterfy_error,
+                       chatterfy_bot_status, chatterfy_bot_response_status,
+                       chatterfy_bot_error,
                        aichatter_status, aichatter_error, created_at
                 FROM pocket_postback_events
                 WHERE user_id = %s

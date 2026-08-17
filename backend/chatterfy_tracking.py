@@ -11,6 +11,16 @@ DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL = (
     "01a000ec-a191-79d0-a2f1-4fb6cc6d4b4e/bot-postback"
     "?chat_id={chatId}&step_id=01a006d8-3872-7c3a-9584-5d9a1f01b4f1&status=auto"
 )
+DEFAULT_CHATTERFY_CONTACT_START_POSTBACK_URL = (
+    "https://api.chatterfy.ai/api/postbacks/"
+    "01a000ec-a191-79d0-a2f1-4fb6cc6d4b4e/bot-postback"
+    "?chat_id={chatId}&step_id=01a006d8-3875-7769-8247-a62621401769&status=auto"
+)
+DEFAULT_CHATTERFY_ACCOUNT_REGISTRATION_POSTBACK_URL = (
+    "https://api.chatterfy.ai/api/postbacks/"
+    "01a000ec-a191-79d0-a2f1-4fb6cc6d4b4e/bot-postback"
+    "?chat_id={chatId}&step_id=01a006d8-3877-7c09-b65b-a0ba558d6870&status=auto"
+)
 CHATTERFY_ALLOWED_EVENTS = {
     "start": CHATTERFY_START_EVENT,
     "bot_start": CHATTERFY_START_EVENT,
@@ -45,7 +55,7 @@ def normalize_telegram_id(value: Optional[object]) -> Optional[int]:
         return None
 
 
-def build_chatterfy_join_approval_postback_url(
+def build_chatterfy_bot_postback_url(
     template: Optional[object],
     telegram_id: Optional[object],
 ) -> str:
@@ -62,6 +72,13 @@ def build_chatterfy_join_approval_postback_url(
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         raise ValueError("Invalid Chatterfy postback URL")
     return request_url
+
+
+def build_chatterfy_join_approval_postback_url(
+    template: Optional[object],
+    telegram_id: Optional[object],
+) -> str:
+    return build_chatterfy_bot_postback_url(template, telegram_id)
 
 
 def normalize_chatterfy_text(value: Optional[object], max_length: int = 255) -> str:
