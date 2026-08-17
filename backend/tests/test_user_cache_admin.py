@@ -27,9 +27,20 @@ class UserCacheAdminTest(unittest.TestCase):
         self.assertIn("chatterfy_bot_lead_id = NULL", block)
         self.assertIn("DELETE FROM user_onboarding", block)
         self.assertIn("DELETE FROM pocket_postback_events", block)
+        self.assertIn("DELETE FROM chatterfy_join_approval_postbacks", block)
+        self.assertIn("DELETE FROM chatterfy_direct_postback_events", block)
         self.assertNotIn("DELETE FROM users", block)
         self.assertNotIn("DELETE FROM admin_users", block)
         self.assertNotIn("DELETE FROM user_data_archives", block)
+
+    def test_archive_preserves_chatterfy_delivery_markers_before_clear(self):
+        backend = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+        start = backend.index("async def snapshot_main_user_data")
+        end = backend.index("async def clear_main_user_data", start)
+        block = backend[start:end]
+
+        self.assertIn("SELECT * FROM chatterfy_join_approval_postbacks", block)
+        self.assertIn("SELECT * FROM chatterfy_direct_postback_events", block)
 
     def test_ai_chatter_snapshot_and_clear_cover_user_state(self):
         backend = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")

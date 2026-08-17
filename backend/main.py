@@ -4642,6 +4642,14 @@ async def snapshot_main_user_data(user_id: int) -> Dict[str, list]:
                     "SELECT * FROM pocket_postback_events WHERE user_id = %s ORDER BY id ASC",
                 ),
                 (
+                    "chatterfy_join_approval_postbacks",
+                    "SELECT * FROM chatterfy_join_approval_postbacks WHERE user_id = %s",
+                ),
+                (
+                    "chatterfy_direct_postback_events",
+                    "SELECT * FROM chatterfy_direct_postback_events WHERE user_id = %s ORDER BY id ASC",
+                ),
+                (
                     "preserved_staff_access",
                     "SELECT * FROM admin_users WHERE user_id = %s",
                 ),
@@ -4770,6 +4778,14 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                     ("aio_postback_events", "DELETE FROM aio_postback_events WHERE user_id = %s"),
                     ("aio_inbound_postbacks", "DELETE FROM aio_inbound_postbacks WHERE user_id = %s"),
                     ("pocket_postback_events", "DELETE FROM pocket_postback_events WHERE user_id = %s"),
+                    (
+                        "chatterfy_join_approval_postbacks",
+                        "DELETE FROM chatterfy_join_approval_postbacks WHERE user_id = %s",
+                    ),
+                    (
+                        "chatterfy_direct_postback_events",
+                        "DELETE FROM chatterfy_direct_postback_events WHERE user_id = %s",
+                    ),
                     ("user_presets", "DELETE FROM user_presets WHERE user_id = %s"),
                 )
                 for table_name, query in direct_deletes:
