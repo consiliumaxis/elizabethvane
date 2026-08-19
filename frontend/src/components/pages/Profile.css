@@ -16,6 +16,34 @@
   margin-bottom: 25px;
 }
 
+.profile-access-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -10px 0 20px;
+}
+
+.profile-access-statuses span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 6px 11px;
+  border: 1px solid rgba(212, 175, 55, 0.28);
+  border-radius: 999px;
+  color: var(--text-main);
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.14), rgba(212, 175, 55, 0.05));
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.profile-access-statuses .is-copy {
+  border-color: rgba(85, 161, 126, 0.3);
+  background: linear-gradient(135deg, rgba(85, 161, 126, 0.14), rgba(85, 161, 126, 0.05));
+}
+
 .profile-user-section {
   display: flex;
   flex-direction: column;

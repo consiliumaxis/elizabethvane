@@ -122,6 +122,8 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     chatterfy_lead_id VARCHAR(255) NULL,
                     chatterfy_bot_lead_id VARCHAR(255) NULL,
                     chatterfy_bot_channel_subscribed_at TIMESTAMP NULL DEFAULT NULL,
+                    chatterfy_vip_granted_at TIMESTAMP NULL DEFAULT NULL,
+                    chatterfy_copy_granted_at TIMESTAMP NULL DEFAULT NULL,
                     chatterfy_tracker_click_id VARCHAR(255) NULL,
                     trader_id VARCHAR(64) NULL,
                     profile_edit_allowed TINYINT(1) NOT NULL DEFAULT 0,
@@ -517,6 +519,33 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
 
             await cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS chatterfy_access_events (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    event_slug VARCHAR(64) CHARACTER SET ascii NOT NULL,
+                    unique_key VARCHAR(128) NOT NULL,
+                    chatterfy_lead_id VARCHAR(255) NULL,
+                    aio_visit_uuid VARCHAR(64) CHARACTER SET ascii NULL,
+                    revenue DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+                    currency VARCHAR(8) NOT NULL DEFAULT 'USD',
+                    raw_payload LONGTEXT NULL,
+                    source_ip VARCHAR(64) NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'received',
+                    aio_event_id BIGINT NULL,
+                    aio_status VARCHAR(32) NULL,
+                    error TEXT NULL,
+                    received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    applied_at TIMESTAMP NULL DEFAULT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_chatterfy_access_once (user_id, event_slug, unique_key),
+                    KEY idx_chatterfy_access_user (user_id, received_at),
+                    KEY idx_chatterfy_access_status (status, updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS aio_inbound_postbacks (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     aio_visit_uuid VARCHAR(64) CHARACTER SET ascii NOT NULL,
@@ -655,6 +684,8 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "users", "chatterfy_lead_id", "ALTER TABLE users ADD COLUMN chatterfy_lead_id VARCHAR(255) NULL AFTER aio_visit_uuid")
         await _ensure_column(conn, db_name, "users", "chatterfy_bot_lead_id", "ALTER TABLE users ADD COLUMN chatterfy_bot_lead_id VARCHAR(255) NULL AFTER chatterfy_lead_id")
         await _ensure_column(conn, db_name, "users", "chatterfy_bot_channel_subscribed_at", "ALTER TABLE users ADD COLUMN chatterfy_bot_channel_subscribed_at TIMESTAMP NULL DEFAULT NULL AFTER chatterfy_bot_lead_id")
+        await _ensure_column(conn, db_name, "users", "chatterfy_vip_granted_at", "ALTER TABLE users ADD COLUMN chatterfy_vip_granted_at TIMESTAMP NULL DEFAULT NULL AFTER chatterfy_bot_channel_subscribed_at")
+        await _ensure_column(conn, db_name, "users", "chatterfy_copy_granted_at", "ALTER TABLE users ADD COLUMN chatterfy_copy_granted_at TIMESTAMP NULL DEFAULT NULL AFTER chatterfy_vip_granted_at")
         await _ensure_column(conn, db_name, "users", "chatterfy_tracker_click_id", "ALTER TABLE users ADD COLUMN chatterfy_tracker_click_id VARCHAR(255) NULL AFTER chatterfy_bot_lead_id")
         await _ensure_column(conn, db_name, "users", "pocket_click_id", "ALTER TABLE users ADD COLUMN pocket_click_id VARCHAR(64) NULL")
         await _ensure_column(conn, db_name, "users", "pocket_site_id", "ALTER TABLE users ADD COLUMN pocket_site_id VARCHAR(128) NULL")

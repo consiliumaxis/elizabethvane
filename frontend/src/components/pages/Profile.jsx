@@ -57,6 +57,8 @@ export default function Profile({
   const binaryAvailable = Number(user.binary_access ?? 1) === 1;
   const profileEditingAllowed = Number(user.profile_edit_allowed || 0) === 1;
   const registrationLinkAppEnabled = Number(user.registration_link_app_enabled ?? 1) === 1;
+  const vipGranted = Boolean(user.chatterfy_vip_granted_at);
+  const copyGranted = Boolean(user.chatterfy_copy_granted_at);
   const selectedStrategy = strategies.find(s => s.id === user.strategy_id) || {};
 
   const systemStrategies = strategies.filter(s => s.is_system === 1);
@@ -329,6 +331,12 @@ export default function Profile({
           </div>
         </div>
 
+        {vipGranted || copyGranted ? (
+          <div className="profile-access-statuses" aria-label="Account access statuses">
+            {vipGranted ? <span className="is-vip">◆ VIP active</span> : null}
+            {copyGranted ? <span className="is-copy">⇄ Copy active</span> : null}
+          </div>
+        ) : null}
 
         {!isDemo && (
           <div className="profile-settings-row">

@@ -27,6 +27,8 @@ class AioTrackingTest(unittest.TestCase):
                 "AIO_CHATTERFY_START_CONVERSION_TYPE_UUID",
                 "AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID",
                 "AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID",
+                "AIO_COPY_HOT_DOWN_CONVERSION_TYPE_UUID",
+                "AIO_VIP_UPGRADE_CONVERSION_TYPE_UUID",
             )
         }
         os.environ["AIO_POCKET_REGISTRATION_CONVERSION_TYPE_UUID"] = "68909ba1-2f86-44ed-97af-3a521017fe45"
@@ -35,6 +37,8 @@ class AioTrackingTest(unittest.TestCase):
         os.environ["AIO_CHATTERFY_START_CONVERSION_TYPE_UUID"] = "a39ea9ab-20ec-4628-8f19-ee8dcd6d25b9"
         os.environ["AIO_CHATTERFY_BOT_START_CONVERSION_TYPE_UUID"] = "f84ed98b-0882-422a-b0ca-bd89c0b2561d"
         os.environ["AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID"] = "0a74b0c3-1c23-45d3-828e-9a910043e4a4"
+        os.environ["AIO_COPY_HOT_DOWN_CONVERSION_TYPE_UUID"] = "b922aaf1-6ffa-4b2e-a859-e5aecb4cde6f"
+        os.environ["AIO_VIP_UPGRADE_CONVERSION_TYPE_UUID"] = "187edcc0-9508-4ce0-96eb-5f390787f568"
 
     def tearDown(self):
         for key, value in self.previous_env.items():
@@ -95,6 +99,38 @@ class AioTrackingTest(unittest.TestCase):
             "https://app.aio.tech/api/v1/trigger/conversion/"
             "10ac5afb-cbce-4465-95dc-d22a2f735574/"
             "0a74b0c3-1c23-45d3-828e-9a910043e4a4"
+            "?arrived_revenue=0.00&currency=usd",
+        )
+
+    def test_builds_copy_conversion_with_dedicated_conversion_endpoint(self):
+        url = build_aio_postback_url(
+            "10ac5afb-cbce-4465-95dc-d22a2f735574",
+            "copy_hot_down",
+            revenue="0",
+            currency="USD",
+        )
+
+        self.assertEqual(
+            url,
+            "https://app.aio.tech/api/v1/trigger/conversion/"
+            "10ac5afb-cbce-4465-95dc-d22a2f735574/"
+            "b922aaf1-6ffa-4b2e-a859-e5aecb4cde6f"
+            "?arrived_revenue=0.00&currency=usd",
+        )
+
+    def test_builds_vip_conversion_with_dedicated_conversion_endpoint(self):
+        url = build_aio_postback_url(
+            "10ac5afb-cbce-4465-95dc-d22a2f735574",
+            "vip_upgrade",
+            revenue="0",
+            currency="USD",
+        )
+
+        self.assertEqual(
+            url,
+            "https://app.aio.tech/api/v1/trigger/conversion/"
+            "10ac5afb-cbce-4465-95dc-d22a2f735574/"
+            "187edcc0-9508-4ce0-96eb-5f390787f568"
             "?arrived_revenue=0.00&currency=usd",
         )
 

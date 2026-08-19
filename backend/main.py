@@ -478,6 +478,9 @@ AI_CHATTER_GATEWAY_URL = (
 ).strip()
 AI_CHATTER_GATEWAY_SECRET = (os.getenv("AI_CHATTER_GATEWAY_SECRET") or "").strip()
 CHATTERFY_WEBHOOK_SECRET = (os.getenv("CHATTERFY_WEBHOOK_SECRET") or "").strip()
+CHATTERFY_VIP_EVENT = "vip_upgrade"
+CHATTERFY_COPY_EVENT = "copy_hot_down"
+CHATTERFY_ACCESS_EVENTS = frozenset({CHATTERFY_VIP_EVENT, CHATTERFY_COPY_EVENT})
 CHATTERFY_JOIN_APPROVAL_POSTBACK_URL = (
     os.getenv("CHATTERFY_JOIN_APPROVAL_POSTBACK_URL")
     or DEFAULT_CHATTERFY_JOIN_APPROVAL_POSTBACK_URL
@@ -3376,10 +3379,11 @@ async def send_aio_postback_event(
     default_unique_key = f"{normalized_event_slug}:{user_id}"
     normalized_unique_key = str(unique_key or default_unique_key).strip()[:128] or default_unique_key
     normalized_currency = str(currency or "").strip().upper()[:8] or None
-    if normalized_event_slug == CHANNEL_SUBSCRIBE_EVENT and not normalized_currency:
+    if normalized_event_slug in {CHANNEL_SUBSCRIBE_EVENT, *CHATTERFY_ACCESS_EVENTS} and not normalized_currency:
         normalized_currency = "USD"
     normalized_revenue = normalize_aio_revenue(revenue)
 
+    event_id = None
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("SELECT aio_visit_uuid FROM users WHERE user_id = %s LIMIT 1", (user_id,))
@@ -3425,12 +3429,32 @@ async def send_aio_postback_event(
                 )
                 existing_event = await cur.fetchone() or {}
                 if existing_event:
-                    return {
-                        "status": "skipped",
-                        "reason": "duplicate",
-                        "event_id": existing_event.get("id"),
-                        "previous_status": existing_event.get("status"),
-                    }
+                    existing_status = str(existing_event.get("status") or "")
+                    if existing_status != "failed":
+                        return {
+                            "status": "skipped",
+                            "reason": "duplicate" if existing_status == "sent" else "in_progress",
+                            "event_id": existing_event.get("id"),
+                            "previous_status": existing_event.get("status"),
+                        }
+                    event_id = int(existing_event["id"])
+                    request_url = existing_event.get("request_url") or request_url
+                    await cur.execute(
+                        """
+                        UPDATE aio_postback_events
+                        SET status = 'pending', error = NULL
+                        WHERE id = %s AND status = 'failed'
+                        """,
+                        (event_id,),
+                    )
+                    if cur.rowcount == 0:
+                        return {
+                            "status": "skipped",
+                            "reason": "in_progress",
+                            "event_id": event_id,
+                        }
+                else:
+                    return {"status": "skipped", "reason": "event_claim_failed"}
             else:
                 event_id = cur.lastrowid
 
@@ -3540,15 +3564,121 @@ async def send_pending_channel_subscription_event(user_id: int) -> Dict[str, Any
     )
 
 
+def chatterfy_access_granted_column(event_slug: str) -> str:
+    normalized_event_slug = normalize_aio_event_slug(event_slug)
+    if normalized_event_slug == CHATTERFY_VIP_EVENT:
+        return "chatterfy_vip_granted_at"
+    if normalized_event_slug == CHATTERFY_COPY_EVENT:
+        return "chatterfy_copy_granted_at"
+    raise ValueError("Unsupported Chatterfy access event")
+
+
+async def send_pending_chatterfy_access_event(
+    user_id: int,
+    event_slug: str,
+) -> Dict[str, Any]:
+    """Deliver a Chatterfy-confirmed VIP/Copy grant to AIO exactly once."""
+    normalized_event_slug = normalize_aio_event_slug(event_slug)
+    if normalized_event_slug not in CHATTERFY_ACCESS_EVENTS:
+        return {"status": "skipped", "reason": "unsupported_chatterfy_access_event"}
+    if not db_pool:
+        return {"status": "skipped", "reason": "db_unavailable"}
+
+    granted_column = chatterfy_access_granted_column(normalized_event_slug)
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT aio_visit_uuid, {granted_column} AS granted_at
+                FROM users
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (int(user_id),),
+            )
+            user_row = await cur.fetchone() or {}
+            await cur.execute(
+                """
+                SELECT id, revenue, currency
+                FROM chatterfy_access_events
+                WHERE user_id = %s AND event_slug = %s
+                ORDER BY received_at DESC, id DESC
+                LIMIT 1
+                """,
+                (int(user_id), normalized_event_slug),
+            )
+            access_row = await cur.fetchone() or {}
+
+    if not user_row.get("granted_at"):
+        return {"status": "skipped", "reason": "access_not_granted"}
+    if not normalize_aio_visit_uuid(user_row.get("aio_visit_uuid")):
+        aio_result = {"status": "pending", "reason": "missing_aio_visit_uuid"}
+    else:
+        aio_result = await send_aio_postback_event(
+            int(user_id),
+            normalized_event_slug,
+            revenue=access_row.get("revenue") or 0,
+            currency=access_row.get("currency") or "USD",
+            unique_key=f"chatterfy:{normalized_event_slug}:{int(user_id)}",
+        )
+
+    delivery_complete = (
+        aio_result.get("status") == "sent"
+        or (
+            aio_result.get("status") == "skipped"
+            and aio_result.get("reason") == "duplicate"
+            and aio_result.get("previous_status") == "sent"
+        )
+    )
+    event_status = "applied" if delivery_complete else (
+        "failed" if aio_result.get("status") == "failed" else "pending"
+    )
+    error_text = str(aio_result.get("error") or aio_result.get("reason") or "")[:4000] or None
+    if access_row.get("id"):
+        async with db_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE chatterfy_access_events
+                    SET aio_visit_uuid = NULLIF(%s, ''),
+                        aio_event_id = %s,
+                        aio_status = %s,
+                        status = %s,
+                        error = %s,
+                        applied_at = CASE WHEN %s = 'applied' THEN COALESCE(applied_at, NOW()) ELSE applied_at END
+                    WHERE id = %s
+                    """,
+                    (
+                        normalize_aio_visit_uuid(user_row.get("aio_visit_uuid")) or "",
+                        aio_result.get("event_id"),
+                        aio_result.get("status"),
+                        event_status,
+                        error_text,
+                        event_status,
+                        int(access_row["id"]),
+                    ),
+                )
+    return {**aio_result, "access_event": normalized_event_slug, "delivery_status": event_status}
+
+
+async def send_pending_chatterfy_access_events(user_id: int) -> Dict[str, Any]:
+    return {
+        event_slug: await send_pending_chatterfy_access_event(int(user_id), event_slug)
+        for event_slug in (CHATTERFY_VIP_EVENT, CHATTERFY_COPY_EVENT)
+    }
+
+
 async def send_pending_chatterfy_start_events(user_id: int) -> Dict[str, Any]:
     """Retry source starts and subscription when tracking arrives later."""
     account_result = await send_pending_chatterfy_start_event(user_id, CHATTERFY_START_EVENT)
     bot_result = await send_pending_chatterfy_start_event(user_id, CHATTERFY_BOT_START_EVENT)
     channel_result = await send_pending_channel_subscription_event(user_id)
+    access_results = await send_pending_chatterfy_access_events(user_id)
     return {
         "account": account_result,
         "bot": bot_result,
         "channel_subscribe": channel_result,
+        "access": access_results,
     }
 
 
@@ -3768,6 +3898,7 @@ async def bind_user_tracking_identity(
     if normalized_aio_visit_uuid:
         await apply_pending_aio_geo_for_user(int(user_id))
         asyncio.create_task(send_pending_channel_subscription_event(int(user_id)))
+        asyncio.create_task(send_pending_chatterfy_access_events(int(user_id)))
     asyncio.create_task(sync_aio_profile_status_fields(int(user_id)))
     return {
         "aio_visit_uuid": normalized_aio_visit_uuid,
@@ -3918,6 +4049,160 @@ async def receive_chatterfy_lead_postback(request: Request):
     else:
         event_result = await send_pending_chatterfy_start_event(user_id, event_slug)
     return {"status": "ok", "tracking": tracking, "event": event_result}
+
+
+@app.api_route(
+    "/api/integrations/chatterfy/access/{access_kind}",
+    methods=["GET", "POST"],
+)
+async def receive_chatterfy_access_postback(access_kind: str, request: Request):
+    """Receive a VIP/Copy grant from Chatterfy and forward it to AIO."""
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database is unavailable")
+
+    payload = await read_postback_payload(request)
+    supplied_secret = str(
+        payload.get("secret") or request.headers.get("X-AI-Chatter-Secret") or ""
+    ).strip()
+    require_chatterfy_webhook_secret(supplied_secret)
+
+    event_slug = {
+        "vip": CHATTERFY_VIP_EVENT,
+        "vip_upgrade": CHATTERFY_VIP_EVENT,
+        "copy": CHATTERFY_COPY_EVENT,
+        "copy_hot_down": CHATTERFY_COPY_EVENT,
+    }.get(str(access_kind or "").strip().lower())
+    if not event_slug:
+        raise HTTPException(status_code=404, detail="Unknown Chatterfy access event")
+
+    raw_lead_id = str(
+        payload.get("chatterfy_lead_id")
+        or payload.get("lead_id")
+        or payload.get("id")
+        or ""
+    ).strip()
+    lead_id = normalize_chatterfy_lead_id(raw_lead_id) or ""
+    if raw_lead_id and not lead_id:
+        raise HTTPException(status_code=400, detail="Invalid chatterfy_lead_id")
+
+    raw_user_id = (
+        payload.get("tgid")
+        or payload.get("chatId")
+        or payload.get("chat_id")
+        or payload.get("tg_user_id")
+        or payload.get("user_id")
+    )
+    try:
+        user_id = int(str(raw_user_id or "").strip())
+    except (TypeError, ValueError):
+        user_id = 0
+    if user_id <= 0 and lead_id:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT user_id
+                    FROM users
+                    WHERE chatterfy_lead_id = %s OR chatterfy_bot_lead_id = %s
+                    LIMIT 2
+                    """,
+                    (lead_id, lead_id),
+                )
+                matched_users = list(await cur.fetchall() or [])
+        if len(matched_users) == 1:
+            user_id = int(matched_users[0]["user_id"])
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="Valid tgid is required")
+
+    raw_aio_visit_uuid = str(
+        payload.get("start0")
+        or payload.get("aio_visit_uuid")
+        or payload.get("visit_uuid")
+        or ""
+    ).strip()
+    aio_visit_uuid = normalize_aio_visit_uuid(raw_aio_visit_uuid) or ""
+    if raw_aio_visit_uuid and not aio_visit_uuid:
+        raise HTTPException(status_code=400, detail="Invalid aio_visit_uuid")
+    first_name = str(
+        payload.get("first_name") or payload.get("name") or payload.get("tg_name") or ""
+    ).strip()
+    username = str(payload.get("username") or payload.get("tg_username") or "").strip()
+
+    tracking = await bind_user_tracking_identity(
+        user_id,
+        chatterfy_lead_id=lead_id,
+        aio_visit_uuid=aio_visit_uuid,
+        first_name=first_name,
+        username=username,
+        chatterfy_source="account",
+    )
+
+    revenue = normalize_aio_revenue(
+        payload.get("arrived_revenue") or payload.get("revenue") or 0
+    )
+    currency = str(payload.get("currency") or "USD").strip().upper()[:8] or "USD"
+    safe_payload = {
+        key: ("***" if str(key).lower() in {"secret", "token", "signature"} else value)
+        for key, value in payload.items()
+    }
+    granted_column = chatterfy_access_granted_column(event_slug)
+    unique_key = f"chatterfy:{event_slug}:{user_id}"
+    source_ip = request.client.host if request.client else ""
+    async with db_pool.acquire() as conn:
+        await conn.begin()
+        try:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO chatterfy_access_events (
+                        user_id, event_slug, unique_key, chatterfy_lead_id,
+                        aio_visit_uuid, revenue, currency, raw_payload, source_ip, status
+                    )
+                    VALUES (%s, %s, %s, NULLIF(%s, ''), NULLIF(%s, ''), %s, %s, %s, %s, 'received')
+                    ON DUPLICATE KEY UPDATE
+                        id = LAST_INSERT_ID(id),
+                        chatterfy_lead_id = COALESCE(NULLIF(VALUES(chatterfy_lead_id), ''), chatterfy_lead_id),
+                        aio_visit_uuid = COALESCE(NULLIF(VALUES(aio_visit_uuid), ''), aio_visit_uuid),
+                        revenue = VALUES(revenue),
+                        currency = VALUES(currency),
+                        raw_payload = VALUES(raw_payload),
+                        source_ip = VALUES(source_ip)
+                    """,
+                    (
+                        user_id,
+                        event_slug,
+                        unique_key,
+                        lead_id,
+                        aio_visit_uuid,
+                        revenue,
+                        currency,
+                        json.dumps(safe_payload, ensure_ascii=False, default=str),
+                        source_ip,
+                    ),
+                )
+                access_event_id = int(cur.lastrowid or 0)
+                await cur.execute(
+                    f"""
+                    UPDATE users
+                    SET {granted_column} = COALESCE({granted_column}, NOW())
+                    WHERE user_id = %s
+                    """,
+                    (user_id,),
+                )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+
+    aio_result = await send_pending_chatterfy_access_event(user_id, event_slug)
+    return {
+        "status": "ok",
+        "user_id": user_id,
+        "access": "vip" if event_slug == CHATTERFY_VIP_EVENT else "copy",
+        "access_event_id": access_event_id,
+        "tracking": tracking,
+        "aio": aio_result,
+    }
 
 
 @app.post("/api/internal/aichatter/dialog-start")
@@ -4578,6 +4863,7 @@ async def fetch_admin_user_row(cur, user_id: int) -> Optional[Dict[str, Any]]:
                 COALESCE(u.pocket_registered, 0) AS pocket_registered,
                 COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
                 COALESCE(u.pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                u.chatterfy_vip_granted_at, u.chatterfy_copy_granted_at,
                 u.aio_country_code, u.pocket_country_code,
                 COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                u.balance_synced_at, u.balance_sync_error,
@@ -4648,6 +4934,10 @@ async def snapshot_main_user_data(user_id: int) -> Dict[str, list]:
                 (
                     "chatterfy_direct_postback_events",
                     "SELECT * FROM chatterfy_direct_postback_events WHERE user_id = %s ORDER BY id ASC",
+                ),
+                (
+                    "chatterfy_access_events",
+                    "SELECT * FROM chatterfy_access_events WHERE user_id = %s ORDER BY id ASC",
                 ),
                 (
                     "preserved_staff_access",
@@ -4786,6 +5076,10 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                         "chatterfy_direct_postback_events",
                         "DELETE FROM chatterfy_direct_postback_events WHERE user_id = %s",
                     ),
+                    (
+                        "chatterfy_access_events",
+                        "DELETE FROM chatterfy_access_events WHERE user_id = %s",
+                    ),
                     ("user_presets", "DELETE FROM user_presets WHERE user_id = %s"),
                 )
                 for table_name, query in direct_deletes:
@@ -4818,6 +5112,8 @@ async def clear_main_user_data(user_id: int, archive_id: int) -> Dict[str, int]:
                     "chatterfy_lead_id = NULL",
                     "chatterfy_bot_lead_id = NULL",
                     "chatterfy_bot_channel_subscribed_at = NULL",
+                    "chatterfy_vip_granted_at = NULL",
+                    "chatterfy_copy_granted_at = NULL",
                     "chatterfy_tracker_click_id = NULL",
                     "trader_id = NULL",
                     "profile_name = NULL",
@@ -5492,6 +5788,7 @@ async def admin_users(
                            COALESCE(u.balance, 0) AS balance,
                            COALESCE(u.pocket_registered, 0) AS pocket_registered,
                            COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
+                           u.chatterfy_vip_granted_at, u.chatterfy_copy_granted_at,
                            COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                            u.balance_synced_at, u.balance_sync_error,
                            COALESCE(fx.is_enabled, 0) AS forex_access,
@@ -5529,8 +5826,9 @@ async def admin_users(
                            NULL AS pocket_trader_id, NULL AS trader_id, NULL AS profile_trader_id,
                            0 AS trader_id_is_manual, 0 AS profile_edit_allowed, NULL AS profile_updated_at,
                            0 AS balance,
-                           0 AS pocket_registered, 0 AS pocket_deposited,
-                           0 AS balance_sync_enabled, NULL AS balance_synced_at, NULL AS balance_sync_error,
+                            0 AS pocket_registered, 0 AS pocket_deposited,
+                            NULL AS chatterfy_vip_granted_at, NULL AS chatterfy_copy_granted_at,
+                            0 AS balance_sync_enabled, NULL AS balance_synced_at, NULL AS balance_sync_error,
                            0 AS forex_access, 0 AS binary_access,
                            0 AS is_blocked, NULL AS blocked_at, NULL AS blocked_by, NULL AS created_at,
                            p.name AS strategy_name,
@@ -5600,6 +5898,7 @@ async def admin_user_profile_details(
                        country, pocket_country_code, pocket_checked_at,
                        aio_visit_uuid, aio_country_code, chatterfy_lead_id,
                        chatterfy_bot_lead_id, chatterfy_bot_channel_subscribed_at,
+                       chatterfy_vip_granted_at, chatterfy_copy_granted_at,
                        chatterfy_tracker_click_id
                 FROM users
                 WHERE user_id = %s
@@ -8412,10 +8711,11 @@ async def get_profile(user=Depends(get_telegram_user)):
                        COALESCE(u.profile_edit_allowed, 0) AS profile_edit_allowed,
                        u.profile_updated_at,
                         COALESCE(u.balance, 0) AS balance,
-                         COALESCE(u.pocket_registered, 0) AS pocket_registered,
-                         COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
-                         COALESCE(u.pocket_deposit_amount, 0) AS pocket_deposit_amount,
-                         u.aio_country_code, u.pocket_country_code,
+                          COALESCE(u.pocket_registered, 0) AS pocket_registered,
+                          COALESCE(u.pocket_deposited, 0) AS pocket_deposited,
+                          COALESCE(u.pocket_deposit_amount, 0) AS pocket_deposit_amount,
+                          u.chatterfy_vip_granted_at, u.chatterfy_copy_granted_at,
+                          u.aio_country_code, u.pocket_country_code,
                          COALESCE(u.balance_sync_enabled, 0) AS balance_sync_enabled,
                        u.balance_synced_at,
                        COALESCE(fx.is_enabled, 0) AS forex_access,

@@ -71,6 +71,7 @@ const ARCHIVE_TABLE_LABELS = {
   aio_postback_events: ['AIO events', 'События AIO'],
   aio_inbound_postbacks: ['Inbound AIO conversions', 'Входящие конверсии AIO'],
   pocket_postback_events: ['Pocket events', 'События Pocket'],
+  chatterfy_access_events: ['Chatterfy access events', 'События доступа Chatterfy'],
   preserved_staff_access: ['Staff access (preserved)', 'Доступ сотрудника (сохранён)'],
   preserved_manager_audit: ['Manager action log (preserved)', 'Журнал действий менеджеров (сохранён)'],
   custom_presets: ['Custom strategies', 'Пользовательские стратегии'],
@@ -129,6 +130,8 @@ const ARCHIVE_FIELD_LABELS = {
   chatterfy_lead_id: ['Chatterfy lead ID', 'ID лида Chatterfy'],
   chatterfy_bot_lead_id: ['Chatterfy Bot chat ID', 'ID чата Chatterfy Bot'],
   chatterfy_bot_channel_subscribed_at: ['Chatterfy channel subscription', 'Подписка на канал из Chatterfy'],
+  chatterfy_vip_granted_at: ['Chatterfy VIP granted', 'VIP выдан через Chatterfy'],
+  chatterfy_copy_granted_at: ['Chatterfy Copy granted', 'Copy выдан через Chatterfy'],
   chatterfy_tracker_click_id: ['Chatterfy tracker click ID', 'Tracker Click ID Chatterfy'],
   event_slug: ['Event type', 'Тип события'],
   event_code: ['Event code', 'Код события'],
@@ -750,6 +753,10 @@ export default function UsersPage({ adminUser }) {
     const chatterfyBotChatId = pocket.chatterfy_bot_lead_id || '';
     const chatterfyChannelSubscribedAt = pocket.chatterfy_bot_channel_subscribed_at || '';
     const chatterfyChannelSubscribed = Boolean(chatterfyChannelSubscribedAt);
+    const chatterfyVipGrantedAt = pocket.chatterfy_vip_granted_at || selectedUser.chatterfy_vip_granted_at || '';
+    const chatterfyCopyGrantedAt = pocket.chatterfy_copy_granted_at || selectedUser.chatterfy_copy_granted_at || '';
+    const chatterfyVipGranted = Boolean(chatterfyVipGrantedAt);
+    const chatterfyCopyGranted = Boolean(chatterfyCopyGrantedAt);
     const trackerClickId = pocket.chatterfy_tracker_click_id || '';
     const chatterfyLinked = Boolean(chatterfyChatId || chatterfyBotChatId);
     const onboarding = profileDetails?.onboarding || null;
@@ -792,6 +799,18 @@ export default function UsersPage({ adminUser }) {
                     <span className="admin-user-milestone is-deposit" title={tr('Pocket deposit confirmed', 'Депозит в Pocket подтверждён')}>
                       <span aria-hidden="true">💵</span>
                       {tr('Deposit', 'Депозит')}
+                    </span>
+                  ) : null}
+                  {chatterfyVipGranted ? (
+                    <span className="admin-user-milestone is-vip" title={tr('VIP granted by Chatterfy', 'VIP выдан через Chatterfy')}>
+                      <span aria-hidden="true">◆</span>
+                      VIP
+                    </span>
+                  ) : null}
+                  {chatterfyCopyGranted ? (
+                    <span className="admin-user-milestone is-copy" title={tr('Copy granted by Chatterfy', 'Copy выдан через Chatterfy')}>
+                      <span aria-hidden="true">⇄</span>
+                      Copy
                     </span>
                   ) : null}
                 </div>
@@ -1322,6 +1341,24 @@ export default function UsersPage({ adminUser }) {
                     <small>
                       {chatterfyChannelSubscribed
                         ? formatAdminDate(chatterfyChannelSubscribedAt)
+                        : tr('No postback received', 'Postback ещё не получен')}
+                    </small>
+                  </div>
+                  <div className={chatterfyVipGranted ? 'is-subscribed' : 'is-not-subscribed'}>
+                    <span>{tr('VIP status', 'Статус VIP')}</span>
+                    <strong>{chatterfyVipGranted ? tr('Granted', 'Выдан') : tr('Not granted', 'Не выдан')}</strong>
+                    <small>
+                      {chatterfyVipGranted
+                        ? formatAdminDate(chatterfyVipGrantedAt)
+                        : tr('No postback received', 'Postback ещё не получен')}
+                    </small>
+                  </div>
+                  <div className={chatterfyCopyGranted ? 'is-subscribed' : 'is-not-subscribed'}>
+                    <span>{tr('Copy status', 'Статус Copy')}</span>
+                    <strong>{chatterfyCopyGranted ? tr('Granted', 'Выдан') : tr('Not granted', 'Не выдан')}</strong>
+                    <small>
+                      {chatterfyCopyGranted
+                        ? formatAdminDate(chatterfyCopyGrantedAt)
                         : tr('No postback received', 'Postback ещё не получен')}
                     </small>
                   </div>
@@ -2008,6 +2045,8 @@ export default function UsersPage({ adminUser }) {
           const blocked = Number(user.is_blocked) === 1;
           const registrationConfirmed = Number(user.pocket_registered || 0) === 1;
           const depositConfirmed = Number(user.pocket_deposited || 0) === 1;
+          const vipGranted = Boolean(user.chatterfy_vip_granted_at);
+          const copyGranted = Boolean(user.chatterfy_copy_granted_at);
           const avatarUrl = getAvatarUrl(user);
           return (
             <button
@@ -2049,6 +2088,16 @@ export default function UsersPage({ adminUser }) {
                       aria-label={tr('Pocket deposit confirmed', 'Депозит в Pocket подтверждён')}
                     >
                       <span aria-hidden="true">💵</span>
+                    </span>
+                  ) : null}
+                  {vipGranted ? (
+                    <span className="admin-user-milestone is-vip compact" title="VIP" aria-label="VIP">
+                      <span aria-hidden="true">◆</span>
+                    </span>
+                  ) : null}
+                  {copyGranted ? (
+                    <span className="admin-user-milestone is-copy compact" title="Copy" aria-label="Copy">
+                      <span aria-hidden="true">⇄</span>
                     </span>
                   ) : null}
                 </div>

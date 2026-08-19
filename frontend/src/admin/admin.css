@@ -1128,6 +1128,18 @@
   color: #765514;
 }
 
+.admin-user-milestone.is-vip {
+  border-color: rgba(132, 91, 178, 0.3);
+  background: rgba(244, 235, 252, 0.94);
+  color: #68418e;
+}
+
+.admin-user-milestone.is-copy {
+  border-color: rgba(48, 139, 94, 0.3);
+  background: rgba(231, 247, 238, 0.94);
+  color: #256d49;
+}
+
 .admin-user-milestone.compact {
   width: 25px;
   height: 25px;

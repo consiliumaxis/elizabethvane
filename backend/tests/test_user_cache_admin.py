@@ -29,6 +29,7 @@ class UserCacheAdminTest(unittest.TestCase):
         self.assertIn("DELETE FROM pocket_postback_events", block)
         self.assertIn("DELETE FROM chatterfy_join_approval_postbacks", block)
         self.assertIn("DELETE FROM chatterfy_direct_postback_events", block)
+        self.assertIn("DELETE FROM chatterfy_access_events", block)
         self.assertNotIn("DELETE FROM users", block)
         self.assertNotIn("DELETE FROM admin_users", block)
         self.assertNotIn("DELETE FROM user_data_archives", block)
@@ -41,6 +42,7 @@ class UserCacheAdminTest(unittest.TestCase):
 
         self.assertIn("SELECT * FROM chatterfy_join_approval_postbacks", block)
         self.assertIn("SELECT * FROM chatterfy_direct_postback_events", block)
+        self.assertIn("SELECT * FROM chatterfy_access_events", block)
 
     def test_ai_chatter_snapshot_and_clear_cover_user_state(self):
         backend = (PROJECT_ROOT / "backend/aichatter_admin.py").read_text(encoding="utf-8")

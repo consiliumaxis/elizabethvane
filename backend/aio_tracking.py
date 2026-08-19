@@ -31,6 +31,14 @@ AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID = (
     os.getenv("AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID")
     or "0a74b0c3-1c23-45d3-828e-9a910043e4a4"
 ).strip()
+AIO_COPY_HOT_DOWN_CONVERSION_TYPE_UUID = (
+    os.getenv("AIO_COPY_HOT_DOWN_CONVERSION_TYPE_UUID")
+    or "b922aaf1-6ffa-4b2e-a859-e5aecb4cde6f"
+).strip()
+AIO_VIP_UPGRADE_CONVERSION_TYPE_UUID = (
+    os.getenv("AIO_VIP_UPGRADE_CONVERSION_TYPE_UUID")
+    or "187edcc0-9508-4ce0-96eb-5f390787f568"
+).strip()
 AIO_GEO_CONVERSION_TYPE_UUID = (
     os.getenv("AIO_GEO_CONVERSION_TYPE_UUID")
     or "0141c6c0-2772-484f-b808-9419b8c930e8"
@@ -157,11 +165,23 @@ def build_aio_postback_url(
     if not normalized_event_slug:
         raise ValueError("AIO event slug is invalid")
 
-    if normalized_event_slug == "channel_subscribe":
-        conversion_type_uuid = _configured_uuid(
+    direct_conversion_config = {
+        "channel_subscribe": (
             "AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID",
             AIO_CHANNEL_SUBSCRIBE_CONVERSION_TYPE_UUID,
-        )
+        ),
+        "copy_hot_down": (
+            "AIO_COPY_HOT_DOWN_CONVERSION_TYPE_UUID",
+            AIO_COPY_HOT_DOWN_CONVERSION_TYPE_UUID,
+        ),
+        "vip_upgrade": (
+            "AIO_VIP_UPGRADE_CONVERSION_TYPE_UUID",
+            AIO_VIP_UPGRADE_CONVERSION_TYPE_UUID,
+        ),
+    }
+    if normalized_event_slug in direct_conversion_config:
+        env_name, default_uuid = direct_conversion_config[normalized_event_slug]
+        conversion_type_uuid = _configured_uuid(env_name, default_uuid)
         normalized_currency = str(currency or "usd").strip().lower() or "usd"
         query = urlencode(
             {
