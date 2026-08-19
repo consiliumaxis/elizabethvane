@@ -4003,10 +4003,7 @@ async def receive_chatterfy_lead_postback(request: Request):
         or ""
     )
     raw_aio_visit_uuid = str(
-        payload.get("start0")
-        or payload.get("aio_visit_uuid")
-        or payload.get("visit_uuid")
-        or ""
+        payload.get("aio_visit_uuid") or payload.get("visit_uuid") or ""
     ).strip()
     explicit_tracker_click_id = (
         payload.get("tracker_click_id")
@@ -4122,7 +4119,7 @@ async def receive_chatterfy_access_postback(access_kind: str, request: Request):
     ).strip()
     aio_visit_uuid = normalize_aio_visit_uuid(raw_aio_visit_uuid) or ""
     if raw_aio_visit_uuid and not aio_visit_uuid:
-        raise HTTPException(status_code=400, detail="Invalid aio_visit_uuid")
+        aio_visit_uuid = ""
     first_name = str(
         payload.get("first_name") or payload.get("name") or payload.get("tg_name") or ""
     ).strip()
