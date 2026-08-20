@@ -21,7 +21,9 @@ export default function Support({ onOpenFaq }) {
           channel_url: data?.channel_url || '',
           support_url: data?.support_url || ''
         });
-      } catch (error) {}
+      } catch {
+        // The buttons remain disabled until support links can be loaded.
+      }
     };
 
     loadLinks();
@@ -42,7 +44,9 @@ export default function Support({ onOpenFaq }) {
         tg.openLink(url);
         return;
       }
-    } catch (error) {}
+    } catch {
+      // Fall back to window.open when the Telegram client cannot open the link.
+    }
 
     window.open(url, '_blank', 'noopener,noreferrer');
   };

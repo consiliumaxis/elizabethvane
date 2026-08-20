@@ -5248,7 +5248,7 @@
 
 .admin-funnel-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
   margin: 14px 0 4px;
   border: 1px solid rgba(143, 106, 46, 0.2);
@@ -5275,10 +5275,190 @@
 }
 
 .admin-funnel-panel,
-.admin-final-message-builder {
+.admin-final-message-builder,
+.admin-menu-photo-panel {
   display: grid;
   gap: 12px;
   margin: 14px 0;
+}
+
+.admin-menu-photo-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr);
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(143, 106, 46, 0.26);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(190, 144, 68, 0.14), transparent 42%),
+    rgba(255, 250, 242, 0.92);
+  padding: 14px;
+  box-shadow: 0 10px 28px rgba(73, 50, 20, 0.08);
+}
+
+.admin-menu-photo-preview {
+  min-width: 0;
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(198, 153, 75, 0.28);
+  border-radius: 15px;
+  background:
+    radial-gradient(circle at 48% 48%, rgba(181, 133, 52, 0.13), transparent 34%),
+    #11100e;
+  box-shadow: inset 0 0 0 1px rgba(255, 231, 181, 0.035);
+}
+
+.admin-menu-photo-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.admin-menu-photo-placeholder {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  color: rgba(235, 208, 158, 0.68);
+  text-align: center;
+}
+
+.admin-menu-photo-placeholder strong {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border: 1px solid rgba(206, 160, 82, 0.38);
+  border-radius: 18px;
+  color: #e7c787;
+  background: rgba(171, 125, 49, 0.13);
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+}
+
+.admin-menu-photo-placeholder span {
+  font-size: 0.74rem;
+}
+
+.admin-menu-photo-controls {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 11px;
+}
+
+.admin-menu-photo-current,
+.admin-menu-photo-help {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(143, 106, 46, 0.17);
+  border-radius: 13px;
+  background: rgba(255, 253, 249, 0.72);
+  padding: 11px;
+}
+
+.admin-menu-photo-current > span {
+  color: var(--accent-strong);
+  font-size: 0.63rem;
+  font-weight: 850;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.admin-menu-photo-current strong,
+.admin-menu-photo-help strong {
+  color: var(--text-main);
+  font-size: 0.85rem;
+}
+
+.admin-menu-photo-current small,
+.admin-menu-photo-help span,
+.admin-menu-photo-help small {
+  color: var(--text-soft);
+  font-size: 0.7rem;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.admin-menu-photo-help small {
+  opacity: 0.82;
+}
+
+.admin-menu-photo-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-menu-photo-actions .admin-btn-outline,
+.admin-menu-photo-upload {
+  min-height: 42px;
+}
+
+.admin-menu-photo-upload {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(121, 83, 28, 0.3);
+  border-radius: 11px;
+  color: #fffaf1;
+  background: linear-gradient(145deg, var(--accent), var(--accent-strong));
+  padding: 9px 11px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 5px 13px rgba(83, 57, 20, 0.16);
+}
+
+.admin-menu-photo-upload.is-loading {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.admin-menu-photo-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.admin-menu-photo-confirm {
+  width: min(460px, 100%);
+  text-align: center;
+}
+
+.admin-menu-photo-confirm-icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 10px;
+  border: 1px solid rgba(143, 106, 46, 0.34);
+  border-radius: 17px;
+  color: #fff8ea;
+  background: linear-gradient(145deg, #9b7129, #684717);
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  box-shadow: 0 8px 18px rgba(87, 57, 19, 0.2);
+}
+
+.admin-menu-photo-confirm h3 {
+  margin: 0;
+  color: var(--text-main);
+}
+
+.admin-menu-photo-confirm p {
+  margin: 9px 0 0;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  line-height: 1.5;
 }
 
 .admin-final-enabled-card {
@@ -6498,6 +6678,23 @@
   .admin-quiz-video-library-actions {
     grid-column: 1 / -1;
     justify-content: flex-end;
+  }
+
+  .admin-funnel-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-menu-photo-card {
+    grid-template-columns: 1fr;
+    padding: 11px;
+  }
+
+  .admin-menu-photo-preview {
+    min-height: 190px;
+  }
+
+  .admin-menu-photo-actions {
+    grid-template-columns: 1fr;
   }
 
   .admin-final-add-actions {

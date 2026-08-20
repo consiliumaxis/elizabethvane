@@ -78,22 +78,29 @@ function safeRender(value, fallback = '---') {
   return String(value);
 }
 
-function formatPrice(value) {
+function formatPrice(value, marketKind) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return '---';
+  if (marketKind === 'forex') return parsed.toFixed(5);
   if (parsed >= 100) return parsed.toFixed(2);
   if (parsed >= 1) return parsed.toFixed(4);
   return parsed.toFixed(6);
 }
 
-function formatIndicatorValue(value) {
+function isPriceScaledIndicator(indicatorKey) {
+  const key = String(indicatorKey || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return /^(EMA|SMA|WMA|HMA|VWAP|WAP|PSAR|PARABOLICSAR|SUPERTREND|ICHIMOKU|PIVOT|FIBONACCI|ATR|MACD|BB)/.test(key);
+}
+
+function formatIndicatorValue(value, indicatorKey, marketKind) {
   if (value === null || value === undefined || value === '') return '---';
   if (typeof value === 'object') {
     const primitive = Object.values(value).find(item => typeof item !== 'object');
-    return formatIndicatorValue(primitive);
+    return formatIndicatorValue(primitive, indicatorKey, marketKind);
   }
   const parsed = Number(String(value).replace(',', '.').trim());
   if (Number.isFinite(parsed)) {
+    if (marketKind === 'forex' && isPriceScaledIndicator(indicatorKey)) return parsed.toFixed(5);
     if (Math.abs(parsed) >= 100) return parsed.toFixed(2);
     if (Math.abs(parsed) >= 1) return parsed.toFixed(3);
     return parsed.toFixed(6);
@@ -240,7 +247,7 @@ export default function BinarySignalSettings({
     tick();
     const intervalId = setInterval(tick, 1000);
     return () => clearInterval(intervalId);
-  }, [analysisData?.id, analysisData?.status, analysisData?.remaining_seconds, analysisData?.created_at, analysisData?.timeframe, binaryParams.exp]);
+  }, [analysisData, binaryParams.exp]);
 
   const handleSelectPair = (pairStr) => {
     setBinaryParams({ ...binaryParams, market: marketKind, pair: pairStr });
@@ -446,7 +453,7 @@ export default function BinarySignalSettings({
           <h2 className="settings-main-title analysis-asset-title">{safeRender(analysisData.pair || data.symbol || binaryParams.pair)}</h2>
           <div className="analysis-meta-row">
             <span>{safeRender(analysisData.timeframe || data.selected_expiration || binaryParams.exp)}</span>
-            <span>{formatPrice(price)}</span>
+            <span>{formatPrice(price, marketKind)}</span>
           </div>
           <div className="analysis-strategy-row">
             {globalT.analysisSettings?.strategyLabel || 'Strategy'}:
@@ -467,7 +474,7 @@ export default function BinarySignalSettings({
             {filteredInds.map(([key, ind]) => (
               <div key={key} className="ind-item">
                 <span className="ind-name">{safeRender(key)}</span>
-                <span className="ind-val">{formatIndicatorValue(ind?.value)}</span>
+                <span className="ind-val">{formatIndicatorValue(ind?.value, key, marketKind)}</span>
                 <span className={`ind-sig ${ind?.signal === 'BUY' ? 'sig-buy' : ind?.signal === 'SELL' ? 'sig-sell' : 'sig-neutral'}`}>
                   {safeRender(ind?.signal)}
                 </span>
@@ -531,7 +538,7 @@ export default function BinarySignalSettings({
           ) : (
             <div className="binary-countdown">
               <span>Final price</span>
-              <strong>{formatPrice(finalPrice)}</strong>
+              <strong>{formatPrice(finalPrice, marketKind)}</strong>
             </div>
           )}
         </div>

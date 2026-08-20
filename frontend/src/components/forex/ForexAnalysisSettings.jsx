@@ -8,8 +8,23 @@ import SignalGateModal from '../SignalGateModal';
 import TradingViewChart from './TradingViewChart';
 import NewsModal from './NewsModal';
 import { apiFetchJson } from '../../lib/api';
+import { getFilteredNewsStatus } from '../../lib/marketNews';
+import { currentTimeMs, randomDelay } from '../../lib/runtimeValues';
 
 import * as Flags from 'country-flag-icons/react/3x2';
+
+const FOREX_EXPIRATIONS = ['5m', '15m', '30m', '1h', '4h', '1d'];
+
+const resolvePreloadedNews = (analysis) => {
+  if (!analysis) return null;
+  if (!analysis.news_data) return { economicCalendar: [] };
+  if (typeof analysis.news_data !== 'string') return analysis.news_data;
+  try {
+    return JSON.parse(analysis.news_data);
+  } catch {
+    return { economicCalendar: [] };
+  }
+};
 
 const AssetIcon = ({ asset }) => {
   if (!asset) return null;
@@ -45,12 +60,12 @@ export default function ForexAnalysisSettings({
   const [loadingPhraseIndex, setLoadingPhraseIndex] = useState(0);
   const [analysisData, setAnalysisData] = useState(activeAnalysisPreload);
   const [timeStats, setTimeStats] = useState({ passed: 0, remaining: 0, expired: false });
-  const [news, setNews] = useState(null);
+  const [news, setNews] = useState(() => resolvePreloadedNews(activeAnalysisPreload));
   const [isNewsModalOpen, setIsNewsModalOpen] = useState(false);
   const [signalGateOpen, setSignalGateOpen] = useState(false);
   
   const [assetType, setAssetType] = useState('Currencies');
-  const expOptions = ['5m', '15m', '30m', '1h', '4h', '1d'];
+  const expOptions = FOREX_EXPIRATIONS;
 
   const appliedStrategyId = analysisData?.strategy_id || user.strategy_id;
   const selectedStrategy = strategies.find(s => Number(s.id) === Number(appliedStrategyId)) || {};
@@ -62,6 +77,7 @@ export default function ForexAnalysisSettings({
 
   const recommendedExp = expOptions.filter(exp => allowedTimeframes.includes(exp));
   const unavailableExp = expOptions.filter(exp => !allowedTimeframes.includes(exp));
+  const defaultExpiration = recommendedExp[0] || expOptions[0];
 
   const safeRender = (val, defaultValue = '---') => {
     if (val === null || val === undefined) return defaultValue;
@@ -72,20 +88,39 @@ export default function ForexAnalysisSettings({
     return String(val);
   };
 
+  const displayPriceDigits = assetType === 'Currencies' ? 5 : 3;
+
+  const isPriceScaledIndicator = (indicatorKey) => {
+    const key = String(indicatorKey || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return /^(EMA|SMA|WMA|HMA|VWAP|WAP|PSAR|PARABOLICSAR|SUPERTREND|ICHIMOKU|PIVOT|FIBONACCI|ATR|MACD|BB)/.test(key);
+  };
+
   const formatPrice = (price) => {
-    if (typeof price === 'number') return price.toFixed(3);
+    if (typeof price === 'number') return price.toFixed(displayPriceDigits);
     return safeRender(price);
   };
 
   const formatLevelValue = (value) => {
-    if (typeof value === 'number') return value.toFixed(3);
+    if (typeof value === 'number') return value.toFixed(displayPriceDigits);
     if (typeof value === 'string') {
       const normalized = value.replace(',', '.').trim();
       const matched = normalized.match(/-?\d+(\.\d+)?/);
       const parsed = matched ? Number(matched[0]) : Number(normalized);
-      if (Number.isFinite(parsed)) return parsed.toFixed(3);
+      if (Number.isFinite(parsed)) return parsed.toFixed(displayPriceDigits);
     }
     return safeRender(value);
+  };
+
+  const formatIndicatorValue = (indicatorKey, value) => {
+    if (value === null || value === undefined || value === '') return '---';
+    if (typeof value === 'object') {
+      const primitive = Object.values(value).find(item => typeof item !== 'object');
+      return formatIndicatorValue(indicatorKey, primitive);
+    }
+    const parsed = Number(String(value).replace(',', '.').trim());
+    if (!Number.isFinite(parsed)) return String(value);
+    const digits = assetType === 'Currencies' && isPriceScaledIndicator(indicatorKey) ? 5 : 3;
+    return parsed.toFixed(digits);
   };
 
   useEffect(() => {
@@ -105,19 +140,6 @@ export default function ForexAnalysisSettings({
       });
     }
   }, [editMode, analysisData, onGoHome, setBackHandler, activeAnalysisPreload]);
-
-  useEffect(() => {
-    if (activeAnalysisPreload) {
-      setAnalysisData(activeAnalysisPreload);
-      if (activeAnalysisPreload.news_data) {
-        setNews(typeof activeAnalysisPreload.news_data === 'string' 
-          ? JSON.parse(activeAnalysisPreload.news_data) 
-          : activeAnalysisPreload.news_data);
-      } else {
-        setNews({ economicCalendar: [] });
-      }
-    }
-  }, [activeAnalysisPreload]);
 
   const getExpirationMs = (tf) => {
     if (!tf) return 5 * 60 * 1000;
@@ -148,7 +170,7 @@ export default function ForexAnalysisSettings({
       if (!activeAnalysisPreload) {
         setForexParams(prev => ({
           pair: prev.pair || formatted.Currencies[0]?.apiVal,
-          exp: prev.exp || recommendedExp[0] || expOptions[0]
+          exp: prev.exp || defaultExpiration
         }));
       }
     })
@@ -162,7 +184,7 @@ export default function ForexAnalysisSettings({
         .then(data => setNews(data))
         .catch(err => console.error("News fetch error", err));
     }
-  }, [activeAnalysisPreload]);
+  }, [activeAnalysisPreload, defaultExpiration, setForexParams]);
 
   useEffect(() => {
     let interval;
@@ -224,51 +246,6 @@ export default function ForexAnalysisSettings({
     return `${d} ${t.timeD} ${rh} ${t.timeH} ${rm} ${t.timeMin} ${t.timeAgo}`;
   };
 
-  const getFilteredNewsStatus = (pairSymbol) => {
-    if (!news || !news.economicCalendar) return { isCalm: true, events: [], warningEvents: [], noNews: true };
-    const now = Date.now();
-    const thirtyMinsMs = 30 * 60 * 1000;
-    let baseCurrencies = [];
-    if (pairSymbol) {
-      const cleanPair = String(pairSymbol).replace(/[^A-Za-z]/g, '').toUpperCase();
-      if (cleanPair.length >= 6) {
-        baseCurrencies.push(cleanPair.substring(0, 3));
-        baseCurrencies.push(cleanPair.substring(3, 6));
-      }
-    }
-    const relevantEvents = news.economicCalendar.filter(item => {
-      const timeStr = item.time.includes('Z') ? item.time : item.time.replace(' ', 'T') + 'Z';
-      const eventTime = new Date(timeStr).getTime();
-      if (now > eventTime + thirtyMinsMs) return false;
-      if (baseCurrencies.length > 0) {
-        const itemCur = item.currency || 'ALL';
-        if (itemCur !== 'ALL' && !baseCurrencies.includes(itemCur)) return false;
-      }
-      return true;
-    }).sort((a, b) => {
-       const tA = new Date(a.time.includes('Z') ? a.time : a.time.replace(' ', 'T') + 'Z').getTime();
-       const tB = new Date(b.time.includes('Z') ? b.time : b.time.replace(' ', 'T') + 'Z').getTime();
-       return tA - tB;
-    });
-    let hasWarning = false;
-    const warningEvents = relevantEvents.filter(item => {
-      const timeStr = item.time.includes('Z') ? item.time : item.time.replace(' ', 'T') + 'Z';
-      const eventTime = new Date(timeStr).getTime();
-      const diff = eventTime - now;
-      if (item.impact === 'high' && diff <= thirtyMinsMs && diff >= -thirtyMinsMs) {
-        hasWarning = true;
-        return true;
-      }
-      return false;
-    });
-    return {
-      events: relevantEvents,
-      warningEvents: warningEvents,
-      isWarning: hasWarning,
-      noNews: relevantEvents.length === 0
-    };
-  };
-
   if (loadingAssets && !analysisData) return <Loader t={globalT} />;
 
   const handleConductAnalysis = async () => {
@@ -276,8 +253,8 @@ export default function ForexAnalysisSettings({
     setIsProcessing(true);
     setEditMode(null);
     setSignalGateOpen(false);
-    const uiDelay = Math.floor(Math.random() * 7000) + 3000;
-    const startTime = Date.now();
+    const uiDelay = randomDelay(3000, 7000);
+    const startTime = currentTimeMs();
     const assetObj = getAssetObject(forexParams.pair);
     const stratKeys = selectedStrategy.indicator_keys 
       ? selectedStrategy.indicator_keys.split(',').map(s => s.trim().toUpperCase()) 
@@ -293,7 +270,7 @@ export default function ForexAnalysisSettings({
           exchange: assetObj?.exchange || null
         })
       });
-      const elapsedTime = Date.now() - startTime;
+      const elapsedTime = currentTimeMs() - startTime;
       const remainingWait = uiDelay - elapsedTime;
       if (remainingWait > 0) await new Promise(resolve => setTimeout(resolve, remainingWait));
       if (result.status === 'success') {
@@ -355,7 +332,7 @@ export default function ForexAnalysisSettings({
     });
     const filteredInds = Object.entries(normalizedIndicators);
     const customVotes = { BUY: 0, SELL: 0, NEUTRAL: 0 };
-    filteredInds.forEach(([_, ind]) => {
+    filteredInds.forEach(([, ind]) => {
       if (ind.signal === 'BUY') customVotes.BUY += 1;
       else if (ind.signal === 'SELL') customVotes.SELL += 1;
       else customVotes.NEUTRAL += 1;
@@ -368,7 +345,7 @@ export default function ForexAnalysisSettings({
     const currentPrice = data.price || data.key_levels?.current_price || '---';
     const analysisSymbol = data.symbol || analysisData.pair;
     const analysisInterval = analysisData.timeframe || data.interval;
-    const newsStatus = getFilteredNewsStatus(analysisSymbol);
+    const newsStatus = getFilteredNewsStatus(news, analysisSymbol);
     const assetObj = getAssetObject(analysisSymbol);
 
     return (
@@ -400,7 +377,7 @@ export default function ForexAnalysisSettings({
             {filteredInds.map(([key, ind]) => (
               <div key={key} className="ind-item">
                 <span className="ind-name">{safeRender(key)}</span>
-                <span className="ind-val">{typeof ind.value === 'number' ? ind.value.toFixed(3) : safeRender(ind.value)}</span>
+                <span className="ind-val">{formatIndicatorValue(key, ind.value)}</span>
                 <span className={`ind-sig ${ind.signal === 'BUY' ? 'sig-buy' : ind.signal === 'SELL' ? 'sig-sell' : 'sig-neutral'}`}>{safeRender(ind.signal)}</span>
               </div>
             ))}

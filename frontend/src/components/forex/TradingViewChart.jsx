@@ -54,7 +54,7 @@ const TradingViewChart = memo(({ symbol, interval, t, isDemo }) => {
       'NIKKEI': 'TVC:NI225'
     };
 
-    const cleanSym = sym.replace(/[\/-]/g, '');
+    const cleanSym = sym.replace(/[/-]/g, '');
     return DEMO_SYMBOLS[cleanSym] || `OANDA:${cleanSym}`;
   };
 

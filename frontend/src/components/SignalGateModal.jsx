@@ -40,7 +40,9 @@ export default function SignalGateModal({ onClose }) {
         tg.openLink(url);
         return;
       }
-    } catch (error) {}
+    } catch {
+      // Fall back to window.open when the Telegram client cannot open the link.
+    }
 
     window.open(url, '_blank', 'noopener,noreferrer');
   };

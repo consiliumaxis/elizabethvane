@@ -66,7 +66,6 @@ export default function Header({
   const mobileButtonTop = Math.round(mobileBandTop + (mobileBandHeight - mobileButtonHeight) / 2) - 4;
 
   const desktopHeaderHeight = 64;
-  const desktopButtonTop = 11;
 
   const headerTop = isDesktop ? 0 : mobileButtonTop;
   const headerHeight = isDesktop ? desktopHeaderHeight : mobileButtonHeight;

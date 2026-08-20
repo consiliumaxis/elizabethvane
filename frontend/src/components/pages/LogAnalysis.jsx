@@ -57,7 +57,7 @@ const getStatusTone = (status) => {
 export default function LogAnalysis({ user, t, strategies = [], mode }) {
   const [history, setHistory] = useState([]);
   const [stats, setStats] = useState({ success: 0, fail: 0, skipped: 0, total: 0, closed_total: 0, winrate: 0 });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(user));
   const [selectedStrategyId, setSelectedStrategyId] = useState('all');
   const [isStrategyMenuOpen, setIsStrategyMenuOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -97,8 +97,7 @@ export default function LogAnalysis({ user, t, strategies = [], mode }) {
 
   useEffect(() => {
     if (!user) {
-      setLoading(false);
-      return;
+      return undefined;
     }
 
     let cancelled = false;
@@ -131,7 +130,7 @@ export default function LogAnalysis({ user, t, strategies = [], mode }) {
     };
   }, [user, selectedStrategyId, analysisType]);
 
-  if (loading) return <Loader t={i18n} />;
+  if (user && loading) return <Loader t={i18n} />;
 
   const closedTotal = Number(stats.closed_total || (Number(stats.success || 0) + Number(stats.fail || 0)));
   const winrateValue = Math.max(0, Math.min(100, Number(stats.winrate || 0)));

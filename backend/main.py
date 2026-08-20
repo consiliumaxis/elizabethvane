@@ -6,7 +6,6 @@ import hashlib
 import hmac
 import json
 import secrets
-import random
 import re
 import shutil
 from decimal import Decimal, InvalidOperation
@@ -14,7 +13,7 @@ from datetime import datetime, timedelta
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 from fastapi import FastAPI, Request, Depends, HTTPException, Header, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
 from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand
@@ -62,12 +61,32 @@ except ModuleNotFoundError:
 try:
     from backend.stream_indicators import (
         coherent_stream_indicator_value,
+        distribute_stream_indicator_signals,
         stream_indicator_is_neutral_only,
     )
 except ModuleNotFoundError:
     from stream_indicators import (
         coherent_stream_indicator_value,
+        distribute_stream_indicator_signals,
         stream_indicator_is_neutral_only,
+    )
+try:
+    from backend.menu_photo import (
+        MAX_MENU_PHOTO_SIZE,
+        describe_menu_photo,
+        find_custom_menu_photo,
+        reset_custom_menu_photo,
+        resolve_menu_photo,
+        save_custom_menu_photo,
+    )
+except ModuleNotFoundError:
+    from menu_photo import (
+        MAX_MENU_PHOTO_SIZE,
+        describe_menu_photo,
+        find_custom_menu_photo,
+        reset_custom_menu_photo,
+        resolve_menu_photo,
+        save_custom_menu_photo,
     )
 try:
     from backend.video_note import prepare_square_video_note
@@ -254,16 +273,16 @@ except ModuleNotFoundError:
 try:
     from backend.access_policy import (
         ACCESS_POLICY_REGISTRATION_DEPOSIT,
+        inherited_policy_grants_signal_access,
         normalize_access_policy,
         normalize_min_deposit,
-        system_policy_grants_signal_access,
     )
 except ModuleNotFoundError:
     from access_policy import (
         ACCESS_POLICY_REGISTRATION_DEPOSIT,
+        inherited_policy_grants_signal_access,
         normalize_access_policy,
         normalize_min_deposit,
-        system_policy_grants_signal_access,
     )
 try:
     from backend.deposit_access import (
@@ -533,6 +552,12 @@ QUIZ_INTRO_VIDEO_LIBRARY_DIR = (
     os.getenv("QUIZ_INTRO_VIDEO_LIBRARY_DIR")
     or _default_quiz_intro_library_dir
 )
+_default_menu_photo_dir = (
+    os.path.join("/var/lib/elizabethvane", _runtime_environment, "menu_photo")
+    if os.name != "nt" and _runtime_environment in {"test", "prod"}
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "menu_photo_custom")
+)
+MENU_PHOTO_MANAGED_DIR = os.getenv("MENU_PHOTO_MANAGED_DIR") or _default_menu_photo_dir
 START_VIDEO_NOTE_MANAGED_PATH = (
     os.getenv("QUIZ_INTRO_VIDEO_PATH")
     or os.path.join(QUIZ_INTRO_VIDEO_LIBRARY_DIR, "active.mp4")
@@ -631,9 +656,9 @@ def is_valid_mp4_payload(payload: bytes) -> bool:
     return bool(payload) and b"ftyp" in payload[:64]
 
 
-menu_photo_file_id = (os.getenv("MENU_PHOTO_FILE_ID") or "").strip()
 menu_file_id_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "menu.file_id")
-if not menu_photo_file_id and os.path.exists(menu_file_id_path):
+menu_photo_file_id = "" if find_custom_menu_photo(MENU_PHOTO_MANAGED_DIR) else (os.getenv("MENU_PHOTO_FILE_ID") or "").strip()
+if not menu_photo_file_id and not find_custom_menu_photo(MENU_PHOTO_MANAGED_DIR) and os.path.exists(menu_file_id_path):
     try:
         with open(menu_file_id_path, "r", encoding="utf-8") as f:
             menu_photo_file_id = f.read().strip()
@@ -655,7 +680,7 @@ price_cache = {}
 COMMODITY_SYMBOLS = ["HG1", "W_1", "C_1", "S_1", "KC1", "CC1", "SB1", "CT1"]
 
 
-def resolve_menu_photo_path() -> str:
+def resolve_default_menu_photo_path() -> str:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(base_dir, "media", "menu.jpg"),
@@ -671,6 +696,31 @@ def resolve_menu_photo_path() -> str:
         if os.path.exists(path):
             return path
     return candidates[0]
+
+
+def resolve_menu_photo_path() -> str:
+    path, _source = resolve_menu_photo(
+        resolve_default_menu_photo_path(),
+        MENU_PHOTO_MANAGED_DIR,
+    )
+    return path
+
+
+def get_menu_photo_status() -> Dict[str, Any]:
+    return describe_menu_photo(
+        resolve_default_menu_photo_path(),
+        MENU_PHOTO_MANAGED_DIR,
+    )
+
+
+def clear_menu_photo_file_id_cache() -> None:
+    global menu_photo_file_id
+    menu_photo_file_id = ""
+    try:
+        if os.path.isfile(menu_file_id_path):
+            os.remove(menu_file_id_path)
+    except OSError:
+        pass
 
 
 def get_admin_panel_token() -> str:
@@ -1358,50 +1408,16 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
             if not has_manual_override and stream_indicator_is_neutral_only(indicator_key):
                 locked_signals[indicator_key] = "NEUTRAL"
 
-        opposite_signal = "SELL" if forced_signal == "BUY" else "BUY"
-        forced_locked = sum(1 for signal in locked_signals.values() if signal == forced_signal)
-        remaining_keys = [key for key in indicator_keys if key not in locked_signals]
-        remaining_count = len(remaining_keys)
-
-        if indicator_count <= 1:
-            target_forced = indicator_count
-        else:
-            required_majority = (indicator_count // 2) + 1
-            min_target = max(required_majority, int(indicator_count * 0.56))
-            max_target = max(min_target, int(indicator_count * 0.78))
-            max_possible_forced = forced_locked + remaining_count
-            if max_possible_forced <= min_target:
-                target_forced = max_possible_forced
-            else:
-                target_forced = random.randint(min_target, min(max_target, max_possible_forced))
-
-        forced_from_remaining = max(0, target_forced - forced_locked)
-        forced_from_remaining = min(forced_from_remaining, remaining_count)
-        non_majority_count = max(0, remaining_count - forced_from_remaining)
-        neutral_count = 0
-        opposite_count = 0
-        if non_majority_count > 0:
-            neutral_count = random.randint(0, non_majority_count)
-            opposite_count = non_majority_count - neutral_count
-
-            if non_majority_count >= 2 and opposite_count == 0:
-                opposite_count = 1
-                neutral_count = non_majority_count - opposite_count
-
-        generated_signals = (
-            [forced_signal] * forced_from_remaining
-            + ["NEUTRAL"] * neutral_count
-            + [opposite_signal] * opposite_count
+        generated_by_key = distribute_stream_indicator_signals(
+            indicator_keys,
+            forced_signal,
+            locked_signals,
         )
-        random.shuffle(generated_signals)
-        generated_by_key = {}
-        for idx, indicator_key in enumerate(remaining_keys):
-            generated_by_key[indicator_key] = generated_signals[idx] if idx < len(generated_signals) else forced_signal
 
         for indicator_key in indicator_keys:
             indicator_data = indicators.get(indicator_key)
             if isinstance(indicator_data, dict):
-                signal = locked_signals.get(indicator_key) or generated_by_key.get(indicator_key) or forced_signal
+                signal = generated_by_key.get(indicator_key) or forced_signal
                 indicator_data["signal"] = signal
                 has_manual_value = False
                 for alias in aliases_for_indicator(indicator_key):
@@ -1427,7 +1443,7 @@ def apply_stream_override_to_analysis(analysis_data: dict, stream_settings: dict
     weighted_scores["neutral"] = float(votes["NEUTRAL"])
 
     majority_share = (votes[forced_signal] / float(indicator_count)) if indicator_count else 1.0
-    confidence = int(round(58 + majority_share * 28 + random.uniform(-3.5, 3.5)))
+    confidence = int(round(58 + majority_share * 28))
     confidence = max(55, min(92, confidence))
 
     analysis_data["recommendation"] = forced_signal
@@ -1689,6 +1705,7 @@ async def attach_quiz_intro_video_media(
         )
     settings["quiz_intro_video"] = status
     settings["quiz_intro_video_library"] = library
+    settings["menu_photo"] = get_menu_photo_status()
     return settings
 
 
@@ -2405,8 +2422,8 @@ async def get_signal_access_status(user_id: int, mode: str) -> Dict[str, Any]:
         "min_deposit_amount": deposit_profile["min_deposit_amount"],
     }
     return {
-        "access": 1 if system_policy_grants_signal_access(effective_settings, row) else 0,
-        "policy": settings.get("policy"),
+        "access": 1 if inherited_policy_grants_signal_access(normalized_mode, effective_settings, row) else 0,
+        "policy": "manual_only" if normalized_mode == "forex" else settings.get("policy"),
         **deposit_profile,
     }
 
@@ -3852,7 +3869,7 @@ async def bind_user_tracking_identity(
                 )
                 VALUES (
                     %s, NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''),
-                    NULLIF(%s, ''), 'ru', 'forex'
+                    NULLIF(%s, ''), 'ru', 'binary'
                 )
                 ON DUPLICATE KEY UPDATE
                     username = CASE
@@ -4616,7 +4633,7 @@ async def process_pocket_postback(request: Request, forced_event: Optional[str] 
                         INSERT INTO users (
                             user_id, aio_visit_uuid, chatterfy_lead_id, lang, mode
                         )
-                        VALUES (%s, NULLIF(%s, ''), NULLIF(%s, ''), 'ru', 'forex')
+                        VALUES (%s, NULLIF(%s, ''), NULLIF(%s, ''), 'ru', 'binary')
                         ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)
                         """,
                         (
@@ -6155,14 +6172,6 @@ async def admin_update_user_access(request: Request, admin=Depends(require_permi
             user_row = await cur.fetchone()
             if not user_row:
                 raise HTTPException(status_code=404, detail="User not found")
-            await cur.execute(
-                "SELECT is_protected FROM admin_users WHERE user_id = %s LIMIT 1",
-                (target_user_id,),
-            )
-            staff_row = await cur.fetchone()
-            if staff_row and bool(int(staff_row.get("is_protected") or 0)):
-                raise HTTPException(status_code=403, detail="Права системного администратора защищены")
-
             await cur.executemany(
                 """
                 INSERT INTO user_mode_access (user_id, mode, is_enabled, override_mode, updated_by)
@@ -6178,7 +6187,7 @@ async def admin_update_user_access(request: Request, admin=Depends(require_permi
                 ],
             )
 
-            current_mode = str(user_row.get("mode") or "forex").lower()
+            current_mode = str(user_row.get("mode") or "binary").lower()
             if current_mode == "forex" and forex_access != 1 and binary_access == 1:
                 await cur.execute("UPDATE users SET mode = 'binary' WHERE user_id = %s", (target_user_id,))
             elif current_mode == "binary" and binary_access != 1 and forex_access == 1:
@@ -6944,6 +6953,56 @@ async def admin_settings(
         "status": "success",
         "settings": settings,
     }
+
+
+@app.get("/api/assets/menu-photo")
+async def get_active_menu_photo_asset():
+    photo_path = resolve_menu_photo_path()
+    if not photo_path or not os.path.isfile(photo_path):
+        raise HTTPException(status_code=404, detail="Menu image not found")
+    return FileResponse(photo_path)
+
+
+@app.put("/api/admin/settings/menu-photo")
+async def admin_menu_photo_upload(
+    request: Request,
+    admin=Depends(require_permission(PERM_SETTINGS_FUNNEL)),
+):
+    raw_content_length = (request.headers.get("content-length") or "").strip()
+    if raw_content_length:
+        try:
+            if int(raw_content_length) > MAX_MENU_PHOTO_SIZE:
+                raise HTTPException(status_code=413, detail="The image must be no larger than 10 MB")
+        except ValueError:
+            pass
+    payload = await request.body()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Image file is empty")
+    if len(payload) > MAX_MENU_PHOTO_SIZE:
+        raise HTTPException(status_code=413, detail="The image must be no larger than 10 MB")
+    try:
+        save_custom_menu_photo(payload, MENU_PHOTO_MANAGED_DIR)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not save the menu image: {exc}") from exc
+    clear_menu_photo_file_id_cache()
+    return {"status": "success", "menu_photo": get_menu_photo_status()}
+
+
+@app.post("/api/admin/settings/menu-photo/reset")
+async def admin_menu_photo_reset(
+    admin=Depends(require_permission(PERM_SETTINGS_FUNNEL)),
+):
+    try:
+        reset_custom_menu_photo(MENU_PHOTO_MANAGED_DIR)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not restore the default menu image: {exc}") from exc
+    clear_menu_photo_file_id_cache()
+    status = get_menu_photo_status()
+    if not status.get("file_exists"):
+        raise HTTPException(status_code=500, detail="The default menu image is missing")
+    return {"status": "success", "menu_photo": status}
 
 
 @app.put("/api/admin/settings/quiz-intro-video")
@@ -8754,7 +8813,15 @@ async def get_profile(user=Depends(get_telegram_user)):
         admin_center_access = await has_admin_center_access(int(user_id))
         user["forex_access"] = 1 if truthy_db(forex_status.get("access")) == 1 else 0
         user["binary_access"] = 1 if truthy_db(binary_status.get("access")) == 1 else 0
-        user["access_policy"] = forex_status.get("policy")
+        effective_mode = str(user.get("mode") or "binary").strip().lower()
+        if effective_mode not in ("forex", "binary"):
+            effective_mode = "binary"
+        if effective_mode == "forex" and user["forex_access"] != 1:
+            effective_mode = "binary"
+        user["mode"] = effective_mode
+        user["access_policy"] = binary_status.get("policy")
+        user["forex_access_policy"] = forex_status.get("policy")
+        user["binary_access_policy"] = binary_status.get("policy")
         user["is_admin"] = 1 if admin_center_access else 0
         user["admin_url"] = build_admin_webapp_url() if admin_center_access else ""
         user["registration_link_app_enabled"] = normalize_settings_toggle(
@@ -9017,7 +9084,7 @@ async def sync_user(user=Depends(get_telegram_user)):
         async with conn.cursor() as cur:
             await cur.execute("""
                 INSERT INTO users (user_id, username, first_name, avatar_url, lang, mode)
-                VALUES (%s, %s, %s, %s, 'ru', 'forex')
+                VALUES (%s, %s, %s, %s, 'ru', 'binary')
                 ON DUPLICATE KEY UPDATE 
                     username = VALUES(username),
                     first_name = VALUES(first_name),
@@ -9618,7 +9685,7 @@ async def create_binary_analysis(request: Request, user=Depends(get_telegram_use
             return {"error": str(e)}
 
     analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-    analysis_data = align_analysis_indicators_to_strategy(analysis_data, allowed_indicators, fill_missing=True)
+    analysis_data = align_analysis_indicators_to_strategy(analysis_data, allowed_indicators, fill_missing=False)
     analysis_data = enforce_binary_signal(analysis_data)
     recommendation = str(analysis_data.get("recommendation") or analysis_data.get("signal") or "").strip().upper()
     if recommendation not in ("BUY", "SELL"):
@@ -9795,7 +9862,7 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
         )
         analysis_pair = str(pair).strip() or pair
         analysis_data["symbol"] = analysis_pair
-        analysis_data = align_analysis_indicators_to_strategy(analysis_data, allowed_indicators, fill_missing=True)
+        analysis_data = align_analysis_indicators_to_strategy(analysis_data, allowed_indicators, fill_missing=False)
         news_data = await fetch_news_data()
     else:
         async with httpx.AsyncClient() as client:
@@ -9857,7 +9924,7 @@ async def create_forex_analysis(request: Request, user=Depends(get_telegram_user
                 else:
                     analysis_data = fallback_to_baseline_analysis(baseline_analysis_data)
                 analysis_data = ensure_analysis_key_levels(analysis_data, preferred_signal=analysis_data.get("recommendation"))
-                analysis_data = align_analysis_indicators_to_strategy(analysis_data, allowed_indicators, fill_missing=True)
+                analysis_data = align_analysis_indicators_to_strategy(analysis_data, allowed_indicators, fill_missing=False)
                 analysis_pair = str(pair).strip() or pair
                 analysis_data["symbol"] = analysis_pair
                 news_data = await fetch_news_data()
@@ -10989,7 +11056,7 @@ async def cmd_start(message: types.Message):
                 await cur.execute(
                     """
                     INSERT INTO users (user_id, username, first_name, aio_visit_uuid, lang, mode)
-                    VALUES (%s, %s, %s, %s, 'ru', 'forex')
+                    VALUES (%s, %s, %s, %s, 'ru', 'binary')
                     ON DUPLICATE KEY UPDATE
                         username = VALUES(username),
                         first_name = VALUES(first_name),

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { initTelegramApp } from './lib/tgSetup';
 import { apiFetchJson, apiAdminFetchJson, isAdminRoute, isTelegramWebAppAvailable } from './lib/api';
 
@@ -59,7 +59,7 @@ function App() {
         try {
           const info = await apiFetchJson('/api/webapp/bot-info');
           setBotUsername(info?.bot_username || '');
-        } catch (error) {
+        } catch {
           setBotUsername('');
         }
         return;
@@ -186,7 +186,7 @@ function App() {
     document.body.scrollTop = 0;
   }, [currentPage]);
 
-  const handleGoHome = () => {
+  const handleGoHome = useCallback(() => {
     activeBackHandler.current = null; 
     setForexParams({ pair: null, exp: null });
     setBinaryParams({ market: 'forex', pair: null, exp: null });
@@ -198,7 +198,7 @@ function App() {
     } else {
       setCurrentPage(user?.mode === 'binary' ? 'signals' : 'analysis');
     }
-  };
+  }, [user?.mode]);
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
@@ -225,7 +225,7 @@ function App() {
     return () => {
       tg.offEvent('backButtonClicked', handleBackBtnClick);
     };
-  }, [currentPage, user]); 
+  }, [currentPage, handleGoHome]);
 
   useEffect(() => {
     if (toastMessage) {
@@ -294,7 +294,9 @@ function App() {
           method: 'POST',
           body: JSON.stringify({ mode: newMode })
         });
-      } catch (error) {}
+      } catch {
+        // The local optimistic mode remains available while the request can be retried later.
+      }
     }
 
     if (currentPage !== 'profile') {
@@ -315,7 +317,9 @@ function App() {
         method: 'POST',
         body: JSON.stringify({ strategy_id: strategyId })
       });
-    } catch (error) {}
+    } catch {
+      // Keep the optimistic strategy selection if the network is temporarily unavailable.
+    }
   };
 
   const refreshStrategies = async () => {
@@ -329,7 +333,9 @@ function App() {
         method: 'POST',
       });
       setUser((prev) => ({ ...prev, strategy_id: updatedUser.strategy_id }));
-    } catch (e) {}
+    } catch {
+      // Existing strategies stay visible when a background refresh fails.
+    }
   };
 
   const handleOpenActiveAnalysis = (analysisData) => {
@@ -406,7 +412,6 @@ function App() {
             forexParams={forexParams}
             setForexParams={setForexParams}
             onGoHome={handleGoHome}
-            onGoProfile={() => setCurrentPage('profile')}
             onUpdateStrategy={handleUpdateStrategy}
             setBackHandler={setBackHandler}
           />

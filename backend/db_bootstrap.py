@@ -148,7 +148,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                     balance_synced_at TIMESTAMP NULL DEFAULT NULL,
                     balance_sync_error TEXT NULL,
                     lang VARCHAR(16) NOT NULL DEFAULT 'ru',
-                    mode VARCHAR(16) NOT NULL DEFAULT 'forex',
+                    mode VARCHAR(16) NOT NULL DEFAULT 'binary',
                     strategy_id BIGINT NULL,
                     is_blocked TINYINT(1) NOT NULL DEFAULT 0,
                     blocked_by BIGINT NULL,
@@ -706,7 +706,7 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
         await _ensure_column(conn, db_name, "users", "balance_sync_error", "ALTER TABLE users ADD COLUMN balance_sync_error TEXT NULL")
         await _ensure_column(conn, db_name, "users", "strategy_id", "ALTER TABLE users ADD COLUMN strategy_id BIGINT NULL")
         await _ensure_column(conn, db_name, "users", "lang", "ALTER TABLE users ADD COLUMN lang VARCHAR(16) NOT NULL DEFAULT 'ru'")
-        await _ensure_column(conn, db_name, "users", "mode", "ALTER TABLE users ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'forex'")
+        await _ensure_column(conn, db_name, "users", "mode", "ALTER TABLE users ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'binary'")
         await _ensure_column(conn, db_name, "users", "is_blocked", "ALTER TABLE users ADD COLUMN is_blocked TINYINT(1) NOT NULL DEFAULT 0")
         await _ensure_column(conn, db_name, "users", "blocked_by", "ALTER TABLE users ADD COLUMN blocked_by BIGINT NULL")
         await _ensure_column(conn, db_name, "users", "blocked_at", "ALTER TABLE users ADD COLUMN blocked_at TIMESTAMP NULL DEFAULT NULL")
@@ -1400,6 +1400,16 @@ async def ensure_database_schema(db_pool: aiomysql.Pool) -> None:
                 """
                 INSERT IGNORE INTO user_mode_access (user_id, mode, is_enabled, updated_by)
                 SELECT user_id, 'binary', 0, NULL FROM users
+                """
+            )
+            await cur.execute(
+                """
+                UPDATE users u
+                LEFT JOIN user_mode_access fx
+                  ON fx.user_id = u.user_id AND fx.mode = 'forex'
+                SET u.mode = 'binary'
+                WHERE LOWER(COALESCE(u.mode, 'binary')) = 'forex'
+                  AND COALESCE(fx.override_mode, 'inherit') <> 'allow'
                 """
             )
 

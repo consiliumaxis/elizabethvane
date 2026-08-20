@@ -251,13 +251,15 @@ def sanitize_gpt_analysis(
         value_signal = _normalize_signal(item.get("value"), default="")
         if item["signal"] == "NEUTRAL" and value_signal in ("BUY", "SELL"):
             item["signal"] = value_signal
-        if item["signal"] == "NEUTRAL" and baseline_item:
+        if baseline_item:
             baseline_signal = _normalize_signal(baseline_item.get("signal"), default="")
-            if baseline_signal in ("BUY", "SELL"):
+            if baseline_signal in ("BUY", "SELL", "NEUTRAL"):
+                # GPT explains the decision, but raw numeric values remain the
+                # source of truth for every per-indicator direction.
                 item["signal"] = baseline_signal
-                if _normalize_signal(item.get("value"), default="") in ("BUY", "SELL", "NEUTRAL"):
+                if baseline_item.get("value") is not None:
                     item["value"] = baseline_item.get("value")
-                if baseline_item.get("weight") is not None and _to_float(item.get("weight")) in (None, 1.0):
+                if baseline_item.get("weight") is not None:
                     item["weight"] = baseline_item.get("weight")
         indicators[clean_key] = item
 
@@ -278,7 +280,7 @@ def sanitize_gpt_analysis(
         if not isinstance(baseline_item, dict):
             continue
         baseline_signal = _normalize_signal(baseline_item.get("signal"), default="")
-        if baseline_signal not in ("BUY", "SELL"):
+        if baseline_signal not in ("BUY", "SELL", "NEUTRAL"):
             continue
         aliases = _indicator_aliases(baseline_key)
         if existing_aliases.intersection(aliases):
@@ -289,29 +291,31 @@ def sanitize_gpt_analysis(
     votes, weighted_scores = _recalculate_votes(indicators)
     directional_votes = votes["BUY"] + votes["SELL"]
     total_votes = directional_votes + votes["NEUTRAL"]
-    if total_votes and recommendation == "NEUTRAL":
+    if total_votes:
         dominant_signal = "BUY" if votes["BUY"] > votes["SELL"] else "SELL" if votes["SELL"] > votes["BUY"] else "NEUTRAL"
         dominant_count = max(votes["BUY"], votes["SELL"])
         min_directional = 2 if total_votes <= 5 else 3
         dominance = dominant_count / float(total_votes)
         if dominant_signal in ("BUY", "SELL") and directional_votes >= min_directional and dominance >= 0.52:
+            recommendation_changed = recommendation != dominant_signal
             recommendation = dominant_signal
             confidence = max(confidence, int(round(54 + min(0.35, dominance - 0.52) * 100)))
             reason = str(parsed.get("confidence_reason") or "").strip()
-            parsed["confidence_reason"] = f"{reason} | directional_majority_restored".strip(" |")
+            marker = "numeric_majority_enforced" if recommendation_changed else "numeric_majority_confirmed"
+            parsed["confidence_reason"] = f"{reason} | {marker}".strip(" |")
 
     key_levels = parsed.get("key_levels") if isinstance(parsed.get("key_levels"), dict) else {}
     clean_levels = {}
     for key, value in key_levels.items():
         numeric = _to_float(value)
-        clean_levels[str(key)] = round(numeric, 6) if numeric is not None else value
+        clean_levels[str(key)] = round(numeric, 5) if numeric is not None else value
 
     resolved_price = _to_float(parsed.get("price"))
     if resolved_price is None:
         resolved_price = price
     if resolved_price is None:
         resolved_price = _to_float(raw_payload.get("price")) or 0.0
-    clean_levels.setdefault("current_price", round(float(resolved_price), 6))
+    clean_levels.setdefault("current_price", round(float(resolved_price), 5))
 
     session = raw_payload.get("session") if isinstance(raw_payload.get("session"), dict) else {}
     periods = raw_payload.get("periods_used") if isinstance(raw_payload.get("periods_used"), dict) else {}

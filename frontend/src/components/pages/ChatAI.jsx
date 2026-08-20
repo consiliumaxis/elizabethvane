@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
 import { apiFetchJson } from '../../lib/api';
+import { createClientMessageId } from '../../lib/runtimeValues';
 import './ChatAI.css';
 
 export default function ChatAI({ user, t }) {
@@ -69,7 +70,7 @@ export default function ChatAI({ user, t }) {
     };
 
     fetchActiveChat();
-  }, [user]);
+  }, [user, t.chat.welcome]);
 
   const handleInput = (e) => {
     setInputValue(e.target.value);
@@ -84,7 +85,7 @@ export default function ChatAI({ user, t }) {
     if (!trimmed || isThinking || !chatId) return;
 
     const newUserMsg = {
-      id: Date.now(),
+      id: createClientMessageId(),
       role: 'user',
       text: trimmed,
       timestamp: new Date().toISOString(),
@@ -107,7 +108,7 @@ export default function ChatAI({ user, t }) {
       
       if (data.status === 'success') {
         setMessages((prev) => [...prev, {
-          id: Date.now() + 1,
+          id: createClientMessageId(1),
           role: 'ai',
           text: data.response,
           timestamp: new Date().toISOString(),
@@ -117,7 +118,7 @@ export default function ChatAI({ user, t }) {
       console.error(e);
       const fallbackText = e?.message || 'AI service is temporarily unavailable. Please try again in a moment.';
       setMessages((prev) => [...prev, {
-        id: Date.now() + 2,
+        id: createClientMessageId(2),
         role: 'ai',
         text: fallbackText,
         timestamp: new Date().toISOString(),
@@ -145,7 +146,7 @@ export default function ChatAI({ user, t }) {
         setChatId(data.chat_id);
         setMessages([
           {
-            id: Date.now(),
+            id: createClientMessageId(),
             role: 'ai',
             text: t.chat.cleared,
             timestamp: new Date().toISOString(),
@@ -196,7 +197,7 @@ export default function ChatAI({ user, t }) {
           })));
         } else {
           setMessages([{
-            id: Date.now(),
+            id: createClientMessageId(),
             role: 'ai',
             text: t.chat.loaded,
             timestamp: new Date().toISOString(),

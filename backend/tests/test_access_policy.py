@@ -6,6 +6,7 @@ from backend.access_policy import (
     ACCESS_POLICY_ALL,
     ACCESS_POLICY_REGISTRATION,
     ACCESS_POLICY_REGISTRATION_DEPOSIT,
+    inherited_policy_grants_signal_access,
     normalize_access_policy,
     normalize_min_deposit,
     system_policy_grants_signal_access,
@@ -41,6 +42,12 @@ class AccessPolicyTest(unittest.TestCase):
     def test_all_policy_grants_access_without_pocket_fields(self):
         self.assertTrue(system_policy_grants_signal_access({"policy": ACCESS_POLICY_ALL}, {}))
 
+    def test_forex_is_manual_only_while_binary_inherits_global_policy(self):
+        settings = {"policy": ACCESS_POLICY_ALL}
+
+        self.assertFalse(inherited_policy_grants_signal_access("forex", settings, {}))
+        self.assertTrue(inherited_policy_grants_signal_access("binary", settings, {}))
+
     def test_policy_and_deposit_normalization(self):
         self.assertEqual(normalize_access_policy("after registration"), ACCESS_POLICY_REGISTRATION)
         self.assertEqual(normalize_access_policy("registration-and-deposit"), ACCESS_POLICY_REGISTRATION_DEPOSIT)
@@ -63,6 +70,33 @@ class AccessPolicySourceTest(unittest.TestCase):
         self.assertIn('override_mode == "allow"', source)
         self.assertIn('override_mode == "deny"', source)
         self.assertIn('"policy": "blocked"', source)
+        self.assertIn('"policy": "manual_only" if normalized_mode == "forex"', source)
+
+    def test_default_mode_is_binary_and_protected_admin_can_change_trading_access(self):
+        source = (PROJECT_ROOT / "backend/main.py").read_text(encoding="utf-8")
+        schema = (PROJECT_ROOT / "backend/db_bootstrap.py").read_text(encoding="utf-8")
+        access_handler = source.split("async def admin_update_user_access", 1)[1].split(
+            "@app.post(\"/api/admin/users/profile-edit\")", 1
+        )[0]
+
+        self.assertIn("'ru', 'binary'", source)
+        self.assertIn("mode VARCHAR(16) NOT NULL DEFAULT 'binary'", schema)
+        self.assertIn("SET u.mode = 'binary'", schema)
+        self.assertIn("fx.override_mode", schema)
+        self.assertNotIn("Права системного администратора защищены", access_handler)
+        self.assertIn('user_row.get("mode") or "binary"', access_handler)
+
+    def test_currency_price_display_uses_five_decimal_places(self):
+        binary_ui = (PROJECT_ROOT / "frontend/src/components/binary/BinarySignalSettings.jsx").read_text(
+            encoding="utf-8"
+        )
+        forex_ui = (PROJECT_ROOT / "frontend/src/components/forex/ForexAnalysisSettings.jsx").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("marketKind === 'forex'", binary_ui)
+        self.assertIn("parsed.toFixed(5)", binary_ui)
+        self.assertIn("assetType === 'Currencies' ? 5 : 3", forex_ui)
 
     def test_schema_and_admin_ui_have_access_policy_controls(self):
         schema = (PROJECT_ROOT / "backend/db_bootstrap.py").read_text(encoding="utf-8")

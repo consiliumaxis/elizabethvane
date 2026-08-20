@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect } from 'react';
 import Lottie from 'lottie-react';
+import { useRef } from 'react';
 import animationData from '../../assets/analize.json';
 import '../forex/ForexAnalysisSettings.css';
 import './Demo.css';
@@ -8,8 +9,12 @@ import TradingViewChart from '../forex/TradingViewChart';
 import NewsModal from '../forex/NewsModal';
 import SignalGateModal from '../SignalGateModal';
 import { apiFetchJson } from '../../lib/api';
+import { getFilteredNewsStatus } from '../../lib/marketNews';
+import { randomDelay } from '../../lib/runtimeValues';
 
 import * as Flags from 'country-flag-icons/react/3x2';
+
+const DEMO_EXPIRATIONS = ['5m', '15m', '30m', '1h', '4h', '1d'];
 
 const AssetIcon = ({ asset }) => {
   if (!asset) return null;
@@ -24,7 +29,7 @@ const AssetIcon = ({ asset }) => {
 };
 
 export default function DemoAnalysisSettings({ 
-  user, strategies, t: globalT, forexParams, setForexParams, onGoHome, setBackHandler, onUpdateStrategy, onGoProfile
+  user, strategies, t: globalT, forexParams, setForexParams, onGoHome, setBackHandler, onUpdateStrategy
 }) {
   const t = globalT.analysisSettings;
   const loadingPhrases = globalT.demoLoadingPhrases || globalT.loadingPhrases;
@@ -40,8 +45,9 @@ export default function DemoAnalysisSettings({
   
   const [assetsData, setAssetsData] = useState({ Commodities: [], Indices: [] });
   const [loadingAssets, setLoadingAssets] = useState(true);
+  const initialPairRef = useRef(forexParams.pair);
 
-  const expOptions = ['5m', '15m', '30m', '1h', '4h', '1d'];
+  const expOptions = DEMO_EXPIRATIONS;
   const appliedStrategyId = user.strategy_id;
   const selectedStrategy = strategies.find(s => Number(s.id) === Number(appliedStrategyId)) || strategies.find(s => s.is_system) || {};
 
@@ -80,13 +86,14 @@ export default function DemoAnalysisSettings({
       setAssetsData(formatted);
       setLoadingAssets(false);
 
-      const isPairValid = formatted.Commodities.some(p => String(p.apiVal) === String(forexParams.pair)) || 
-                          formatted.Indices.some(p => String(p.apiVal) === String(forexParams.pair));
+      const initialPair = initialPairRef.current;
+      const isPairValid = formatted.Commodities.some(p => String(p.apiVal) === String(initialPair)) ||
+                          formatted.Indices.some(p => String(p.apiVal) === String(initialPair));
       
       if (!isPairValid && formatted.Commodities.length > 0) {
         setForexParams(prev => ({ ...prev, pair: formatted.Commodities[0].apiVal, exp: prev.exp || expOptions[0] }));
       } else if (isPairValid) {
-        setAssetType(formatted.Indices.some(p => String(p.apiVal) === String(forexParams.pair)) ? 'Indices' : 'Commodities');
+        setAssetType(formatted.Indices.some(p => String(p.apiVal) === String(initialPair)) ? 'Indices' : 'Commodities');
       }
     })
     .catch(err => {
@@ -97,7 +104,7 @@ export default function DemoAnalysisSettings({
     apiFetchJson('/api/news')
       .then(data => setNews(data))
       .catch(console.error);
-  }, []);
+  }, [expOptions, setForexParams]);
 
   useEffect(() => {
     let interval;
@@ -123,7 +130,7 @@ export default function DemoAnalysisSettings({
     setIsProcessing(true);
     setEditMode(null);
     setSignalGateOpen(false);
-    const uiDelay = Math.floor(Math.random() * 5000) + 3000;
+    const uiDelay = randomDelay(3000, 5000);
 
     const assetObj = getAssetObject(forexParams.pair);
     
@@ -165,53 +172,6 @@ export default function DemoAnalysisSettings({
     }
   };
 
-  const getFilteredNewsStatus = (pairSymbol) => {
-    if (!news || !news.economicCalendar) return { isCalm: true, events: [], warningEvents: [], noNews: true };
-    const now = Date.now();
-    const thirtyMinsMs = 30 * 60 * 1000;
-    let baseCurrencies = [];
-    if (pairSymbol) {
-      const cleanPair = String(pairSymbol).replace(/[^A-Za-z]/g, '').toUpperCase();
-      if (cleanPair.length >= 6) {
-        baseCurrencies.push(cleanPair.substring(0, 3));
-        baseCurrencies.push(cleanPair.substring(3, 6));
-      }
-    }
-    const relevantEvents = news.economicCalendar.filter(item => {
-      const timeStr = item.time.includes('Z') ? item.time : item.time.replace(' ', 'T') + 'Z';
-      const eventTime = new Date(timeStr).getTime();
-      if (now > eventTime + thirtyMinsMs) return false;
-      if (baseCurrencies.length > 0) {
-        const itemCur = item.currency || 'ALL';
-        if (itemCur !== 'ALL' && !baseCurrencies.includes(itemCur)) return false;
-      }
-      return true;
-    }).sort((a, b) => {
-       const tA = new Date(a.time.includes('Z') ? a.time : a.time.replace(' ', 'T') + 'Z').getTime();
-       const tB = new Date(b.time.includes('Z') ? b.time : b.time.replace(' ', 'T') + 'Z').getTime();
-       return tA - tB;
-    });
-
-    let hasWarning = false;
-    const warningEvents = relevantEvents.filter(item => {
-      const timeStr = item.time.includes('Z') ? item.time : item.time.replace(' ', 'T') + 'Z';
-      const eventTime = new Date(timeStr).getTime();
-      const diff = eventTime - now;
-      if (item.impact === 'high' && diff <= thirtyMinsMs && diff >= -thirtyMinsMs) {
-        hasWarning = true;
-        return true;
-      }
-      return false;
-    });
-
-    return { 
-      events: relevantEvents, 
-      warningEvents, 
-      isWarning: hasWarning, 
-      noNews: relevantEvents.length === 0 
-    };
-  };
-
   const formatIndValue = (val) => {
     if (val === null || val === undefined) return '...';
     let num = (typeof val === 'object') ? (val.macd ?? val.k ?? val.e9 ?? val.lb ?? Object.values(val).find(v => typeof v === 'number')) : val;
@@ -244,7 +204,7 @@ export default function DemoAnalysisSettings({
 
     const filteredInds = Object.entries(normalizedIndicators);
     const customVotes = { BUY: 0, SELL: 0, NEUTRAL: 0 };
-    filteredInds.forEach(([_, ind]) => {
+    filteredInds.forEach(([, ind]) => {
       if (ind.signal === 'BUY') customVotes.BUY += 1;
       else if (ind.signal === 'SELL') customVotes.SELL += 1;
       else customVotes.NEUTRAL += 1;
@@ -254,7 +214,7 @@ export default function DemoAnalysisSettings({
     const getDemoSignalColor = (sig) => sig === 'BUY' ? '#00FF00' : sig === 'SELL' ? '#FF4444' : '#FFD700';
     const currentPrice = data.price || data.key_levels?.current_price || '---';
     const assetObj = getAssetObject(analysisData.pair);
-    const newsStatus = getFilteredNewsStatus(analysisData.pair);
+    const newsStatus = getFilteredNewsStatus(news, analysisData.pair);
 
     return (
       <div className="profile-wrapper analysis-result-container">
@@ -336,9 +296,6 @@ export default function DemoAnalysisSettings({
   const isSelectingAsset = editMode === 'asset';
   const isSelectingPair = editMode === 'pair';
   const isSelectingExp = editMode === 'exp';
-  const isSelectingStrategy = editMode === 'strategy';
-  const isShowingSummary = !editMode && forexParams.pair && forexParams.exp;
-
   return (
     <div className="profile-wrapper">
       {signalGateOpen && (

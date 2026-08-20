@@ -105,6 +105,7 @@ const DEFAULT_QUIZ_CONFIG = {
 const FINAL_MESSAGE_MAX_BUTTONS = 8;
 const FINAL_MESSAGE_BUTTON_TYPES = ['url', 'menu', 'web_app'];
 const QUIZ_INTRO_VIDEO_MAX_SIZE = 50 * 1024 * 1024;
+const MENU_PHOTO_MAX_SIZE = 10 * 1024 * 1024;
 const DEFAULT_FINAL_MESSAGE_CONFIG = {
   enabled: true,
   trigger_button_text: 'Go to trading',
@@ -283,6 +284,21 @@ const formatMediaDate = (value) => {
     minute: '2-digit',
   }).format(parsed);
 };
+
+const readImageDimensions = (file) => new Promise((resolve, reject) => {
+  const objectUrl = URL.createObjectURL(file);
+  const image = new Image();
+  image.onload = () => {
+    const dimensions = { width: image.naturalWidth, height: image.naturalHeight };
+    URL.revokeObjectURL(objectUrl);
+    resolve(dimensions);
+  };
+  image.onerror = () => {
+    URL.revokeObjectURL(objectUrl);
+    reject(new Error('Invalid image'));
+  };
+  image.src = objectUrl;
+});
 
 const normalizeQuizConfig = (rawConfig) => {
   const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
@@ -523,6 +539,18 @@ export default function SettingsPage({ adminUser }) {
   const [quizIntroVideoUploading, setQuizIntroVideoUploading] = useState(false);
   const [quizIntroVideoAction, setQuizIntroVideoAction] = useState('');
   const [quizIntroVideoConfirm, setQuizIntroVideoConfirm] = useState(null);
+  const [menuPhotoMeta, setMenuPhotoMeta] = useState({
+    file_exists: false,
+    file_name: '',
+    file_size: 0,
+    source: 'missing',
+    max_size: MENU_PHOTO_MAX_SIZE,
+    preview_url: '',
+    default_exists: false,
+  });
+  const [menuPhotoUploading, setMenuPhotoUploading] = useState(false);
+  const [menuPhotoResetting, setMenuPhotoResetting] = useState(false);
+  const [menuPhotoConfirmOpen, setMenuPhotoConfirmOpen] = useState(false);
   const [funnelEditorTab, setFunnelEditorTab] = useState('quiz');
   const [finalMessageConfig, setFinalMessageConfig] = useState(() =>
     normalizeFinalMessageConfig(DEFAULT_FINAL_MESSAGE_CONFIG)
@@ -617,6 +645,16 @@ export default function SettingsPage({ adminUser }) {
           ? support.quiz_intro_video_library
           : []
       );
+      const menuPhoto = support.menu_photo || {};
+      setMenuPhotoMeta({
+        file_exists: Boolean(menuPhoto.file_exists),
+        file_name: String(menuPhoto.file_name || ''),
+        file_size: Number(menuPhoto.file_size || 0),
+        source: String(menuPhoto.source || 'missing'),
+        max_size: Number(menuPhoto.max_size || MENU_PHOTO_MAX_SIZE),
+        preview_url: String(menuPhoto.preview_url || ''),
+        default_exists: Boolean(menuPhoto.default_exists),
+      });
       setFinalMessageConfig(normalizeFinalMessageConfig(support.final_message_config));
 
       const pocket = settingsRes?.settings?.pocket_api || {};
@@ -1338,6 +1376,97 @@ export default function SettingsPage({ adminUser }) {
 
   const updateDepositDefaults = (field, value) => {
     setDepositDefaults((current) => ({ ...current, [field]: value }));
+  };
+
+  const applyMenuPhotoMedia = (response, fallback = {}) => {
+    const photo = response?.menu_photo || {};
+    setMenuPhotoMeta((previous) => ({
+      file_exists: Boolean(photo.file_exists),
+      file_name: String(photo.file_name || fallback.file_name || ''),
+      file_size: Number(photo.file_size || fallback.file_size || 0),
+      source: String(photo.source || fallback.source || 'missing'),
+      max_size: Number(photo.max_size || previous.max_size || MENU_PHOTO_MAX_SIZE),
+      preview_url: String(photo.preview_url || ''),
+      default_exists: Boolean(photo.default_exists),
+    }));
+  };
+
+  const uploadMenuPhoto = async (file) => {
+    if (!file) return;
+    const supportedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    const extensionSupported = /\.(jpe?g|png|webp)$/i.test(String(file.name || ''));
+    if (!supportedTypes.has(file.type) && !extensionSupported) {
+      setError(tr('Select a JPEG, PNG or WebP image', 'Выберите изображение JPEG, PNG или WebP'));
+      return;
+    }
+    const maxSize = Number(menuPhotoMeta.max_size || MENU_PHOTO_MAX_SIZE);
+    if (file.size > maxSize) {
+      setError(tr(
+        `The image must be no larger than ${formatBytes(maxSize)}`,
+        `Размер изображения не должен превышать ${formatBytes(maxSize)}`
+      ));
+      return;
+    }
+
+    setMenuPhotoUploading(true);
+    setError('');
+    setStatus('');
+    try {
+      const dimensions = await readImageDimensions(file);
+      const ratio = Math.max(dimensions.width / dimensions.height, dimensions.height / dimensions.width);
+      if (dimensions.width + dimensions.height > 10000 || ratio > 20) {
+        throw new Error(tr(
+          'Telegram cannot send this image: use dimensions with a total up to 10,000 px and an aspect ratio up to 20:1.',
+          'Telegram не сможет отправить это изображение: сумма сторон должна быть до 10 000 px, а соотношение — до 20:1.'
+        ));
+      }
+      const response = await apiAdminFetchJson('/api/admin/settings/menu-photo', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          'X-File-Name': encodeURIComponent(file.name || 'menu-image'),
+        },
+        body: file,
+      });
+      applyMenuPhotoMedia(response, {
+        file_name: file.name,
+        file_size: file.size,
+        source: 'uploaded',
+      });
+      setStatus(tr(
+        'The main menu image has been updated',
+        'Изображение главного меню обновлено'
+      ));
+    } catch (e) {
+      setError(e.message || tr('Could not upload the menu image', 'Не удалось загрузить изображение меню'));
+    } finally {
+      setMenuPhotoUploading(false);
+    }
+  };
+
+  const resetMenuPhoto = async () => {
+    if (menuPhotoResetting) return;
+    setMenuPhotoResetting(true);
+    setError('');
+    setStatus('');
+    try {
+      const response = await apiAdminFetchJson('/api/admin/settings/menu-photo/reset', {
+        method: 'POST',
+      });
+      applyMenuPhotoMedia(response);
+      setMenuPhotoConfirmOpen(false);
+      setStatus(tr(
+        'The original Elizabeth Vane menu image has been restored',
+        'Восстановлено исходное изображение меню Elizabeth Vane'
+      ));
+    } catch (e) {
+      setError(e.message || tr(
+        'Could not restore the default menu image',
+        'Не удалось восстановить изображение меню по умолчанию'
+      ));
+    } finally {
+      setMenuPhotoResetting(false);
+    }
   };
 
   const updateDepositCountry = (field, value) => {
@@ -2396,6 +2525,7 @@ export default function SettingsPage({ adminUser }) {
             ['quiz', tr('Quiz', 'Опросник')],
             ['channel', tr('Subscription', 'Подписка')],
             ['final', tr('Final', 'Финал')],
+            ['menu', tr('Bot menu', 'Меню бота')],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -2753,6 +2883,150 @@ export default function SettingsPage({ adminUser }) {
                 </div>
               );
             })}
+          </div>
+        ) : null}
+
+        {funnelEditorTab === 'menu' ? (
+          <div className="admin-menu-photo-panel">
+            <div className="admin-funnel-head">
+              <div>
+                <div className="admin-funnel-title">{tr('Main menu image', 'Изображение главного меню')}</div>
+                <div className="admin-muted">
+                  {tr(
+                    'This image is sent above the welcome text and the main inline menu in Elizabeth Bot.',
+                    'Эта картинка отправляется над приветственным текстом и основными inline-кнопками Elizabeth Bot.'
+                  )}
+                </div>
+              </div>
+              <span className={`admin-quiz-video-status ${menuPhotoMeta.file_exists ? 'ready' : 'missing'}`}>
+                {menuPhotoMeta.source === 'uploaded'
+                  ? tr('Custom image', 'Своя картинка')
+                  : (menuPhotoMeta.file_exists
+                    ? tr('System default', 'По умолчанию')
+                    : tr('Image missing', 'Нет картинки'))}
+              </span>
+            </div>
+
+            <section className="admin-menu-photo-card">
+              <div className="admin-menu-photo-preview">
+                {menuPhotoMeta.file_exists && menuPhotoMeta.preview_url ? (
+                  <img
+                    src={menuPhotoMeta.preview_url}
+                    alt={tr('Current bot menu', 'Текущее меню бота')}
+                  />
+                ) : (
+                  <div className="admin-menu-photo-placeholder">
+                    <strong>EV</strong>
+                    <span>{tr('Preview unavailable', 'Предпросмотр недоступен')}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="admin-menu-photo-controls">
+                <div className="admin-menu-photo-current">
+                  <span>{tr('Currently selected', 'Сейчас используется')}</span>
+                  <strong>
+                    {menuPhotoMeta.source === 'uploaded'
+                      ? tr('Uploaded image', 'Загруженная картинка')
+                      : tr('Original Elizabeth Vane image', 'Исходная картинка Elizabeth Vane')}
+                  </strong>
+                  <small>
+                    {menuPhotoMeta.file_name || tr('File not found', 'Файл не найден')}
+                    {menuPhotoMeta.file_size ? ` · ${formatBytes(menuPhotoMeta.file_size)}` : ''}
+                  </small>
+                </div>
+
+                <div className="admin-menu-photo-actions">
+                  <label className={`admin-menu-photo-upload ${menuPhotoUploading ? 'is-loading' : ''}`}>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                      disabled={menuPhotoUploading || menuPhotoResetting}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = '';
+                        uploadMenuPhoto(file);
+                      }}
+                    />
+                    {menuPhotoUploading
+                      ? tr('Uploading…', 'Загрузка…')
+                      : tr('Replace image', 'Заменить картинку')}
+                  </label>
+                  <button
+                    type="button"
+                    className="admin-btn-outline"
+                    disabled={
+                      menuPhotoUploading
+                      || menuPhotoResetting
+                      || menuPhotoMeta.source !== 'uploaded'
+                      || !menuPhotoMeta.default_exists
+                    }
+                    onClick={() => setMenuPhotoConfirmOpen(true)}
+                  >
+                    {tr('Restore default', 'Сбросить к дефолтной')}
+                  </button>
+                </div>
+
+                <div className="admin-menu-photo-help">
+                  <strong>{tr('Upload requirements', 'Требования к файлу')}</strong>
+                  <span>
+                    {tr(
+                      `JPEG, PNG or WebP up to ${formatBytes(menuPhotoMeta.max_size)}. A wide banner works best.`,
+                      `JPEG, PNG или WebP до ${formatBytes(menuPhotoMeta.max_size)}. Лучше всего подходит широкий баннер.`
+                    )}
+                  </span>
+                  <small>
+                    {tr(
+                      'The upload is stored outside the deployment folder and will remain after application updates.',
+                      'Загрузка хранится вне папки деплоя и не пропадёт после обновления приложения.'
+                    )}
+                  </small>
+                </div>
+              </div>
+            </section>
+
+            {menuPhotoConfirmOpen ? (
+              <div
+                className="admin-modal-backdrop"
+                onClick={() => {
+                  if (!menuPhotoResetting) setMenuPhotoConfirmOpen(false);
+                }}
+              >
+                <div
+                  className="admin-modal admin-menu-photo-confirm"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="admin-menu-photo-confirm-icon">EV</div>
+                  <h3>{tr('Restore the default image?', 'Вернуть картинку по умолчанию?')}</h3>
+                  <p>
+                    {tr(
+                      'Elizabeth Bot will use the original image shown before this replacement. The uploaded file will be removed.',
+                      'Elizabeth Bot снова будет использовать исходную картинку, которая стояла до замены. Загруженный файл будет удалён.'
+                    )}
+                  </p>
+                  <div className="admin-row-actions admin-quiz-video-confirm-actions">
+                    <button
+                      type="button"
+                      className="admin-btn-outline"
+                      disabled={menuPhotoResetting}
+                      onClick={() => setMenuPhotoConfirmOpen(false)}
+                    >
+                      {tr('Cancel', 'Отмена')}
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-btn"
+                      disabled={menuPhotoResetting}
+                      onClick={resetMenuPhoto}
+                    >
+                      {menuPhotoResetting
+                        ? tr('Restoring…', 'Восстанавливаем…')
+                        : tr('Restore default', 'Вернуть дефолтную')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 

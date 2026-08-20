@@ -10,6 +10,7 @@ ACCESS_POLICIES = {
     ACCESS_POLICY_REGISTRATION_DEPOSIT,
     ACCESS_POLICY_ALL,
 }
+MANUAL_ONLY_SIGNAL_MODES = {"forex"}
 
 
 def normalize_access_policy(value: Any) -> str:
@@ -49,3 +50,15 @@ def system_policy_grants_signal_access(settings: Dict[str, Any], user_row: Dict[
     deposit_amount = normalize_min_deposit((user_row or {}).get("pocket_deposit_amount"))
     min_deposit = normalize_min_deposit((settings or {}).get("min_deposit_amount"))
     return registered and deposited and deposit_amount >= min_deposit
+
+
+def inherited_policy_grants_signal_access(
+    mode: Any,
+    settings: Dict[str, Any],
+    user_row: Dict[str, Any],
+) -> bool:
+    """Apply global access only to modes that are not explicitly manual-only."""
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode in MANUAL_ONLY_SIGNAL_MODES:
+        return False
+    return system_policy_grants_signal_access(settings, user_row)

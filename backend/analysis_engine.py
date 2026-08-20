@@ -145,20 +145,20 @@ INDICATOR_WEIGHTS = {
 MIN_CONFIDENCE_ADV = 25
 
 MIN_CONFIDENCE_BY_INTERVAL = {
-    "5min": 33,
-    "15min": 30,
-    "30min": 28,
-    "1h": 26,
+    "5min": 28,
+    "15min": 27,
+    "30min": 26,
+    "1h": 25,
     "4h": 24,
     "1day": 24,
 }
 
 MIN_DIRECTIONAL_VOTES_BY_INTERVAL = {
-    "5min": 4,
-    "15min": 3,
-    "30min": 3,
-    "1h": 3,
-    "4h": 3,
+    "5min": 3,
+    "15min": 2,
+    "30min": 2,
+    "1h": 2,
+    "4h": 2,
     "1day": 2,
 }
 
@@ -400,11 +400,23 @@ def _evaluate_rules(
         else:
             w_neutral += w
 
+    price_tolerance = max(abs(price) * 0.000001, 0.0000001)
+
+    def price_level_signal(level: float) -> str:
+        if price > level + price_tolerance:
+            return "BUY"
+        if price < level - price_tolerance:
+            return "SELL"
+        return "NEUTRAL"
+
     rsi_v = _to_num_or_field(rsi, "rsi")
     if rsi_v is not None:
-        if rsi_v < rsi_thr["os"]:
+        # In the combined engine RSI is used as momentum, not as a blind
+        # overbought/oversold reversal trigger.  This avoids impossible jumps
+        # where RSI 69 was BUY but RSI 71 suddenly became SELL.
+        if rsi_v >= 55:
             add("RSI", "BUY", rsi_v)
-        elif rsi_v > rsi_thr["ob"]:
+        elif rsi_v <= 45:
             add("RSI", "SELL", rsi_v)
         else:
             add("RSI", "NEUTRAL", rsi_v)
@@ -423,9 +435,14 @@ def _evaluate_rules(
     k = _to_num_or_field(stoch, "slow_k", "k")
     d = _to_num_or_field(stoch, "slow_d", "d")
     if k is not None and d is not None:
-        if k < 20 and k > d:
+        spread = k - d
+        if k < 20 and spread > 0:
             add("Stoch", "BUY", {"k": k, "d": d})
-        elif k > 80 and k < d:
+        elif k > 80 and spread < 0:
+            add("Stoch", "SELL", {"k": k, "d": d})
+        elif spread >= 3:
+            add("Stoch", "BUY", {"k": k, "d": d})
+        elif spread <= -3:
             add("Stoch", "SELL", {"k": k, "d": d})
         else:
             add("Stoch", "NEUTRAL", {"k": k, "d": d})
@@ -449,45 +466,41 @@ def _evaluate_rules(
 
     e50 = _to_num_or_field(ema50, "ema", "value")
     if e50 is not None:
-        add("EMA50", "BUY" if price > e50 else "SELL", e50)
+        add("EMA50", price_level_signal(e50), e50)
 
     e200 = _to_num_or_field(ema200, "ema", "value")
     if e200 is not None:
-        add("EMA200", "BUY" if price > e200 else "SELL", e200)
+        add("EMA200", price_level_signal(e200), e200)
 
     p_di = _to_num_or_field(plus_di, "plus_di")
     m_di = _to_num_or_field(minus_di, "minus_di")
     if adx_val is not None:
         if p_di is not None and m_di is not None:
-            if adx_val >= ADX_TREND_THRESHOLD:
-                sig = "BUY" if p_di > m_di else ("SELL" if p_di < m_di else "NEUTRAL")
-                add("ADX", sig, adx_val)
-                add("DMI", sig, {"plus_di": p_di, "minus_di": m_di, "adx": adx_val})
-            else:
-                add("ADX", "NEUTRAL", adx_val)
-                add("DMI", "NEUTRAL", {"plus_di": p_di, "minus_di": m_di, "adx": adx_val})
+            dmi_signal = "BUY" if p_di > m_di else ("SELL" if p_di < m_di else "NEUTRAL")
+            # ADX measures strength only. Direction belongs to +DI/-DI (DMI).
+            add("ADX", "NEUTRAL", adx_val)
+            add("DMI", dmi_signal, {"plus_di": p_di, "minus_di": m_di, "adx": adx_val})
         else:
             add("ADX", "NEUTRAL", adx_val)
 
     cci_v = _to_num_or_field(cci, "cci")
     if cci_v is not None:
-        if cci_v < -cci_thr:
+        # Keep CCI interpretation monotonic and consistent with momentum.
+        cci_direction_threshold = min(50.0, max(25.0, cci_thr * 0.5))
+        if cci_v >= cci_direction_threshold:
             add("CCI", "BUY", cci_v)
-        elif cci_v > cci_thr:
+        elif cci_v <= -cci_direction_threshold:
             add("CCI", "SELL", cci_v)
         else:
             add("CCI", "NEUTRAL", cci_v)
 
     psar_v = _to_num_or_field(psar, "psar")
     if psar_v is not None:
-        if adx_val is not None and adx_val >= ADX_TREND_THRESHOLD:
-            add("PSAR", "BUY" if price > psar_v else "SELL", psar_v)
-        else:
-            add("PSAR", "NEUTRAL", psar_v)
+        add("PSAR", price_level_signal(psar_v), psar_v)
 
     st_val = _to_num_or_field(supertrend, "supertrend")
     if st_val is not None:
-        add("Supertrend", "BUY" if price > st_val else "SELL", st_val)
+        add("Supertrend", price_level_signal(st_val), st_val)
 
     ichi = _to_dict(ichimoku)
     sa = _to_num_or_field(ichi, "senkou_span_a")
@@ -646,14 +659,18 @@ def _compute_confidence(
     if total_w <= 0:
         return 0, "no_votes"
 
-    dominance = (max(w_buy, w_sell) - min(w_buy, w_sell)) / total_w
     dir_ratio = (w_buy + w_sell) / total_w
-    raw_conf = dominance * dir_ratio * 100.0
+    directional_total = w_buy + w_sell
+    directional_dominance = (
+        abs(w_buy - w_sell) / directional_total if directional_total > 0 else 0.0
+    )
+    coverage_factor = 0.65 + (0.35 * dir_ratio)
+    raw_conf = directional_dominance * coverage_factor * 100.0
     reasons: List[str] = []
 
     if adx_val is not None and adx_val < ADX_TREND_THRESHOLD:
-        r = max(0.3, adx_val / ADX_TREND_THRESHOLD)
-        raw_conf *= r
+        r = max(0.0, adx_val / ADX_TREND_THRESHOLD)
+        raw_conf *= 0.75 + (0.25 * min(1.0, r))
         reasons.append(f"adx_flat={adx_val:.1f}")
 
     if w_buy > 0 and w_sell > 0:
@@ -705,6 +722,7 @@ def compute_analysis_decision(
 
     indicators = _extract_indicators_container(raw_payload)
 
+    dmi = _to_dict(_extract_obj(raw_payload, indicators, "DMI", "dmi"))
     data_map = {
         "rsi": {"rsi": _to_num_or_field(_extract_obj(raw_payload, indicators, "RSI", "rsi"), "rsi")},
         "macd": {
@@ -726,8 +744,22 @@ def compute_analysis_decision(
         "adx": {"adx": _to_num_or_field(_extract_obj(raw_payload, indicators, "ADX", "adx"), "adx")},
         "cci": {"cci": _to_num_or_field(_extract_obj(raw_payload, indicators, "CCI", "cci"), "cci")},
         "psar": {"psar": _to_num_or_field(_extract_obj(raw_payload, indicators, "PSAR", "psar"), "psar")},
-        "plus_di": {"plus_di": _to_num_or_field(_extract_obj(raw_payload, indicators, "PLUS_DI", "plus_di"), "plus_di")},
-        "minus_di": {"minus_di": _to_num_or_field(_extract_obj(raw_payload, indicators, "MINUS_DI", "minus_di"), "minus_di")},
+        "plus_di": {
+            "plus_di": _to_num_or_field(
+                dmi or _extract_obj(raw_payload, indicators, "PLUS_DI", "plus_di"),
+                "plus_di",
+                "+di",
+                "pdi",
+            )
+        },
+        "minus_di": {
+            "minus_di": _to_num_or_field(
+                dmi or _extract_obj(raw_payload, indicators, "MINUS_DI", "minus_di"),
+                "minus_di",
+                "-di",
+                "mdi",
+            )
+        },
         "supertrend": {"supertrend": _to_num_or_field(_extract_obj(raw_payload, indicators, "SUPERTREND", "supertrend"), "supertrend")},
         "ichimoku": _to_dict(_extract_obj(raw_payload, indicators, "ICHIMOKU", "ichimoku")),
         "pivot_points": _to_dict(_extract_obj(raw_payload, indicators, "PIVOTPOINTS", "PIVOT_POINTS_HL", "pivot_points")),
@@ -816,7 +848,7 @@ def compute_analysis_decision(
             if (final_sig == "BUY" and price_val > st_val) or (final_sig == "SELL" and price_val < st_val):
                 trend_passed += 1
 
-        required = 2 if trend_checks >= 3 else (1 if trend_checks > 0 else 0)
+        required = 1 if trend_checks > 0 else 0
         if required and trend_passed < required:
             final_sig = "NEUTRAL"
             microtrend_reason = f"microtrend_filter={trend_passed}/{required}"
