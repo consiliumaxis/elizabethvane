@@ -69,6 +69,14 @@ def normalize_aio_visit_uuid(value: Optional[str]) -> Optional[str]:
     return raw.lower()
 
 
+def is_unresolved_aio_visit_uuid_placeholder(value: Optional[object]) -> bool:
+    """Return True for an unresolved Chatterfy ``start0`` template value."""
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    return bool(re.fullmatch(r"\{+\s*start0\s*\}+", raw, re.IGNORECASE)) or raw.lower() == "start0"
+
+
 def normalize_aio_country_code(value: Optional[object]) -> Optional[str]:
     raw = str(value or "").strip().upper()
     if not re.fullmatch(r"[A-Z]{2}", raw):

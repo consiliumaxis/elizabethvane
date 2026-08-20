@@ -137,6 +137,7 @@ try:
         build_aio_pocket_registration_conversion_url,
         build_aio_postback_url,
         extract_aio_visit_uuid_from_start_text,
+        is_unresolved_aio_visit_uuid_placeholder,
         normalize_aio_event_slug,
         normalize_aio_country_code,
         normalize_aio_revenue,
@@ -155,6 +156,7 @@ except ModuleNotFoundError:
         build_aio_pocket_registration_conversion_url,
         build_aio_postback_url,
         extract_aio_visit_uuid_from_start_text,
+        is_unresolved_aio_visit_uuid_placeholder,
         normalize_aio_event_slug,
         normalize_aio_country_code,
         normalize_aio_revenue,
@@ -4114,14 +4116,28 @@ async def receive_chatterfy_access_postback(access_kind: str, request: Request):
     if user_id <= 0:
         raise HTTPException(status_code=400, detail="Valid tgid is required")
 
-    raw_aio_visit_uuid = str(
-        payload.get("start0")
-        or payload.get("aio_visit_uuid")
-        or payload.get("visit_uuid")
-        or ""
-    ).strip()
-    aio_visit_uuid = normalize_aio_visit_uuid(raw_aio_visit_uuid) or ""
-    if raw_aio_visit_uuid and not aio_visit_uuid:
+    # Chatterfy can leave its template unresolved and call us with
+    # ``aio_visit_uuid={start0}``.  That value is not an error: the AIO visit
+    # UUID already stored for this Telegram user is used by the delivery
+    # function below.  A real UUID is still accepted for profiles that do not
+    # have one yet; unrelated malformed values remain rejected.
+    aio_visit_uuid = ""
+    invalid_aio_visit_uuid = ""
+    for candidate in (
+        payload.get("start0"),
+        payload.get("aio_visit_uuid"),
+        payload.get("visit_uuid"),
+    ):
+        raw_candidate = str(candidate or "").strip()
+        if not raw_candidate or is_unresolved_aio_visit_uuid_placeholder(raw_candidate):
+            continue
+        normalized_candidate = normalize_aio_visit_uuid(raw_candidate) or ""
+        if normalized_candidate:
+            aio_visit_uuid = normalized_candidate
+            break
+        if not invalid_aio_visit_uuid:
+            invalid_aio_visit_uuid = raw_candidate
+    if not aio_visit_uuid and invalid_aio_visit_uuid:
         raise HTTPException(status_code=400, detail="Invalid aio_visit_uuid")
     first_name = str(
         payload.get("first_name") or payload.get("name") or payload.get("tg_name") or ""
