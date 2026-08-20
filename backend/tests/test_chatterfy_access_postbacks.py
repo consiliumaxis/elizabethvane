@@ -1,6 +1,8 @@
 import unittest
 from pathlib import Path
 
+from aio_tracking import is_unresolved_aio_visit_uuid_placeholder
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,6 +36,19 @@ class ChatterfyAccessPostbackTest(unittest.TestCase):
         self.assertIn("WHERE id = %s AND status = 'failed'", self.backend)
         self.assertIn("send_pending_chatterfy_access_events", self.backend)
 
+    def test_unresolved_start0_is_ignored_by_access_webhook(self):
+        for raw in ("{start0}", "{{start0}}", "start0", "{ START0 }"):
+            self.assertTrue(is_unresolved_aio_visit_uuid_placeholder(raw))
+        self.assertFalse(
+            is_unresolved_aio_visit_uuid_placeholder(
+                "0141c6c0-2772-484f-b808-9419b8c930e8"
+            )
+        )
+        self.assertIn(
+            "is_unresolved_aio_visit_uuid_placeholder(raw_candidate)",
+            self.backend,
+        )
+
     def test_statuses_are_visible_in_admin_and_client_profile(self):
         self.assertIn("chatterfyVipGranted", self.admin)
         self.assertIn("chatterfyCopyGranted", self.admin)
@@ -43,3 +58,4 @@ class ChatterfyAccessPostbackTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
